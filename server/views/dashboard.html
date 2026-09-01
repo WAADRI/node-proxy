@@ -5,12 +5,39 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Node-Proxy 控制面板</title>
   <script>
-    // Redirect to login if no token
+    // Auth guard: token lives in localStorage AND cookie (written together at login).
+    // localStorage can be cleared independently of cookies (browser cleanup /
+    // privacy mode), so fall back to the cookie and re-sync it into localStorage
+    // to keep API calls authorized. Otherwise '/login' keeps redirecting back
+    // here while login.js sees a valid cookie token -> redirect loop.
     (function() {
-      const token = localStorage.getItem('np_token');
+      function getCookie(name) {
+        const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+        return match ? match[2] : null;
+      }
+      function clearToken() {
+        localStorage.removeItem('np_token');
+        document.cookie = 'token=; path=/; max-age=0';
+      }
+
+      const lsToken = localStorage.getItem('np_token');
+      const cookieToken = getCookie('token');
+      const token = lsToken || cookieToken;
       if (!token) {
         window.location.href = '/login';
+        return;
       }
+      // Cookie-only token (localStorage cleared): sync it so API calls work.
+      if (!lsToken && cookieToken) {
+        localStorage.setItem('np_token', cookieToken);
+      }
+      // Verify the token is still valid; if not, clear both and go to login
+      // (login.js will no longer see a cookie and won't bounce back here).
+      fetch('/api/status', { headers: { 'Authorization': 'Bearer ' + token } })
+        .then(function (r) {
+          if (!r.ok) { clearToken(); window.location.href = '/login'; }
+        })
+        .catch(function () {});
     })();
   </script>
   <style>

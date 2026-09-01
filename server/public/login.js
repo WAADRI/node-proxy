@@ -21,19 +21,30 @@
     return match ? match[2] : null;
   }
 
+  // Clear token from BOTH storages, otherwise a stale cookie keeps login.js
+  // bouncing back to '/' while dashboard.html redirects here again.
+  function clearToken() {
+    localStorage.removeItem('np_token');
+    document.cookie = 'token=; path=/; max-age=0';
+  }
+
   function checkToken(token) {
     fetch('/api/status', {
       headers: { 'Authorization': 'Bearer ' + token }
     })
     .then(r => {
       if (r.ok) {
+        // Cookie-only case: re-sync into localStorage so the dashboard works
+        if (!localStorage.getItem('np_token')) {
+          localStorage.setItem('np_token', token);
+        }
         window.location.href = '/';
       } else {
-        localStorage.removeItem('np_token');
+        clearToken();
       }
     })
     .catch(() => {
-      localStorage.removeItem('np_token');
+      clearToken();
     });
   }
 
