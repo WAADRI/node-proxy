@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Node-Proxy Windows Service Configuration
+  Uses WinSW (Windows Service Wrapper)
+  Download WinSW from: https://github.com/winsw/winsw/releases
+  
+  Install:
+    winsw install node-proxy.xml
+  
+  Uninstall:
+    winsw uninstall node-proxy.xml
+  
+  Start:
+    winsw start node-proxy.xml
+  
+  Stop:
+    winsw stop node-proxy.xml
+-->
+<service>
+  <id>node-proxy</id>
+  <name>Node-Proxy Server</name>
+  <description>Distributed IP Proxy Server - Routes traffic through client nodes</description>
+  
+  <executable>node</executable>
+  <arguments>C:\Program Files\node-proxy\server\server.js</arguments>
+  
+  <workingdirectory>C:\Program Files\node-proxy</workingdirectory>
+  
+  <logmode>rotate</logmode>
+  <logpath>C:\ProgramData\node-proxy\logs</logpath>
+  
+  <env name="NODE_ENV" value="production"/>
+  <env name="NP_CONFIG" value="C:\ProgramData\node-proxy\config.yaml"/>
+  
+  <startargument>--logging-pretty</startargument>
+  
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  
+  <serviceaccount>
+    <domain>NT AUTHORITY</domain>
+    <user>LocalSystem</user>
+  </serviceaccount>
+  
+  <delayedAutoStart>true</delayedAutoStart>
+  
+  <stoptimeout>30 sec</stoptimeout>
+  
+  <prestarttimeout>60 sec</prestarttimeout>
+  
+  <stopexecutable>node</stopexecutable>
+  <stoparguments>-e "process.exit(0)"</stoparguments>
+</service>

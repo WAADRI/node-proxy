@@ -1,0 +1,53 @@
+# =============================================================================
+# Node-Proxy .gitignore
+# =============================================================================
+
+# Node.js
+node_modules/
+
+# Logs (all runtime logs)
+*.log
+logs/
+server/logs/
+server/audit/
+
+# SQLite databases & temp files
+server/data/
+*.db
+*.sqlite
+*.db.tmp
+
+# Certificates & private keys
+server/certs/
+*.pem
+*.crt
+*.key
+*.csr
+
+# Local configs that may contain secrets (keep config.yaml template in repo)
+config.local.yaml
+*.local.yaml
+.env
+.env.*
+!.env.example
+
+# Client instance ID files (regenerated per instance)
+client/.cn-id
+client/.us-id
+client/.legacy-id
+client/.client-id
+
+# Backup / editor / OS files
+*.bak
+*.orig
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Test leftovers (never commit ad-hoc test scripts)
+client/post-body.json
+client/slow.log
+client/slow-server.js
+client/route-server.js
+client/timeout-test.js

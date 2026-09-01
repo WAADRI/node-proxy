@@ -1,0 +1,36 @@
+[Unit]
+Description=Node-Proxy Server - Distributed IP Proxy
+Documentation=https://github.com/node-proxy
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=node-proxy
+Group=node-proxy
+ExecStart=/usr/local/bin/node /opt/node-proxy/server/server.js
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=node-proxy
+
+# Environment
+Environment=NODE_ENV=production
+Environment=NP_CONFIG=/etc/node-proxy/config.yaml
+
+[Install]
+WantedBy=multi-user.target

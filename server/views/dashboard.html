@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Node-Proxy 控制面板</title>
+  <script>
+    // Redirect to login if no token
+    (function() {
+      const token = localStorage.getItem('np_token');
+      if (!token) {
+        window.location.href = '/login';
+      }
+    })();
+  </script>
+  <style>
+    /* ========== Reset & Base ========== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+
+    /* ========== Layout ========== */
+    .app-header {
+      background: linear-gradient(135deg, #1e293b, #0f172a);
+      border-bottom: 1px solid #334155;
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    .app-header h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #38bdf8, #818cf8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .app-header .subtitle {
+      color: #94a3b8;
+      font-size: 0.85rem;
+    }
+    .header-actions {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    .header-actions .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    .status-badge.online {
+      background: rgba(34, 197, 94, 0.15);
+      color: #4ade80;
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+    .status-badge.offline {
+      background: rgba(248, 113, 113, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(248, 113, 113, 0.3);
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 1.5rem 2rem;
+    }
+
+    /* ========== Stats Cards ========== */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .stat-card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 1.2rem 1.5rem;
+      transition: border-color 0.2s;
+    }
+    .stat-card:hover {
+      border-color: #475569;
+    }
+    .stat-card .label {
+      font-size: 0.8rem;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.3rem;
+    }
+    .stat-card .value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #f1f5f9;
+    }
+    .stat-card .value .unit {
+      font-size: 0.9rem;
+      color: #64748b;
+      font-weight: 400;
+    }
+
+    /* ========== Proxy Ports Info ========== */
+    .ports-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+      padding: 1rem 1.5rem;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      align-items: center;
+    }
+    .ports-bar .label {
+      font-size: 0.85rem;
+      color: #94a3b8;
+      font-weight: 600;
+      margin-right: 0.5rem;
+    }
+    .port-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.3rem 0.8rem;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      font-family: 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 0.8rem;
+      color: #e2e8f0;
+    }
+    .port-tag .proto {
+      color: #38bdf8;
+      font-weight: 600;
+    }
+
+    /* ========== Search / Filter ========== */
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .toolbar .left {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    .search-box {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 0.5rem 1rem;
+      color: #e2e8f0;
+      font-size: 0.9rem;
+      width: 240px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .search-box:focus {
+      border-color: #38bdf8;
+    }
+    .search-box::placeholder {
+      color: #64748b;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: #334155;
+      color: #e2e8f0;
+    }
+    .btn:hover {
+      background: #475569;
+    }
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.25);
+    }
+    .btn-primary {
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      border-color: rgba(56, 189, 248, 0.3);
+    }
+    .btn-primary:hover {
+      background: rgba(56, 189, 248, 0.25);
+    }
+
+    /* ========== Client Table ========== */
+    .table-wrapper {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    thead {
+      background: #0f172a;
+    }
+    th {
+      text-align: left;
+      padding: 0.75rem 1rem;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #64748b;
+      font-weight: 600;
+      border-bottom: 1px solid #334155;
+      white-space: nowrap;
+    }
+    td {
+      padding: 0.75rem 1rem;
+      font-size: 0.85rem;
+      border-bottom: 1px solid #1e293b;
+      vertical-align: middle;
+    }
+    tr:last-child td {
+      border-bottom: none;
+    }
+    tr:hover td {
+      background: rgba(51, 65, 85, 0.3);
+    }
+    .client-id {
+      font-family: 'Fira Code', monospace;
+      font-size: 0.75rem;
+      color: #94a3b8;
+      max-width: 120px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .client-hostname {
+      font-weight: 600;
+    }
+    .client-ip {
+      color: #94a3b8;
+      font-size: 0.8rem;
+    }
+    .tag-badge {
+      display: inline-block;
+      padding: 0.1rem 0.4rem;
+      background: #1e3a5f;
+      color: #93c5fd;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      margin: 0.1rem;
+      white-space: nowrap;
+    }
+    .no-tags { color: #475569; font-size: 0.8rem; }
+    .cb-badge {
+      display: inline-block;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 600;
+    }
+    .cb-badge.open { background: #7f1d1d; color: #fca5a5; }
+    .cb-badge.half_open { background: #713f12; color: #fcd34d; }
+    .cb-badge.closed { background: #14532d; color: #86efac; }
+    .cb-open-row { background: #1a0a0a !important; }
+    .cb-open-row td { color: #f87171 !important; }
+    .client-pending {
+      font-family: 'Fira Code', monospace;
+      font-size: 0.8rem;
+    }
+    .online-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 0.4rem;
+    }
+    .online-dot.alive {
+      background: #4ade80;
+      box-shadow: 0 0 6px rgba(74, 222, 128, 0.5);
+    }
+    .online-dot.stale {
+      background: #f59e0b;
+      box-shadow: 0 0 6px rgba(245, 158, 11, 0.5);
+    }
+    .online-dot.dead {
+      background: #64748b;
+    }
+    .time-cell {
+      font-size: 0.8rem;
+      color: #94a3b8;
+    }
+    .no-data {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: #64748b;
+    }
+    .no-data .icon {
+      font-size: 2.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .no-data .hint {
+      font-size: 0.9rem;
+    }
+
+    /* ========== Connection Status ========== */
+    .connection-status {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.5rem;
+      padding: 0.75rem 1.5rem;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      align-items: center;
+    }
+    .connection-status .indicator {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .indicator-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    .indicator-dot.connected {
+      background: #4ade80;
+      box-shadow: 0 0 8px rgba(74, 222, 128, 0.6);
+      animation: pulse 2s infinite;
+    }
+    .indicator-dot.disconnected {
+      background: #64748b;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* ========== Broadcast Modal ========== */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(4px);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal-overlay.active {
+      display: flex;
+    }
+    .modal-box {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 2rem;
+      width: 90%;
+      max-width: 480px;
+    }
+    .modal-box h2 {
+      margin-bottom: 1rem;
+      font-size: 1.2rem;
+    }
+    .modal-box textarea {
+      width: 100%;
+      min-height: 100px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 0.75rem;
+      color: #e2e8f0;
+      font-size: 0.9rem;
+      resize: vertical;
+      outline: none;
+      margin-bottom: 1rem;
+      font-family: inherit;
+    }
+    .modal-box textarea:focus {
+      border-color: #38bdf8;
+    }
+    .modal-actions {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: flex-end;
+    }
+
+    /* ========== Toast ========== */
+    .toast-container {
+      position: fixed;
+      top: 1rem;
+      right: 1rem;
+      z-index: 2000;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .toast {
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      animation: slideIn 0.3s ease;
+      max-width: 360px;
+    }
+    .toast.success {
+      background: rgba(34, 197, 94, 0.9);
+      color: #fff;
+    }
+    .toast.error {
+      background: rgba(239, 68, 68, 0.9);
+      color: #fff;
+    }
+    .toast.info {
+      background: rgba(56, 189, 248, 0.9);
+      color: #fff;
+    }
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
+    /* ========== Responsive ========== */
+    @media (max-width: 768px) {
+      .container { padding: 1rem; }
+      .app-header { padding: 0.75rem 1rem; }
+      th, td { padding: 0.5rem 0.6rem; }
+      .search-box { width: 160px; }
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .client-id { max-width: 60px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- ========== Header ========== -->
+  <header class="app-header">
+    <div>
+      <h1>Node-Proxy</h1>
+      <div class="subtitle">分布式 IP 代理控制面板</div>
+    </div>
+    <div class="header-actions">
+      <span class="status-badge online" id="serverBadge">
+        <span class="online-dot alive" style="margin:0"></span>
+        <span id="serverStatusText">连接中...</span>
+      </span>
+      <button class="btn btn-primary" onclick="showBroadcastModal()">📢 广播消息</button>
+      <button class="btn" onclick="refreshNow()">🔄 刷新</button>
+      <button class="btn btn-danger" onclick="doLogout()">🚪 退出</button>
+    </div>
+  </header>
+
+  <div class="container">
+    <!-- ========== Connection Status ========== -->
+    <div class="connection-status" id="connectionStatus">
+      <div class="indicator">
+        <span class="indicator-dot disconnected" id="wsDot"></span>
+        <span id="wsLabel">WebSocket 未连接</span>
+      </div>
+      <span id="lastUpdateLabel">等待数据...</span>
+    </div>
+
+    <!-- ========== Stats ========== -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="label">在线节点</div>
+        <div class="value" id="statOnline">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">总请求数</div>
+        <div class="value" id="statPendingReqs">0 <span class="unit">待处理</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="label">活跃隧道</div>
+        <div class="value" id="statTunnels">0 <span class="unit">条</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="label">服务器运行时间</div>
+        <div class="value" id="statUptime">0 <span class="unit">秒</span></div>
+      </div>
+    </div>
+
+    <!-- ========== Phase 2 Stats ========== -->
+    <div class="stats-grid" style="margin-top: 0.5rem;">
+      <div class="stat-card">
+        <div class="label">路由策略</div>
+        <div class="value" id="statRouting" style="font-size:1.2rem;">random</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">熔断器</div>
+        <div class="value" id="statCB" style="font-size:1.2rem;">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">带宽限制</div>
+        <div class="value" id="statBW" style="font-size:1.2rem;">关闭</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">总失败数</div>
+        <div class="value" id="statFailed" style="font-size:1.2rem;">0</div>
+      </div>
+    </div>
+
+    <!-- ========== Proxy Ports ========== -->
+    <div class="ports-bar">
+      <span class="label">🔌 代理端口</span>
+      <span class="port-tag"><span class="proto">HTTP</span> :8080</span>
+      <span class="port-tag"><span class="proto">HTTPS</span> :8080 (CONNECT)</span>
+      <span class="port-tag"><span class="proto">SOCKS5</span> :1080</span>
+      <span class="port-tag"><span class="proto">Web</span> :3000</span>
+    </div>
+
+    <!-- ========== Toolbar ========== -->
+    <div class="toolbar">
+      <div class="left">
+        <input type="text" class="search-box" id="searchInput" placeholder="搜索节点 (ID / 主机名 / IP)..." oninput="filterClients()">
+        <span style="color:#64748b;font-size:0.85rem;" id="clientCount">共 0 个节点</span>
+      </div>
+      <div>
+        <button class="btn btn-danger" onclick="kickAll()">🗑️ 断开全部</button>
+      </div>
+    </div>
+
+    <!-- ========== Client Table ========== -->
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>状态</th>
+            <th>节点 ID</th>
+            <th>主机名</th>
+            <th>IP 地址</th>
+            <th>系统 / 平台</th>
+            <th>区域</th>
+            <th>标签</th>
+            <th>请求</th>
+            <th>隧道</th>
+            <th>响应(ms)</th>
+            <th>熔断器</th>
+            <th>连接时间</th>
+            <th>最后活跃</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="clientTableBody">
+          <tr>
+            <td colspan="11" class="no-data">
+              <div class="icon">🔌</div>
+              <div class="hint">等待客户端节点连接...</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ========== Broadcast Modal ========== -->
+  <div class="modal-overlay" id="broadcastModal">
+    <div class="modal-box">
+      <h2>📢 广播消息</h2>
+      <p style="color:#94a3b8;font-size:0.85rem;margin-bottom:1rem;">
+        向所有在线客户端节点发送一条消息。
+      </p>
+      <textarea id="broadcastMessage" placeholder="输入要广播的消息..."></textarea>
+      <div class="modal-actions">
+        <button class="btn" onclick="hideBroadcastModal()">取消</button>
+        <button class="btn btn-primary" onclick="doBroadcast()">发送广播</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== Toast Container ========== -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="/dashboard.js"></script>
+</body>
+</html>

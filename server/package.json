@@ -1,0 +1,26 @@
+{
+  "name": "node-proxy-server",
+  "version": "2.1.0",
+  "description": "Node-Proxy Server - Distributed IP proxy with circuit breaker, routing strategies, bandwidth limiting, Prometheus metrics, SQLite persistence",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js --logging-pretty",
+    "gen-cert": "node lib/tls.js --generate",
+    "docker:build": "docker build -t node-proxy-server .",
+    "docker:run": "docker-compose up -d"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "ws": "^8.18.0",
+    "uuid": "^10.0.0",
+    "pino": "^9.4.0",
+    "pino-pretty": "^11.3.0",
+    "js-yaml": "^4.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "sql.js": "^1.6.2",
+    "prom-client": "^15.1.0"
+  }
+}

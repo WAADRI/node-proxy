@@ -1,0 +1,263 @@
+# =============================================================================
+# Node-Proxy Server Configuration v3.0
+# =============================================================================
+# This file can be overridden by environment variables (NP_ prefix)
+# or command-line arguments (--key value).
+# Example: NP_AUTH_TOKEN=secret or --auth-token secret
+
+server:
+  # Bind address (0.0.0.0 for all interfaces, :: for IPv6 dual-stack)
+  host: 0.0.0.0
+  # Set to true for IPv6-only mode (binds to ::)
+  ipv6_only: false
+  # Web control panel port
+  web_port: 3000
+  # HTTP/HTTPS CONNECT proxy port
+  http_proxy_port: 8080
+  # SOCKS5 proxy port
+  socks5_port: 1080
+
+# =============================================================================
+# TLS / SSL Configuration
+# =============================================================================
+tls:
+  # Set to true to enable HTTPS for web panel and WSS for client connections
+  enabled: false
+  # Path to certificate and key files (optional, auto-generated if empty)
+  cert: ""
+  key: ""
+  # Auto-generate self-signed certificate if cert/key files don't exist
+  auto_generate: true
+  # Certificate output directory (used by ACME auto-cert)
+  cert_dir: "./certs"
+
+# =============================================================================
+# Authentication
+# =============================================================================
+auth:
+  # Token used by client nodes to authenticate with the server
+  token: node-proxy-default-token
+
+  # HTTP proxy and SOCKS5 proxy user authentication
+  proxy:
+    # Set to true to require username/password for proxy access
+    enabled: false
+    username: proxy
+    password: proxy-pass
+
+  # Web control panel authentication
+  web:
+    # Set to true to require login for the web dashboard
+    enabled: true
+    username: admin
+    password: admin123
+    # JWT secret (auto-generated if empty, set for persistence across restarts)
+    jwt_secret: ""
+
+  # Phase 3: Additional users with RBAC roles
+  # Role options: admin (full access), operator (operational tasks), viewer (read-only)
+  users:
+    # - username: operator1
+    #   password: op-pass
+    #   role: operator
+    # - username: viewer1
+    #   password: viewer-pass
+    #   role: viewer
+
+# =============================================================================
+# Logging
+# =============================================================================
+logging:
+  # Log level: trace, debug, info, warn, error, fatal
+  level: info
+  # Log file path (empty = auto path in logs/ directory)
+  file: ""
+  # Maximum log file size before rotation (bytes)
+  max_size: 10485760
+  # Maximum number of rotated log files to keep
+  max_files: 5
+  # Pretty print for development (set via --logging-pretty)
+  pretty: false
+
+# =============================================================================
+# Health Check
+# =============================================================================
+health_check:
+  # How often to check client health (milliseconds)
+  ping_interval: 10000
+  # How long to wait for a pong response (milliseconds)
+  ping_timeout: 5000
+  # Number of consecutive failures before removing a client
+  max_failures: 3
+
+# =============================================================================
+# Client Settings
+# =============================================================================
+client:
+  # HTTP request timeout (milliseconds)
+  request_timeout: 30000
+  # TCP tunnel establishment timeout (milliseconds)
+  tunnel_timeout: 15000
+  # Maximum concurrent requests per client
+  max_concurrent: 100
+
+# =============================================================================
+# Phase 2: Routing Strategy
+# =============================================================================
+# Available strategies: random, least-loaded, fastest-response, weighted
+routing:
+  strategy: random
+
+# =============================================================================
+# Phase 2: Circuit Breaker
+# =============================================================================
+# Automatically isolates clients that are failing too often
+circuit_breaker:
+  # Number of consecutive errors before opening the circuit
+  error_threshold: 5
+  # Time window for counting errors (milliseconds)
+  window_ms: 60000
+  # How long to wait before testing recovery (milliseconds)
+  recovery_timeout_ms: 30000
+  # Max test attempts in half-open state before staying open
+  half_open_max_attempts: 3
+
+# =============================================================================
+# Phase 2: Bandwidth Limiting
+# =============================================================================
+# Token-bucket rate limiter per client
+bandwidth:
+  # Set to true to enable bandwidth limiting
+  enabled: false
+  # Default per-client rate limit (bytes/sec)
+  default_rate: 1048576
+  # Default burst size (bytes)
+  default_burst: 5242880
+  # Global rate limit across all clients (0 = unlimited)
+  global_rate: 0
+  # Global burst size (bytes)
+  global_burst: 52428800
+
+# =============================================================================
+# Phase 2: Prometheus Metrics
+# =============================================================================
+metrics:
+  # Expose /metrics endpoint for Prometheus scraping
+  enabled: true
+
+# =============================================================================
+# Phase 2: Persistent Storage
+# =============================================================================
+storage:
+  # Path to SQLite database file
+  path: "./data/node-proxy.db"
+
+# =============================================================================
+# Phase 3: Domain Routing Rules
+# =============================================================================
+# Route requests to specific client tag groups based on domain matching
+# Pattern supports * wildcards: *.example.com, api.example.*, *.*.com
+domain_rules:
+  # - pattern: "*.example.com"
+  #   tag: "region:cn"
+  #   priority: 10
+  # - pattern: "api.example.com"
+  #   tag: "region:us"
+  #   priority: 20
+
+# =============================================================================
+# Phase 3: Request Cache + Deduplication
+# =============================================================================
+cache:
+  enabled: true
+  # Default TTL in milliseconds (5 seconds)
+  default_ttl: 5000
+  # Maximum cache entries
+  max_size: 5000
+  # Maximum cached response body size (bytes)
+  max_body_size: 1048576
+
+# =============================================================================
+# Phase 3: Plugin System
+# =============================================================================
+plugins:
+  # Directory to load plugins from
+  dir: "./plugins"
+
+# =============================================================================
+# Phase 3: Auto Certificate (ACME / Let's Encrypt)
+# =============================================================================
+acme:
+  enabled: false
+  email: ""
+  # Set to true for Let's Encrypt staging (recommended for testing)
+  staging: true
+  # Domains to issue certificates for
+  domains: []
+
+# =============================================================================
+# Phase 3: ACL Rule Engine
+# =============================================================================
+# Access Control List for proxy traffic
+acl:
+  enabled: true
+  rules:
+    # Example: Block all traffic to 10.0.0.0/8
+    # - action: deny
+    #   priority: 100
+    #   description: "Block private networks"
+    #   match:
+    #     targetIp: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    # - action: deny
+    #   priority: 50
+    #   description: "Block social media during work hours"
+    #   match:
+    #     targetDomain: "*.facebook.com,*.twitter.com,*.instagram.com"
+    #     time:
+    #       start: "09:00"
+    #       end: "18:00"
+    # - action: allow
+    #   priority: 10
+    #   description: "Allow specific client tag"
+    #   match:
+    #     clientTag: "vip"
+
+# =============================================================================
+# Phase 3: Audit Logging
+# =============================================================================
+# Comprehensive request audit logging
+audit:
+  enabled: true
+  # Log directory
+  dir: "./audit"
+  # Maximum log file size before rotation (bytes)
+  max_size: 52428800
+  # Maximum number of rotated log files
+  max_files: 5
+  # Maximum buffered entries before flush
+  buffer_size: 100
+
+# =============================================================================
+# Phase 3: Auto Update
+# =============================================================================
+# Client auto-update mechanism
+update:
+  enabled: false
+  # URL to check for updates (returns JSON with version, download_url, sha256)
+  url: ""
+  # Directory to download updates to
+  dir: "./updates"
+  # Check interval in milliseconds (default: 1 hour)
+  check_interval: 3600000
+
+# =============================================================================
+# Phase 4: WebSocket Stream Multiplexing
+# =============================================================================
+# HTTP/2-style stream multiplexing over WebSocket connections
+mux:
+  # Initial send window per stream (bytes)
+  initial_window: 65536
+  # Total connection-level send window (bytes)
+  connection_window: 1048576
+  # Maximum frame payload size (bytes)
+  max_frame_size: 16384

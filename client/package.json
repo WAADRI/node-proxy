@@ -1,0 +1,13 @@
+{
+  "name": "node-proxy-client",
+  "version": "1.0.0",
+  "description": "Node-Proxy Client - Connects to proxy server and forwards traffic",
+  "main": "client.js",
+  "scripts": {
+    "start": "node client.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "js-yaml": "^4.1.0"
+  }
+}
