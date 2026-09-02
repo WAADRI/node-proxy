@@ -13,7 +13,7 @@ class ClientManager {
     this.clients = new Map();
     this.pendingRequests = new Map();
     this.pendingTunnels = new Map();
-    this._onChange = null;
+    this._onChangeListeners = new Set();
     this._healthTimer = null;
 
     // External modules (set by server.js)
@@ -35,12 +35,18 @@ class ClientManager {
   }
 
   onChange(cb) {
-    this._onChange = cb;
+    if (typeof cb === 'function') {
+      this._onChangeListeners.add(cb);
+    }
+  }
+
+  removeOnChange(cb) {
+    this._onChangeListeners.delete(cb);
   }
 
   _notify() {
-    if (this._onChange) {
-      try { this._onChange(); } catch (_) {}
+    for (const cb of this._onChangeListeners) {
+      try { cb(); } catch (_) {}
     }
   }
 

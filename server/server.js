@@ -108,7 +108,7 @@ webWss.on('connection', (ws) => {
   };
   clientManager.onChange(onChange);
 
-  ws.on('close', () => { clientManager.onChange = null; });
+  ws.on('close', () => { clientManager.removeOnChange(onChange); });
   ws.on('error', () => {});
 });
 
