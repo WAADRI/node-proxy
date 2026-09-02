@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  构建推送:
+  build-and-push:
     name: 构建并推送客户端镜像
     runs-on: ubuntu-latest
     permissions:
