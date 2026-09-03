@@ -245,14 +245,26 @@
       background: #1e293b;
       border: 1px solid #334155;
       border-radius: 12px;
-      overflow: hidden;
+      overflow: auto;          /* 横向+纵向滚动（列多时不挤压） */
+      max-height: 72vh;        /* 纵向滚动上限，表头吸顶 */
     }
     table {
       width: 100%;
-      border-collapse: collapse;
+      min-width: 1500px;       /* 16 列最小总宽，窄屏出现横向滚动条 */
+      border-collapse: separate; /* sticky 定位需要 separate */
+      border-spacing: 0;
     }
     thead {
       background: #0f172a;
+    }
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #0f172a;     /* 表头自身背景，纵向滚动时遮住经过的行 */
+    }
+    th:last-child {
+      z-index: 3;              /* 右上角交叉区最上层 */
     }
     th {
       text-align: left;
@@ -270,12 +282,31 @@
       font-size: 0.85rem;
       border-bottom: 1px solid #1e293b;
       vertical-align: middle;
+      white-space: nowrap;
+    }
+    tbody tr {
+      background: #1e293b;     /* 行背景放到 tr，hover 可整体变化 */
+    }
+    tbody tr:hover {
+      background: #33415a;     /* 行 hover 高亮（含吸顶操作列） */
     }
     tr:last-child td {
       border-bottom: none;
     }
-    tr:hover td {
-      background: rgba(51, 65, 85, 0.3);
+    /* 操作列吸顶在右侧，横向滚动时始终可见 */
+    th:last-child,
+    tbody td:not(.no-data):last-child {
+      position: sticky;
+      right: 0;
+    }
+    tbody td:not(.no-data):last-child {
+      z-index: 1;
+      background: inherit;     /* 跟随行背景，hover 自动高亮 */
+      box-shadow: -6px 0 6px -6px rgba(0, 0, 0, 0.45); /* 左侧投影提示可滚动 */
+    }
+    td.no-data {
+      white-space: normal;     /* 空状态提示可换行 */
+      text-align: center;
     }
     .client-id {
       font-family: 'Fira Code', monospace;
