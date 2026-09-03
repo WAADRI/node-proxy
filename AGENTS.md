@@ -2,7 +2,7 @@
 
 > 适用于所有开发者与 AI 编码代理。默认分支 `main`，远程 `origin`（GitHub）。
 
-## 铁律
+## 核心规范
 
 1. **所有更改必须通过 GitHub PR 合入 `main`**。
    禁止本地合并分支后 push、禁止直接 `git push origin main`、禁止任何绕过 PR 的合入。
@@ -56,6 +56,11 @@ CI 失败或 review 需修改时：在**同一分支**补最小 commit 并 push�
 
 - 一个 commit 只做一件事；描述用祈使句、小写开头，≤72 字符。
 - 禁止 `update files` / `wip` 等无意义提交。
+
+### 提交签名（尽量）
+
+- 尽量对提交启用签名：**优先 GPG 签名**（`git config commit.gpgsign true`），其次 **SSH 私钥签名**（`git config gpg.format ssh` + 配置 `user.signingkey`）。
+- 签名为“尽量”项，**不签名也允许提交**；不要因签名失败而阻塞提交流程。
 
 ## 分支命名
 
