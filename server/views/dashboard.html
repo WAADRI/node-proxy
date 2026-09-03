@@ -576,8 +576,44 @@
     /* ========== Runtime Settings modal ========== */
     .settings-box {
       max-width: 720px;
-      max-height: 86vh;
+      width: 92%;
+      padding: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .settings-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1.1rem 1.5rem 0.5rem;
+      flex: none;
+    }
+    .settings-head h2 {
+      margin: 0;
+    }
+    .modal-close-btn {
+      background: none;
+      border: none;
+      color: #94a3b8;
+      font-size: 1.35rem;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0.3rem 0.55rem;
+      border-radius: 8px;
+      flex: none;
+    }
+    .modal-close-btn:hover {
+      color: #f87171;
+      background: rgba(148, 163, 184, 0.15);
+    }
+    .settings-scroll {
       overflow-y: auto;
+      padding: 0.2rem 1.5rem 1.5rem;
+      max-height: calc(86vh - 4rem);
+    }
+    .settings-scroll .settings-sub {
+      margin-top: 0;
     }
     .settings-sub {
       color: #94a3b8;
@@ -752,7 +788,7 @@
     <div class="stats-grid" style="margin-top: 0.5rem;">
       <div class="stat-card">
         <div class="label">路由策略</div>
-        <div class="value" id="statRouting" style="font-size:1.2rem;">random</div>
+        <div class="value" id="statRouting" style="font-size:1.2rem;">随机</div>
       </div>
       <div class="stat-card">
         <div class="label">熔断器</div>
@@ -868,7 +904,11 @@
   <!-- ========== Runtime Settings Modal ========== -->
   <div class="modal-overlay" id="settingsModal">
     <div class="modal-box settings-box">
-      <h2>⚙️ 运行设置</h2>
+      <div class="settings-head">
+        <h2>⚙️ 运行设置</h2>
+        <button class="modal-close-btn" onclick="hideSettingsModal()" title="关闭">✕</button>
+      </div>
+      <div class="settings-scroll">
       <p class="settings-sub">
         修改<b>即时生效</b>并持久化，重启后自动恢复。「恢复默认」回到 config.yaml 的初始值。
       </p>
@@ -898,15 +938,15 @@
             <input type="number" id="cbErrorThreshold" class="form-input" min="1">
           </div>
           <div class="form-group">
-            <label>计数窗口 window_ms（毫秒）</label>
+            <label>错误计数窗口（毫秒）</label>
             <input type="number" id="cbWindowMs" class="form-input" min="1000">
           </div>
           <div class="form-group">
-            <label>恢复探测等待 recovery_timeout_ms（毫秒）</label>
+            <label>恢复探测等待时间（毫秒）</label>
             <input type="number" id="cbRecoveryMs" class="form-input" min="1000">
           </div>
           <div class="form-group">
-            <label>半开最大尝试 half_open_max_attempts（次）</label>
+            <label>半开状态最大重试次数</label>
             <input type="number" id="cbHalfOpen" class="form-input" min="1">
           </div>
         </div>
@@ -926,11 +966,11 @@
         <label class="toggle-line"><input type="checkbox" id="bwEnabled"> 启用带宽限制</label>
         <div class="settings-grid">
           <div class="form-group">
-            <label>全局总带宽上限 global_rate（KB/s，0=不限）</label>
+            <label>全局总带宽上限（KB/s，0=不限）</label>
             <input type="number" id="bwGlobalRateKb" class="form-input" min="0">
           </div>
           <div class="form-group">
-            <label>每客户端默认限速 default_rate（KB/s）</label>
+            <label>每个节点默认限速（KB/s）</label>
             <input type="number" id="bwDefaultRateKb" class="form-input" min="0">
           </div>
         </div>
@@ -949,15 +989,15 @@
         </div>
         <div class="settings-grid">
           <div class="form-group">
-            <label>HTTP 请求超时 request_timeout（毫秒）</label>
+            <label>HTTP 请求超时（毫秒）</label>
             <input type="number" id="clRequestTimeout" class="form-input" min="1000">
           </div>
           <div class="form-group">
-            <label>TCP 隧道超时 tunnel_timeout（毫秒）</label>
+            <label>TCP 隧道建立超时（毫秒）</label>
             <input type="number" id="clTunnelTimeout" class="form-input" min="1000">
           </div>
           <div class="form-group">
-            <label>每节点最大并发 max_concurrent</label>
+            <label>单节点最大并发数</label>
             <input type="number" id="clMaxConcurrent" class="form-input" min="1">
           </div>
         </div>
@@ -976,7 +1016,7 @@
         </div>
         <div class="settings-grid">
           <div class="form-group">
-            <label>默认缓存有效期 default_ttl（毫秒，对新缓存生效）</label>
+            <label>默认缓存有效期（毫秒，仅对新缓存生效）</label>
             <input type="number" id="cacheTtlMs" class="form-input" min="0">
           </div>
         </div>
@@ -1003,9 +1043,7 @@
         </table>
       </div>
 
-      <div class="modal-actions">
-        <button class="btn" onclick="hideSettingsModal()">关闭</button>
-      </div>
+      </div><!-- /settings-scroll -->
     </div>
   </div>
 

@@ -122,7 +122,7 @@
 
     // Phase 2 stats
     if (routing) {
-      const strategyLabel = routing.strategy || 'random';
+      const strategyLabel = STRATEGY_LABELS[routing.strategy] || routing.strategy || 'random';
       document.getElementById('statRouting').textContent = strategyLabel;
       document.getElementById('statRouting').title = '可用策略: ' + (routing.availableStrategies || []).join(', ');
     }
@@ -422,6 +422,17 @@
       .catch((err) => showToast('加载设置失败: ' + err.message, 'error'));
   }
 
+  // Highlight the selected strategy card on click (radio inputs are hidden).
+  // Bound once on the container; renderSettings only replaces innerHTML.
+  document.getElementById('routingOptions').addEventListener('change', function (e) {
+    if (e.target && e.target.name === 'routingStrategy') {
+      this.querySelectorAll('.strategy-option').forEach((opt) => {
+        const input = opt.querySelector('input');
+        opt.classList.toggle('selected', !!(input && input.checked));
+      });
+    }
+  });
+
   function renderSettings(d) {
     const rt = d.runtime || {};
     const ed = d.editable || {};
@@ -545,7 +556,9 @@
       .then((d) => {
         if (!d.success) return showToast('保存失败: ' + (d.message || ''), 'error');
         showToast('已保存并即时生效', 'success');
-        renderSettings(d);
+        // POST responses carry no `editable` field - reload from GET to keep
+        // controls enabled and show server-confirmed values.
+        loadSettings();
       })
       .catch((err) => showToast('请求失败: ' + err.message, 'error'));
   };
@@ -557,7 +570,7 @@
       .then((d) => {
         if (!d.success) return showToast('恢复失败: ' + (d.message || ''), 'error');
         showToast('已恢复默认值', 'success');
-        renderSettings(d);
+        loadSettings();
       })
       .catch((err) => showToast('请求失败: ' + err.message, 'error'));
   };
