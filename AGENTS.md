@@ -89,22 +89,7 @@ node-proxy/
 └── .github/workflows/      # CI/CD 工作流
 ```
 
-`server/lib/` 主要模块：
-
-| 模块 | 职责 |
-|---|---|
-| `config.js` | 配置加载（YAML + env + CLI） |
-| `logger.js` | 日志 |
-| `auth.js` | RBAC 认证 |
-| `client-manager.js` | 客户端注册中心 |
-| `proxy-http.js` / `proxy-socks5.js` | HTTP / SOCKS5 代理 |
-| `ws-server.js` / `stream-mux.js` | WebSocket 服务 / 流复用 |
-| `web-server.js` | Web 面板 |
-| `router.js` / `domain-router.js` | 路由引擎 |
-| `circuit-breaker.js` / `bandwidth.js` / `cache.js` | 熔断 / 限速 / 缓存 |
-| `storage.js` / `metrics.js` / `audit.js` / `acl.js` | 存储 / 指标 / 审计 / ACL |
-| `tls.js` / `acme.js` | TLS / 自动证书 |
-| `swagger.js` / `binary-protocol.js` / `auto-update.js` / `plugin-manager.js` | 文档 / 协议 / 更新 / 插件 |
+`server/lib/`：每个独立能力一个模块文件（配置、日志、认证、代理、路由、流复用、存储、指标等），文件名自解释。
 
 目录规则：
 
