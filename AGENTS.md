@@ -80,13 +80,13 @@ node-proxy/
 │   ├── lib/               # 核心模块（每模块一个文件，见下）
 │   ├── public/            # 前端静态资源
 │   ├── views/             # HTML 模板
-│   └── plugins/           # 插件目录
-├── client/                 # 客户端（client.js、lib/、Dockerfile）
+│   ├── plugins/           # 插件目录
+│   ├── Dockerfile         # 服务端镜像构建
+│   ├── docker-compose.yml # 服务端编排
+│   └── prometheus.yml     # 监控配置
+├── client/                 # 客户端（client.js、lib/、Dockerfile、docker-compose.client.yml）
 ├── deploy/                 # 部署脚本：systemd 服务、WinSW 配置
-├── .github/workflows/      # CI/CD 工作流
-├── Dockerfile              # 构建镜像
-├── docker-compose.yml      # 编排
-└── prometheus.yml          # 监控配置
+└── .github/workflows/      # CI/CD 工作流
 ```
 
 `server/lib/` 主要模块：
@@ -112,7 +112,8 @@ node-proxy/
 - 前端页面资源放 `server/public/`，页面模板放 `server/views/`。
 - 客户端相关代码只放 `client/`，不放进 `server/`。
 - 部署/安装相关文件放 `deploy/`；CI 工作流放 `.github/workflows/`。
-- 涉及镜像构建的改动同时更新根目录 `Dockerfile` / `docker-compose.yml` 及 `.github/workflows/`。
+- 服务端镜像构建与编排文件（`Dockerfile`、`docker-compose.yml`、`prometheus.yml`）**归属 `server/`**；改镜像相关配置时同步更新 `server/` 下对应文件及 `.github/workflows/`。
+- 现状：根目录仍有这三个文件，属历史遗留（暂不迁移）；正式迁移需单独开 PR 完成，迁移后根目录不再保留。
 
 ## 禁止事项
 
