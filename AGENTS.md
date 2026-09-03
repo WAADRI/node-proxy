@@ -77,7 +77,7 @@ node-proxy/
 ├── server/                 # 服务端（Node.js）
 │   ├── server.js          # 入口文件
 │   ├── config.yaml        # 默认配置
-│   ├── lib/               # 核心模块（每模块一个文件，见下）
+│   ├── lib/               # 核心模块
 │   ├── public/            # 前端静态资源
 │   ├── views/             # HTML 模板
 │   ├── plugins/           # 插件目录
@@ -89,12 +89,8 @@ node-proxy/
 └── .github/workflows/      # CI/CD 工作流
 ```
 
-`server/lib/`：每个独立能力一个模块文件（配置、日志、认证、代理、路由、流复用、存储、指标等），文件名自解释。
-
 目录规则：
 
-- 服务端代码放入 `server/lib/` 对应模块文件，**不要堆进入口 `server.js`**；新增独立能力新建一个模块文件。
-- 前端页面资源放 `server/public/`，页面模板放 `server/views/`。
 - 客户端相关代码只放 `client/`，不放进 `server/`。
 - 部署/安装相关文件放 `deploy/`；CI 工作流放 `.github/workflows/`。
 - 服务端镜像构建与编排文件（`Dockerfile`、`docker-compose.yml`、`prometheus.yml`）**归属 `server/`**；改镜像相关配置时同步更新 `server/` 下对应文件及 `.github/workflows/`。
