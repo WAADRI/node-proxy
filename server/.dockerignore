@@ -1,0 +1,29 @@
+# =============================================================================
+# Node-Proxy Server - .dockerignore
+# Keep runtime data & secrets out of the image (COPY . . in Dockerfile)
+# =============================================================================
+
+# Runtime data / databases (mounted as volumes in docker-compose.yml)
+data/
+certs/
+logs/
+audit/
+*.db
+*.sqlite
+*.db.tmp
+*.log
+
+# Local configs that may contain secrets
+config.local.yaml
+*.local.yaml
+.env
+.env.*
+
+# Node modules are installed inside the Dockerfile
+node_modules/
+npm-debug.log
+
+# Docs / deploy files not needed in the image
+deploy/
+README.md
+package-lock.json

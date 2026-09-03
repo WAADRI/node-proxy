@@ -614,21 +614,25 @@ logging:
 
 ## 部署
 
-### Docker 部署
+### Docker 部署（服务端）
+
+服务端部署文件位于 `server/` 目录（`server/docker-compose.yml`）：
 
 ```bash
-# 构建并启动
-docker compose up -d
+cd server
+
+# 构建并启动（-p node-proxy 保持项目名与数据卷名稳定，升级不丢监控数据）
+docker compose -p node-proxy up -d --build
 
 # 使用监控模式（含 Prometheus + Grafana）
-docker compose --profile monitoring up -d
+docker compose -p node-proxy --profile monitoring up -d
 ```
 
 ### systemd（Linux）
 
 ```bash
 # 安装
-sudo cp deploy/node-proxy.service /etc/systemd/system/
+sudo cp server/deploy/node-proxy.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable node-proxy
 sudo systemctl start node-proxy
@@ -641,13 +645,13 @@ sudo systemctl status node-proxy
 
 ```bash
 # 安装 WinSW
-# 下载 winsw.exe 到 bin/ 目录
+# 下载 winsw.exe 到 server/bin/ 目录
 
 # 安装服务
-deploy\install-service.bat install
+server\deploy\install-service.bat install
 
 # 启动
-deploy\install-service.bat start
+server\deploy\install-service.bat start
 ```
 
 ---
@@ -736,7 +740,11 @@ node-proxy/
 │   ├── public/             # 前端静态资源
 │   ├── views/              # HTML 模板
 │   ├── plugins/            # 插件目录
-│   └── deploy/             # 部署文件
+│   ├── deploy/             # 部署文件（node-proxy.service / node-proxy.xml / install-service.bat）
+│   ├── Dockerfile          # 服务端 Docker 镜像
+│   ├── docker-compose.yml  # 服务端 Docker 编排（--profile monitoring 含 Prometheus/Grafana）
+│   ├── prometheus.yml      # Prometheus 配置
+│   └── .dockerignore       # 构建排除项
 ├── client/                 # 客户端
 │   ├── client.js           # 客户端入口（配置加载、重连、请求/隧道处理）
 │   ├── config.yaml         # 客户端配置（可选，见"客户端使用指南"）
@@ -746,13 +754,7 @@ node-proxy/
 │   ├── Dockerfile          # 客户端 Docker 镜像
 │   ├── docker-compose.client.yml  # 客户端 Docker 编排
 │   └── .dockerignore       # 构建排除项
-├── deploy/
-│   ├── node-proxy.service  # systemd 服务文件
-│   ├── node-proxy.xml      # WinSW 服务配置
-│   └── install-service.bat  # Windows 服务安装脚本
-├── docker-compose.yml      # Docker 编排
-├── Dockerfile              # Docker 构建
-└── prometheus.yml          # Prometheus 配置
+└── README.md / .gitignore / .github/   # 仓库级文件
 ```
 
 ---
