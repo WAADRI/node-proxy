@@ -524,10 +524,14 @@
       font-weight: 700;
       color: #38bdf8;
     }
-    .region-override::after {
-      content: ' ✎';
-      font-size: 0.7rem;
-      opacity: 0.7;
+    /* Editable cells (alias / notes / region): click opens the edit modal */
+    .cell-edit {
+      cursor: pointer;
+    }
+    .cell-edit:hover {
+      text-decoration: underline;
+      text-decoration-color: #38bdf8;
+      text-underline-offset: 2px;
     }
     .dim {
       color: #475569;
