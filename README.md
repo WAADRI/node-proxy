@@ -176,7 +176,7 @@ npm start
 | HTTPS | 服务器 IP | 8080 |
 | SOCKS5 | 服务器 IP | 1080 |
 
-**认证（可选）：** 如果启用了代理认证，配置用户名 `proxy` 和密码 `proxy-pass`。
+**认证（可选）：** 如果启用了代理认证，配置用户名 `proxy` 和密码 `proxy-pass`（⚠ 启用前务必修改默认密码，默认值已在公开文档中列出）。
 
 ---
 
@@ -210,7 +210,7 @@ npm install        # 只需 ws 一个依赖
 ```yaml
 # client/config.yaml
 server_url: ws://你的服务器IP:3000/ws
-auth_token: my-secret-token
+auth_token: my-secret-token   # ⚠ 改成你自己的强随机值（勿用默认值）
 
 # 可选配置
 region: cn                     # 区域标识（展示用）
@@ -235,7 +235,7 @@ CONFIG_PATH=/etc/node-proxy-client/config.yaml node client.js
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
 | `SERVER_URL` | `ws://127.0.0.1:3000/ws` | 服务端 WebSocket 地址（必填） |
-| `AUTH_TOKEN` | `node-proxy-default-token` | 认证令牌，必须与服务端 `auth.token` 一致 |
+| `AUTH_TOKEN` | `node-proxy-default-token` | 认证令牌，必须与服务端 `auth.token` 一致；⚠ 默认值已公开，生产必须修改 |
 | `REGION` / `NODE_REGION` | `unknown` | 节点区域标识 |
 | `TAGS` | `""` | 节点标签，逗号分隔 |
 | `RECONNECT_DELAY` | `3000` | 重连初始延迟（毫秒） |
@@ -387,7 +387,7 @@ docker run -d --restart=always --name node-proxy-client \
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
 | `SERVER_URL` | ✅ | `ws://127.0.0.1:3000/ws` | 服务端 WebSocket 地址，**必须修改** |
-| `AUTH_TOKEN` | ✅ | `node-proxy-default-token` | 认证令牌，需与服务端一致 |
+| `AUTH_TOKEN` | ✅ | `node-proxy-default-token` | 认证令牌，需与服务端一致；⚠ 默认值已公开，生产必须修改 |
 | `TAGS` | - | 空 | 节点标签，逗号分隔（如 `region:cn,isp:unicom`） |
 | `REGION` | - | `unknown` | 区域标识 |
 | `RECONNECT_DELAY` | - | `3000` | 重连初始延迟(ms) |
@@ -455,18 +455,18 @@ server:
   ipv6_only: false        # IPv6-only 模式
 
 auth:
-  token: node-proxy-default-token  # 客户端连接令牌
+  token: node-proxy-default-token  # ⚠ 客户端连接令牌：默认值已公开，生产必须修改
   proxy:
     enabled: false
     username: proxy
-    password: proxy-pass
+    password: proxy-pass            # ⚠ 启用代理认证前必须修改
   web:
     enabled: true
-    username: admin
-    password: admin123
-    jwt_secret: ""         # 留空自动生成
+    username: admin                 # ⚠ 生产建议更换默认用户名
+    password: admin123              # ⚠ Web 管理员密码：默认值已公开，生产必须修改
+    jwt_secret: ""                  # 留空自动生成
   users:
-    - username: operator1
+    - username: operator1           # ⚠ 示例用户，生产请删除或改强密码
       password: op-pass
       role: operator
     - username: viewer1
@@ -560,11 +560,11 @@ logging:
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `NP_AUTH_TOKEN` | `node-proxy-default-token` | 客户端认证令牌 |
+| `NP_AUTH_TOKEN` | `node-proxy-default-token` | 客户端认证令牌；⚠ 默认值已公开，生产必须修改 |
 | `NP_AUTH_PROXY_ENABLED` | `false` | 启用代理端口认证 |
 | `NP_AUTH_WEB_ENABLED` | `true` | 启用 Web 面板认证 |
-| `NP_AUTH_WEB_USERNAME` | `admin` | Web 管理员用户名 |
-| `NP_AUTH_WEB_PASSWORD` | `admin123` | Web 管理员密码 |
+| `NP_AUTH_WEB_USERNAME` | `admin` | Web 管理员用户名；⚠ 生产建议更换 |
+| `NP_AUTH_WEB_PASSWORD` | `admin123` | Web 管理员密码；⚠ 默认值已公开，生产必须修改 |
 | `NP_SERVER_HOST` | `0.0.0.0` | 监听地址 |
 | `NP_SERVER_WEB_PORT` | `3000` | Web 面板端口 |
 | `NP_ROUTER_STRATEGY` | `random` | 路由策略 |
@@ -679,12 +679,24 @@ Docker 部署时默认包含 Grafana，访问 `http://服务器IP:3001`（默认
 
 ## 安全
 
-1. 务必修改 `AUTH_TOKEN` 为强密码，防止未授权客户端连接
-2. 代理端口默认监听所有网络接口，建议使用防火墙限制访问
-3. 生产环境建议在 Web 面板前添加反向代理并配置 HTTPS
-4. 使用 ACL 规则限制私有网络访问和敏感域名
-5. 启用审计日志记录所有代理请求，便于事后追溯
-6. 定期轮换 Web 面板密码和 JWT 密钥
+> ⚠️ **重要：本仓库为公开仓库，以下默认凭据公开可见。任何环境（尤其是公网部署）使用前都必须修改，否则任何人都可以用默认值连接你的代理、或登录你的控制面板：**
+
+| 默认凭据 | 用途 | 处理方式 |
+|----------|------|----------|
+| `node-proxy-default-token` | 客户端连接认证（`auth.token` / `NP_AUTH_TOKEN`） | 必须改为强随机字符串 |
+| `admin` / `admin123` | Web 控制面板管理员（`auth.web` / `NP_AUTH_WEB_*`） | 必须改为独立强密码，建议同时更换用户名 |
+| `proxy` / `proxy-pass` | 代理端口认证（`auth.proxy`） | 默认未启用；启用前必须修改 |
+| `operator1` / `op-pass`、`viewer1` / `viewer-pass` | 预置用户示例 | 删除或改为强密码 |
+
+部署建议：
+
+1. 务必修改 `AUTH_TOKEN`（服务端 `auth.token`）为强随机值，防止未授权客户端接入
+2. 修改 Web 面板默认密码 `admin123`、默认用户名 `admin`（`NP_AUTH_WEB_USERNAME` / `NP_AUTH_WEB_PASSWORD`）
+3. 代理端口默认监听所有网络接口，建议使用防火墙限制访问
+4. 生产环境建议在 Web 面板前添加反向代理并配置 HTTPS
+5. 使用 ACL 规则限制私有网络访问和敏感域名
+6. 启用审计日志记录所有代理请求，便于事后追溯
+7. 定期轮换 Web 面板密码和 JWT 密钥
 
 ---
 
