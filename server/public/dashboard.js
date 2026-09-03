@@ -219,12 +219,12 @@
           <td><span class="client-hostname">${escapeHtml(alias || info.hostname || '-')}</span></td>
           <td><span class="client-ip">${escapeHtml(info.ip || info.localIp || '-')}</span></td>
           <td>${escapeHtml(info.platform || '-')} ${info.arch ? '(' + escapeHtml(info.arch) + ')' : ''}</td>
-          <td class="${regionClass}">${escapeHtml(effectiveRegion)}</td>
+          <td class="${regionClass} cell-edit" title="点击编辑区域" onclick="window.editClientMeta('${c.id}','region')">${escapeHtml(effectiveRegion)}</td>
           <td>${tagsHtml}</td>
-          <td class="client-alias" title="${escapeHtml(alias) || '点击编辑别名'}">
+          <td class="client-alias cell-edit" title="点击编辑别名" onclick="window.editClientMeta('${c.id}','alias')">
             ${alias ? escapeHtml(alias) : '<span class="dim">-</span>'}
           </td>
-          <td class="client-notes" title="${escapeHtml(notes) || '点击编辑备注'}">
+          <td class="client-notes cell-edit" title="点击编辑备注" onclick="window.editClientMeta('${c.id}','notes')">
             ${notes ? escapeHtml(notes.substring(0, 30)) + (notes.length > 30 ? '...' : '') : '<span class="dim">-</span>'}
           </td>
           <td class="client-pending">${c.pendingRequestsCount}</td>
@@ -320,7 +320,7 @@
     }
   };
 
-  window.editClientMeta = function (clientId) {
+  window.editClientMeta = function (clientId, focusField) {
     if (!lastData) return;
     const client = lastData.clients.find(c => c.id === clientId);
     if (!client) return;
@@ -329,6 +329,10 @@
     document.getElementById('editNotes').value = client.notes || '';
     document.getElementById('editRegion').value = client.region || client.info?.region || '';
     document.getElementById('editMetaModal').classList.add('active');
+    if (focusField) {
+      const el = document.getElementById('edit' + focusField.charAt(0).toUpperCase() + focusField.slice(1));
+      if (el) { el.focus(); el.select(); }
+    }
   };
 
   window.saveClientMeta = function () {
