@@ -4,7 +4,7 @@
 FROM node:20-alpine AS builder
 
 WORKDIR /app
-COPY server/package.json ./
+COPY package.json ./
 # NOTE: do NOT add native modules here (e.g. better-sqlite3) - the alpine
 # image has no Python/gcc/make toolchain and GitHub prebuild downloads
 # frequently time out on CN networks. storage.js uses pure-JS sql.js.
@@ -21,8 +21,8 @@ WORKDIR /app
 # Copy node_modules from builder
 COPY --from=builder /app/node_modules ./node_modules
 
-# Copy server code
-COPY server/ .
+# Copy server code (data/certs/logs excluded via .dockerignore)
+COPY . .
 
 # Create data directory for SQLite
 RUN mkdir -p /app/data /app/certs /app/logs

@@ -1,5 +1,6 @@
 # =============================================================================
-# Node-Proxy - Docker Compose
+# Node-Proxy Server - Docker Compose
+# Run from this directory: docker compose up -d
 # =============================================================================
 
 services:
@@ -14,10 +15,10 @@ services:
       - "8080:8080"   # HTTP proxy
       - "1080:1080"   # SOCKS5 proxy
     volumes:
-      - ./server/config.yaml:/app/config.yaml:ro
-      - ./server/data:/app/data
-      - ./server/certs:/app/certs
-      - ./server/logs:/app/logs
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./certs:/app/certs
+      - ./logs:/app/logs
     environment:
       - NP_AUTH_TOKEN=${NP_AUTH_TOKEN:-node-proxy-default-token}
       - NP_AUTH_WEB_USERNAME=${NP_AUTH_WEB_USERNAME:-admin}
