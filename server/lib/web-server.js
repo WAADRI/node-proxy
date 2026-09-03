@@ -10,6 +10,9 @@ const cookieParser = require('cookie-parser');
 function createWebServer(clientManager, authManager, config, logger, metricsManager, domainRouter, cache, pluginManager, aclManager, auditLogger, autoUpdater) {
   const app = express();
 
+  // Trust the first upstream proxy (nginx) so req.ip reads X-Forwarded-For
+  app.set('trust proxy', 1);
+
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true }));
   app.use(cookieParser());

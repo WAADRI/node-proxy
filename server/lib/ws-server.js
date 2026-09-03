@@ -13,7 +13,11 @@ function setupClientWebSocket(httpServer, clientManager, authManager, config, lo
   wss.on('connection', (ws, req) => {
     let clientId = null;
     let authenticated = false;
-    const clientIp = req.socket.remoteAddress;
+    // Read the real client IP from nginx proxy headers when available;
+    // otherwise fall back to the raw TCP connection address (Docker gateway / nginx IP).
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim()
+                  || req.headers['x-real-ip']
+                  || req.socket.remoteAddress;
 
     // Create StreamMux for this client
     const mux = new StreamMux(ws, {
