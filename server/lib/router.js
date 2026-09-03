@@ -20,6 +20,10 @@ class Router {
     return false;
   }
 
+  getStrategy() {
+    return this.strategy;
+  }
+
   // Select a client from available clients using the configured strategy
   select(clients, circuitBreaker, tag) {
     if (!clients || clients.length === 0) return null;

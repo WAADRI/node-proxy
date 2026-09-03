@@ -149,6 +149,27 @@ class CircuitBreaker {
     this.log.info({ clientId }, 'Circuit breaker: manually reset');
   }
 
+  // Hot-update threshold parameters (used by the web settings panel)
+  updateConfig(partial = {}) {
+    const merged = { ...this._defaults, ...partial };
+    this._defaults = {
+      error_threshold: merged.error_threshold,
+      window_ms: merged.window_ms,
+      recovery_timeout_ms: merged.recovery_timeout_ms,
+      half_open_max_attempts: merged.half_open_max_attempts,
+    };
+    // Keep the shared config object in sync so GET /config reflects it
+    if (this.config.circuit_breaker) {
+      Object.assign(this.config.circuit_breaker, this._defaults);
+    }
+    this.log.info({ config: this._defaults }, 'Circuit breaker config updated');
+    return { ...this._defaults };
+  }
+
+  getEffectiveConfig() {
+    return { ...this._defaults };
+  }
+
   // Cleanup stale entries
   cleanup(activeClientIds) {
     const activeSet = new Set(activeClientIds);

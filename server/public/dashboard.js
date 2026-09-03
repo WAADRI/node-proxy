@@ -390,6 +390,179 @@
   };
 
   // ===========================================================================
+  // Runtime Settings panel
+  // ===========================================================================
+  const STRATEGY_LABELS = { random: '随机', 'least-loaded': '最少负载', 'fastest-response': '最快响应', weighted: '加权' };
+  const STRATEGY_DESC = {
+    random: '从在线节点中随机选择',
+    'least-loaded': '优先选择待处理请求最少的节点',
+    'fastest-response': '优先选择平均响应最快的节点',
+    weighted: '按节点权重比例分配（权重在节点行调整）',
+  };
+
+  let settingsData = null;
+
+  window.openSettingsModal = function () {
+    document.getElementById('settingsModal').classList.add('active');
+    loadSettings();
+  };
+
+  window.hideSettingsModal = function () {
+    document.getElementById('settingsModal').classList.remove('active');
+  };
+
+  function loadSettings() {
+    fetchWithAuth('/api/v1/settings')
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d.success) throw new Error(d.message || '加载失败');
+        settingsData = d;
+        renderSettings(d);
+      })
+      .catch((err) => showToast('加载设置失败: ' + err.message, 'error'));
+  }
+
+  function renderSettings(d) {
+    const rt = d.runtime || {};
+    const ed = d.editable || {};
+
+    // --- routing ---
+    const cur = (rt.routing && rt.routing.strategy) || 'random';
+    const list = (rt.routing && rt.routing.available) || Object.keys(STRATEGY_LABELS);
+    document.getElementById('routingOptions').innerHTML = list
+      .map((s) => `
+        <label class="strategy-option${s === cur ? ' selected' : ''}">
+          <input type="radio" name="routingStrategy" value="${s}" ${s === cur ? 'checked' : ''} ${ed.routing ? '' : 'disabled'}>
+          <span class="so-name">${STRATEGY_LABELS[s] || s}</span>
+          <span class="so-desc">${STRATEGY_DESC[s] || ''}</span>
+        </label>`)
+      .join('');
+
+    // --- circuit breaker ---
+    const cb = rt.circuit_breaker || {};
+    setField('cbErrorThreshold', cb.error_threshold);
+    setField('cbWindowMs', cb.window_ms);
+    setField('cbRecoveryMs', cb.recovery_timeout_ms);
+    setField('cbHalfOpen', cb.half_open_max_attempts);
+
+    // --- bandwidth (KB/s in the UI) ---
+    const bw = rt.bandwidth || {};
+    document.getElementById('bwEnabled').checked = !!bw.enabled;
+    setField('bwGlobalRateKb', bw.global_rate != null ? Math.round(bw.global_rate / 1024) : 0);
+    setField('bwDefaultRateKb', bw.default_rate != null ? Math.round(bw.default_rate / 1024) : 0);
+
+    // --- client params ---
+    const cl = rt.client || {};
+    setField('clRequestTimeout', cl.request_timeout);
+    setField('clTunnelTimeout', cl.tunnel_timeout);
+    setField('clMaxConcurrent', cl.max_concurrent);
+
+    // --- cache ---
+    const ca = rt.cache || {};
+    setField('cacheTtlMs', ca.default_ttl);
+
+    // --- editability ---
+    setGroupEditable('groupRouting', ed.routing);
+    setGroupEditable('groupCircuitBreaker', ed.circuit_breaker);
+    setGroupEditable('groupBandwidth', ed.bandwidth);
+    setGroupEditable('groupClient', ed.client);
+    setGroupEditable('groupCache', ed.cache);
+
+    // --- restart-only read-only display ---
+    const ro = d.restart_only || {};
+    document.getElementById('roWebPort').textContent = (ro.server && ro.server.web_port) != null ? ro.server.web_port : '-';
+    document.getElementById('roHttpPort').textContent = (ro.server && ro.server.http_proxy_port) != null ? ro.server.http_proxy_port : '-';
+    document.getElementById('roSocksPort').textContent = (ro.server && ro.server.socks5_port) != null ? ro.server.socks5_port : '-';
+    document.getElementById('roWebUser').textContent = (ro.auth && ro.auth.web_username) || '-';
+    document.getElementById('roLogLevel').textContent = ro.logging_level || '-';
+    const tokenOk = ro.auth && ro.auth.token_configured;
+    const roToken = document.getElementById('roToken');
+    if (roToken) {
+      roToken.textContent = tokenOk ? '已设置为非默认值' : '仍为默认值 node-proxy-default-token ⚠';
+      roToken.className = tokenOk ? 'ro-ok' : 'ro-warn';
+    }
+  }
+
+  function setField(id, value) {
+    const el = document.getElementById(id);
+    if (el && value != null) el.value = value;
+  }
+
+  function setGroupEditable(groupId, editable) {
+    const group = document.getElementById(groupId);
+    if (!group) return;
+    group.querySelectorAll('input,button').forEach((el) => { el.disabled = !editable; });
+    const hint = group.querySelector('.perm-hint');
+    if (hint) hint.style.display = editable ? 'none' : 'inline';
+  }
+
+  function numField(id) {
+    const el = document.getElementById(id);
+    const v = parseInt(el.value, 10);
+    if (isNaN(v)) return null;
+    return v;
+  }
+
+  window.saveSettingsGroup = function (group) {
+    const body = {};
+    switch (group) {
+      case 'routing': {
+        const checked = document.querySelector('#settingsModal input[name=routingStrategy]:checked');
+        if (!checked) return showToast('请先选择路由策略', 'error');
+        body.strategy = checked.value;
+        break;
+      }
+      case 'circuit_breaker':
+        body.error_threshold = numField('cbErrorThreshold');
+        body.window_ms = numField('cbWindowMs');
+        body.recovery_timeout_ms = numField('cbRecoveryMs');
+        body.half_open_max_attempts = numField('cbHalfOpen');
+        break;
+      case 'bandwidth':
+        body.enabled = document.getElementById('bwEnabled').checked;
+        body.global_rate = numField('bwGlobalRateKb') != null ? numField('bwGlobalRateKb') * 1024 : 0;
+        body.default_rate = numField('bwDefaultRateKb') != null ? numField('bwDefaultRateKb') * 1024 : 0;
+        break;
+      case 'client':
+        body.request_timeout = numField('clRequestTimeout');
+        body.tunnel_timeout = numField('clTunnelTimeout');
+        body.max_concurrent = numField('clMaxConcurrent');
+        break;
+      case 'cache':
+        body.default_ttl = numField('cacheTtlMs');
+        break;
+      default:
+        return;
+    }
+    const hasNull = Object.values(body).some((v) => v === null);
+    if (hasNull) return showToast('请填写有效的数字', 'error');
+    fetchWithAuth('/api/v1/settings/' + group, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d.success) return showToast('保存失败: ' + (d.message || ''), 'error');
+        showToast('已保存并即时生效', 'success');
+        renderSettings(d);
+      })
+      .catch((err) => showToast('请求失败: ' + err.message, 'error'));
+  };
+
+  window.resetSettingsGroup = function (group) {
+    if (!confirm('确定将该组恢复为 config.yaml 默认值？')) return;
+    fetchWithAuth('/api/v1/settings/' + group + '/reset', { method: 'POST' })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d.success) return showToast('恢复失败: ' + (d.message || ''), 'error');
+        showToast('已恢复默认值', 'success');
+        renderSettings(d);
+      })
+      .catch((err) => showToast('请求失败: ' + err.message, 'error'));
+  };
+
+  // ===========================================================================
   // Broadcast
   // ===========================================================================
   window.showBroadcastModal = function () {
@@ -430,6 +603,7 @@
     if (e.target.classList.contains('modal-overlay')) {
       hideBroadcastModal();
       hideEditMetaModal();
+      hideSettingsModal();
     }
   });
 
@@ -438,6 +612,7 @@
     if (e.key === 'Escape') {
       hideBroadcastModal();
       hideEditMetaModal();
+      hideSettingsModal();
     }
   });
 

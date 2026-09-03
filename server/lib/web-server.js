@@ -7,7 +7,7 @@ const express = require('express');
 const path = require('path');
 const cookieParser = require('cookie-parser');
 
-function createWebServer(clientManager, authManager, config, logger, metricsManager, domainRouter, cache, pluginManager, aclManager, auditLogger, autoUpdater) {
+function createWebServer(clientManager, authManager, config, logger, metricsManager, domainRouter, cache, pluginManager, aclManager, auditLogger, autoUpdater, settingsManager) {
   const app = express();
 
   // Trust the first upstream proxy (nginx) so req.ip reads X-Forwarded-For
@@ -93,6 +93,45 @@ function createWebServer(clientManager, authManager, config, logger, metricsMana
       acme: { enabled: config.acme?.enabled || false, domains: config.acme?.domains || [] },
     };
     res.json(safeConfig);
+  });
+
+  // --- Runtime settings (panel-adjustable parameters) ---
+  const SETTINGS_PERM = { routing: 'routing:strategy', circuit_breaker: 'system:config', bandwidth: 'system:config', client: 'system:config', cache: 'system:config' };
+
+  function canEditSettings(user, group) {
+    const perm = SETTINGS_PERM[group];
+    if (!perm) return false;
+    return authManager.hasPermission(user, perm) || authManager.hasPermission(user, 'system:config');
+  }
+
+  api.get('/settings', (req, res) => {
+    if (!settingsManager) return res.status(501).json({ success: false, message: 'Settings manager not available' });
+    const data = settingsManager.list();
+    const editable = {};
+    for (const g of Object.keys(SETTINGS_PERM)) editable[g] = canEditSettings(req.user, g);
+    res.json({ success: true, ...data, editable });
+  });
+
+  api.post('/settings/:group', (req, res) => {
+    const { group } = req.params;
+    if (!SETTINGS_PERM[group]) return res.status(400).json({ success: false, message: 'Unknown settings group' });
+    if (!canEditSettings(req.user, group)) return res.status(403).json({ success: false, message: 'Permission denied' });
+    if (!settingsManager) return res.status(501).json({ success: false, message: 'Settings manager not available' });
+    const result = settingsManager.apply(group, req.body || {});
+    if (!result.ok) return res.status(400).json({ success: false, message: result.error });
+    logger.info({ group, values: req.body, admin: req.user }, 'Runtime settings updated via panel');
+    res.json({ success: true, ...settingsManager.list() });
+  });
+
+  api.post('/settings/:group/reset', (req, res) => {
+    const { group } = req.params;
+    if (!SETTINGS_PERM[group]) return res.status(400).json({ success: false, message: 'Unknown settings group' });
+    if (!canEditSettings(req.user, group)) return res.status(403).json({ success: false, message: 'Permission denied' });
+    if (!settingsManager) return res.status(501).json({ success: false, message: 'Settings manager not available' });
+    const result = settingsManager.reset(group);
+    if (!result.ok) return res.status(400).json({ success: false, message: result.error });
+    logger.info({ group, admin: req.user }, 'Runtime settings reset to defaults');
+    res.json({ success: true, ...settingsManager.list() });
   });
 
   // --- Client management ---
