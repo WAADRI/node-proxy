@@ -26,7 +26,9 @@ class Storage {
       return;
     }
 
-    this._init(dbPath, dbDir).catch(err => {
+    // Async init; resolves (never rejects) once the sql.js DB is ready.
+    // Startup code that needs storage can await this.ready.
+    this.ready = this._init(dbPath, dbDir).catch(err => {
       this.log.warn({ error: err.message }, 'Failed to initialize sql.js storage');
     });
   }

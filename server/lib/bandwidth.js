@@ -100,6 +100,43 @@ class BandwidthLimiter {
     this.buckets.set(clientId, new TokenBucket(rateBytesPerSec, burstBytes || rateBytesPerSec));
   }
 
+  // Hot-update global bandwidth settings (used by the web settings panel)
+  updateConfig(partial = {}) {
+    const bw = {
+      enabled: this.enabled,
+      default_rate: this.defaultRate,
+      default_burst: this.defaultBurst,
+      global_rate: this.globalRate,
+      global_burst: this.globalBurst,
+      ...partial,
+    };
+    this.enabled = !!bw.enabled;
+    this.defaultRate = bw.default_rate;
+    this.defaultBurst = bw.default_burst;
+    this.globalRate = bw.global_rate;
+    this.globalBurst = bw.global_burst;
+    // Keep the shared config object in sync so GET /config reflects it
+    if (this.config.bandwidth) Object.assign(this.config.bandwidth, bw);
+    // Rebuild the global token bucket when the limit changes
+    if (this.globalRate > 0) {
+      this.globalBucket = new TokenBucket(this.globalRate, this.globalBurst);
+    } else {
+      this.globalBucket = null;
+    }
+    this.log.info({ config: this.getEffectiveConfig() }, 'Bandwidth config updated');
+    return this.getEffectiveConfig();
+  }
+
+  getEffectiveConfig() {
+    return {
+      enabled: this.enabled,
+      default_rate: this.defaultRate,
+      default_burst: this.defaultBurst,
+      global_rate: this.globalRate,
+      global_burst: this.globalBurst,
+    };
+  }
+
   removeLimit(clientId) {
     this.overrides.delete(clientId);
     this.buckets.delete(clientId);

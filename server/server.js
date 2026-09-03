@@ -43,6 +43,7 @@ const { createSocks5Proxy } = require('./lib/proxy-socks5');
 const { createWebServer } = require('./lib/web-server');
 const { setupClientWebSocket } = require('./lib/ws-server');
 const { loadTLSCredentials } = require('./lib/tls');
+const { SettingsManager } = require('./lib/settings');
 
 // Initialize auth
 const authManager = new AuthManager(config, logger);
@@ -76,17 +77,17 @@ clientManager.acl = aclManager;
 clientManager.audit = auditLogger;
 clientManager.pluginManager = pluginManager;
 
-// Load persisted routing strategy
-if (storage.available) {
-  const savedStrategy = storage.getConfigOverride('routing_strategy');
-  if (savedStrategy) {
-    router.setStrategy(savedStrategy);
-    logger.info({ strategy: savedStrategy }, 'Loaded persisted routing strategy');
-  }
+// Load persisted routing strategy & other runtime settings.
+// Storage init is async (sql.js) - wait for it before restoring overrides.
+const settingsManager = new SettingsManager(config, storage, { router, circuitBreaker, bandwidthLimiter, cache }, logger);
+if (storage.ready) {
+  storage.ready.then(() => settingsManager.applyPersisted()).catch(() => {});
+} else {
+  settingsManager.applyPersisted();
 }
 
 // Create web app (pass all Phase 3 modules)
-const app = createWebServer(clientManager, authManager, config, logger, metricsManager, domainRouter, cache, pluginManager, aclManager, auditLogger, autoUpdater);
+const app = createWebServer(clientManager, authManager, config, logger, metricsManager, domainRouter, cache, pluginManager, aclManager, auditLogger, autoUpdater, settingsManager);
 const httpServer = http.createServer(app);
 
 // Setup WebSocket servers
