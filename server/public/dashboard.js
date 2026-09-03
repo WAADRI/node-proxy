@@ -154,7 +154,7 @@
     if (!clients || clients.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="11" class="no-data">
+          <td colspan="16" class="no-data">
             <div class="icon">🔌</div>
             <div class="hint">等待客户端节点连接...</div>
           </td>
@@ -179,7 +179,7 @@
     if (filtered.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="11" class="no-data">
+          <td colspan="16" class="no-data">
             <div class="hint">没有匹配的节点</div>
           </td>
         </tr>
@@ -204,6 +204,10 @@
       const tagsHtml = tags.length > 0
         ? tags.map(t => `<span class="tag-badge">${escapeHtml(t)}</span>`).join(' ')
         : '<span class="no-tags">-</span>';
+      const alias = c.alias || '';
+      const notes = c.notes || '';
+      const effectiveRegion = c.region || info.region || '-';
+      const regionClass = c.region ? 'region-override' : '';
       const cb = c.circuitBreaker || { state: 'closed' };
       const cbState = cb.state || 'closed';
       const cbClass = cbState === 'open' ? ' class="cb-open-row"' : '';
@@ -212,11 +216,17 @@
         <tr${cbClass}>
           <td><span class="online-dot ${dotClass}"></span></td>
           <td><span class="client-id" title="${escapeHtml(c.id)}">${escapeHtml(c.id.substring(0, 8))}...</span></td>
-          <td><span class="client-hostname">${escapeHtml(info.hostname || '-')}</span></td>
+          <td><span class="client-hostname">${escapeHtml(alias || info.hostname || '-')}</span></td>
           <td><span class="client-ip">${escapeHtml(info.ip || info.localIp || '-')}</span></td>
           <td>${escapeHtml(info.platform || '-')} ${info.arch ? '(' + escapeHtml(info.arch) + ')' : ''}</td>
-          <td>${escapeHtml(info.region || '-')}</td>
+          <td class="${regionClass}">${escapeHtml(effectiveRegion)}</td>
           <td>${tagsHtml}</td>
+          <td class="client-alias" title="${escapeHtml(alias) || '点击编辑别名'}">
+            ${alias ? escapeHtml(alias) : '<span class="dim">-</span>'}
+          </td>
+          <td class="client-notes" title="${escapeHtml(notes) || '点击编辑备注'}">
+            ${notes ? escapeHtml(notes.substring(0, 30)) + (notes.length > 30 ? '...' : '') : '<span class="dim">-</span>'}
+          </td>
           <td class="client-pending">${c.pendingRequestsCount}</td>
           <td class="client-pending">${c.pendingTunnelsCount}</td>
           <td class="client-pending">${c.avgResponseTime || '-'}</td>
@@ -224,7 +234,8 @@
           <td class="time-cell" title="${new Date(c.connectedAt).toLocaleString()}">${formatDuration(connectedAgo)}</td>
           <td class="time-cell" title="${new Date(c.lastSeen).toLocaleString()}">${formatDuration(lastSeenAgo)}</td>
           <td>
-            <button class="btn btn-danger" style="padding:0.3rem 0.6rem;font-size:0.75rem;" onclick="window.kickClient('${c.id}')">断开</button>
+            <button class="btn btn-sm" onclick="window.editClientMeta('${c.id}')">编辑</button>
+            <button class="btn btn-danger btn-sm" onclick="window.kickClient('${c.id}')">断开</button>
           </td>
         </tr>
       `;
@@ -309,6 +320,60 @@
     }
   };
 
+  window.editClientMeta = function (clientId) {
+    if (!lastData) return;
+    const client = lastData.clients.find(c => c.id === clientId);
+    if (!client) return;
+    document.getElementById('editClientId').value = clientId;
+    document.getElementById('editAlias').value = client.alias || '';
+    document.getElementById('editNotes').value = client.notes || '';
+    document.getElementById('editRegion').value = client.region || client.info?.region || '';
+    document.getElementById('editMetaModal').classList.add('active');
+  };
+
+  window.saveClientMeta = function () {
+    const clientId = document.getElementById('editClientId').value;
+    if (!clientId) return;
+    const alias = document.getElementById('editAlias').value.trim();
+    const notes = document.getElementById('editNotes').value.trim();
+    const region = document.getElementById('editRegion').value.trim();
+    let pending = 0;
+    let failed = 0;
+
+    function done() {
+      if (pending === 0) {
+        showToast('保存完成' + (failed ? ', ' + failed + ' 个失败' : ''), failed > 0 ? 'error' : 'success');
+        document.getElementById('editMetaModal').classList.remove('active');
+        refreshNow();
+      }
+    }
+
+    pending++;
+    fetchWithAuth('/api/v1/client/' + clientId + '/alias', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alias }),
+    }).then(r => r.json()).then(d => { if (!d.success) failed++; pending--; done(); }).catch(() => { failed++; pending--; done(); });
+
+    pending++;
+    fetchWithAuth('/api/v1/client/' + clientId + '/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes }),
+    }).then(r => r.json()).then(d => { if (!d.success) failed++; pending--; done(); }).catch(() => { failed++; pending--; done(); });
+
+    pending++;
+    fetchWithAuth('/api/v1/client/' + clientId + '/region', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ region }),
+    }).then(r => r.json()).then(d => { if (!d.success) failed++; pending--; done(); }).catch(() => { failed++; pending--; done(); });
+  };
+
+  window.hideEditMetaModal = function () {
+    document.getElementById('editMetaModal').classList.remove('active');
+  };
+
   window.refreshNow = function () {
     fetchWithAuth('/api/status')
       .then((r) => r.json())
@@ -360,12 +425,16 @@
   document.addEventListener('click', function (e) {
     if (e.target.classList.contains('modal-overlay')) {
       hideBroadcastModal();
+      hideEditMetaModal();
     }
   });
 
   // Close modal on Escape
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') hideBroadcastModal();
+    if (e.key === 'Escape') {
+      hideBroadcastModal();
+      hideEditMetaModal();
+    }
   });
 
   // ===========================================================================

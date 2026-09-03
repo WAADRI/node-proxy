@@ -101,20 +101,23 @@ const CONFIG = loadConfig();
 
 // =============================================================================
 // Persistent client ID (stable across reconnects so server metadata persists)
-// Overridable per instance via CLIENT_ID_FILE for multi-instance hosts.
+// Priority: CLIENT_ID env var > CLIENT_ID_FILE > auto-generated UUID
 // =============================================================================
+const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_ID_FILE = process.env.CLIENT_ID_FILE || path.join(os.homedir(), '.node-proxy-client-id');
-let persistentClientId = null;
-try {
-  if (fs.existsSync(CLIENT_ID_FILE)) {
-    persistentClientId = fs.readFileSync(CLIENT_ID_FILE, 'utf8').trim();
-  }
-} catch (_) {}
+let persistentClientId = CLIENT_ID;
 if (!persistentClientId) {
-  persistentClientId = require('crypto').randomUUID();
   try {
-    fs.writeFileSync(CLIENT_ID_FILE, persistentClientId);
+    if (fs.existsSync(CLIENT_ID_FILE)) {
+      persistentClientId = fs.readFileSync(CLIENT_ID_FILE, 'utf8').trim();
+    }
   } catch (_) {}
+  if (!persistentClientId) {
+    persistentClientId = require('crypto').randomUUID();
+    try {
+      fs.writeFileSync(CLIENT_ID_FILE, persistentClientId);
+    } catch (_) {}
+  }
 }
 
 // =============================================================================

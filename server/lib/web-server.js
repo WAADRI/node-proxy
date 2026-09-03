@@ -176,6 +176,39 @@ function createWebServer(clientManager, authManager, config, logger, metricsMana
     res.json({ success: true, rate: r });
   });
 
+  api.post('/client/:id/alias', (req, res) => {
+    if (!authManager.hasPermission(req.user, 'client:alias')) return res.status(403).json({ success: false, message: 'Permission denied' });
+    const { alias } = req.body;
+    const client = clientManager.getById(req.params.id);
+    if (!client) return res.status(404).json({ success: false, message: 'Client not found' });
+    clientManager.setAlias(client.id, alias);
+    if (clientManager.storage) clientManager.storage.setClientMetadata(client.id, { alias });
+    logger.info({ clientId: client.id, alias, admin: req.user }, 'Client alias updated');
+    res.json({ success: true, alias });
+  });
+
+  api.post('/client/:id/notes', (req, res) => {
+    if (!authManager.hasPermission(req.user, 'client:notes')) return res.status(403).json({ success: false, message: 'Permission denied' });
+    const { notes } = req.body;
+    const client = clientManager.getById(req.params.id);
+    if (!client) return res.status(404).json({ success: false, message: 'Client not found' });
+    clientManager.setNotes(client.id, notes);
+    if (clientManager.storage) clientManager.storage.setClientMetadata(client.id, { notes });
+    logger.info({ clientId: client.id, notes, admin: req.user }, 'Client notes updated');
+    res.json({ success: true, notes });
+  });
+
+  api.post('/client/:id/region', (req, res) => {
+    if (!authManager.hasPermission(req.user, 'client:region')) return res.status(403).json({ success: false, message: 'Permission denied' });
+    const { region } = req.body;
+    const client = clientManager.getById(req.params.id);
+    if (!client) return res.status(404).json({ success: false, message: 'Client not found' });
+    clientManager.setRegion(client.id, region);
+    if (clientManager.storage) clientManager.storage.setClientMetadata(client.id, { region });
+    logger.info({ clientId: client.id, region, admin: req.user }, 'Client region updated');
+    res.json({ success: true, region });
+  });
+
   api.post('/client/:id/circuit-breaker/reset', (req, res) => {
     if (!authManager.hasPermission(req.user, 'circuit:reset')) return res.status(403).json({ success: false, message: 'Permission denied' });
     const client = clientManager.getById(req.params.id);

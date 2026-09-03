@@ -111,6 +111,11 @@ class Storage {
     this.db.run('CREATE INDEX IF NOT EXISTS idx_client_events_created_at ON client_events(created_at)');
     this.db.run('CREATE INDEX IF NOT EXISTS idx_traffic_stats_client_id ON traffic_stats(client_id)');
     this.db.run('CREATE INDEX IF NOT EXISTS idx_traffic_stats_period ON traffic_stats(period_start, period_end)');
+
+    // Migration: add region column to client_metadata (v3.1)
+    try {
+      this.db.run("ALTER TABLE client_metadata ADD COLUMN region TEXT DEFAULT ''");
+    } catch (_) {} // column may already exist
   }
 
   _prepare(sql) {
@@ -274,11 +279,12 @@ class Storage {
       const tags = Array.isArray(meta.tags) ? meta.tags : (existing.tags || []);
       const weight = meta.weight != null ? meta.weight : (existing.weight != null ? existing.weight : 1.0);
       const bandwidthLimit = meta.bandwidth_limit != null ? meta.bandwidth_limit : (existing.bandwidth_limit != null ? existing.bandwidth_limit : null);
+      const region = meta.region != null ? meta.region : (existing.region != null ? existing.region : '');
       const createdAt = existing.created_at || now;
 
       this.db.run(
-        `INSERT OR REPLACE INTO client_metadata (client_id, tags, alias, notes, weight, bandwidth_limit, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [clientId, JSON.stringify(tags), meta.alias || existing.alias || null, meta.notes || existing.notes || null, weight, bandwidthLimit, createdAt, now]
+        `INSERT OR REPLACE INTO client_metadata (client_id, tags, alias, notes, weight, bandwidth_limit, region, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [clientId, JSON.stringify(tags), meta.alias || existing.alias || null, meta.notes || existing.notes || null, weight, bandwidthLimit, region, createdAt, now]
       );
       this._save();
     } catch (_) {}

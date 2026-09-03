@@ -90,12 +90,15 @@ class ClientManager {
     // Persist connection event
     if (this.storage) {
       this.storage.logClientEvent(id, 'connected', { hostname: info?.hostname, tags: client.tags });
-      // Load persisted metadata
+      // Load persisted metadata (tags, weight, bandwidth, alias, notes, region)
       const meta = this.storage.getClientMetadata(id);
       if (meta) {
         if (meta.tags && meta.tags.length > 0) client.tags = [...new Set([...client.tags, ...meta.tags])];
         if (meta.weight) this.router?.setWeight(id, meta.weight);
         if (meta.bandwidth_limit) this.bandwidthLimiter?.setLimit(id, meta.bandwidth_limit);
+        if (meta.alias) client.alias = meta.alias;
+        if (meta.notes) client.notes = meta.notes;
+        if (meta.region) client.region = meta.region;
       }
     }
 
@@ -150,6 +153,30 @@ class ClientManager {
 
     this.clients.delete(id);
     this.metrics?.activeClients.set(this.clients.size);
+    this._notify();
+  }
+
+  // ===========================================================================
+  // Client Metadata Setters
+  // ===========================================================================
+  setAlias(id, alias) {
+    const client = this.clients.get(id);
+    if (!client) return;
+    client.alias = alias || null;
+    this._notify();
+  }
+
+  setNotes(id, notes) {
+    const client = this.clients.get(id);
+    if (!client) return;
+    client.notes = notes || null;
+    this._notify();
+  }
+
+  setRegion(id, region) {
+    const client = this.clients.get(id);
+    if (!client) return;
+    client.region = region || null;
     this._notify();
   }
 
@@ -211,6 +238,9 @@ class ClientManager {
         id: c.id,
         info: c.info,
         tags: c.tags,
+        alias: c.alias || null,
+        notes: c.notes || null,
+        region: c.region || c.info?.region || null,
         connectedAt: c.connectedAt,
         lastSeen: c.lastSeen,
         lastPing: c.lastPing,

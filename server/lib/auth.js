@@ -11,7 +11,7 @@ const ROLES = {
   admin: {
     permissions: [
       'client:list', 'client:kick', 'client:tag', 'client:weight',
-      'client:bandwidth', 'client:events',
+      'client:bandwidth', 'client:events', 'client:alias', 'client:notes', 'client:region',
       'proxy:config', 'proxy:stats',
       'routing:config', 'routing:strategy',
       'circuit:reset', 'circuit:view',
@@ -28,7 +28,7 @@ const ROLES = {
   operator: {
     permissions: [
       'client:list', 'client:kick', 'client:tag', 'client:weight',
-      'client:bandwidth', 'client:events',
+      'client:bandwidth', 'client:events', 'client:alias', 'client:notes', 'client:region',
       'proxy:stats',
       'routing:strategy',
       'circuit:reset', 'circuit:view',

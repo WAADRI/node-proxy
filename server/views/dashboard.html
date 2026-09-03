@@ -483,6 +483,60 @@
       .stats-grid { grid-template-columns: repeat(2, 1fr); }
       .client-id { max-width: 60px; }
     }
+
+    /* Metadata edit classes */
+    .btn-sm {
+      padding: 0.3rem 0.6rem !important;
+      font-size: 0.75rem !important;
+    }
+    .region-override {
+      font-weight: 700;
+      color: #38bdf8;
+    }
+    .region-override::after {
+      content: ' ✎';
+      font-size: 0.7rem;
+      opacity: 0.7;
+    }
+    .dim {
+      color: #475569;
+    }
+    .client-alias {
+      max-width: 120px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .client-notes {
+      max-width: 160px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #94a3b8;
+    }
+    .form-group {
+      margin-bottom: 1rem;
+    }
+    .form-group label {
+      display: block;
+      font-size: 0.8rem;
+      color: #94a3b8;
+      margin-bottom: 0.3rem;
+    }
+    .form-input {
+      width: 100%;
+      padding: 0.6rem 0.8rem;
+      border-radius: 6px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #e2e8f0;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-input:focus {
+      border-color: #38bdf8;
+    }
   </style>
 </head>
 <body>
@@ -585,6 +639,8 @@
             <th>系统 / 平台</th>
             <th>区域</th>
             <th>标签</th>
+            <th>别名</th>
+            <th>备注</th>
             <th>请求</th>
             <th>隧道</th>
             <th>响应(ms)</th>
@@ -596,7 +652,7 @@
         </thead>
         <tbody id="clientTableBody">
           <tr>
-            <td colspan="11" class="no-data">
+            <td colspan="16" class="no-data">
               <div class="icon">🔌</div>
               <div class="hint">等待客户端节点连接...</div>
             </td>
@@ -617,6 +673,33 @@
       <div class="modal-actions">
         <button class="btn" onclick="hideBroadcastModal()">取消</button>
         <button class="btn btn-primary" onclick="doBroadcast()">发送广播</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== Edit Metadata Modal ========== -->
+  <div class="modal-overlay" id="editMetaModal">
+    <div class="modal-box">
+      <h2>✏️ 编辑节点信息</h2>
+      <p style="color:#94a3b8;font-size:0.85rem;margin-bottom:1rem;">
+        修改节点的别名、备注和服务端覆盖区域。
+      </p>
+      <input type="hidden" id="editClientId" value="">
+      <div class="form-group">
+        <label>别名（显示在节点列表替代主机名）</label>
+        <input type="text" id="editAlias" placeholder="如: 北京电信-1" class="form-input">
+      </div>
+      <div class="form-group">
+        <label>备注（内部备注信息）</label>
+        <textarea id="editNotes" placeholder="如: 超星学习通专用节点" class="form-input" rows="2"></textarea>
+      </div>
+      <div class="form-group">
+        <label>区域覆盖（覆盖客户端上报的区域）</label>
+        <input type="text" id="editRegion" placeholder="如: beijing" class="form-input">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="hideEditMetaModal()">取消</button>
+        <button class="btn btn-primary" onclick="saveClientMeta()">保存</button>
       </div>
     </div>
   </div>
