@@ -572,6 +572,131 @@
     .form-input:focus {
       border-color: #38bdf8;
     }
+
+    /* ========== Runtime Settings modal ========== */
+    .settings-box {
+      max-width: 720px;
+      max-height: 86vh;
+      overflow-y: auto;
+    }
+    .settings-sub {
+      color: #94a3b8;
+      font-size: 0.85rem;
+      margin-bottom: 1.2rem;
+    }
+    .settings-group {
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      background: rgba(15, 23, 42, 0.4);
+    }
+    .group-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.8rem;
+    }
+    .group-head h3 {
+      font-size: 0.95rem;
+      margin: 0;
+      color: #e2e8f0;
+    }
+    .group-badge {
+      font-size: 0.7rem;
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      padding: 0.15rem 0.5rem;
+      border-radius: 99px;
+    }
+    .readonly-group .group-badge {
+      color: #94a3b8;
+      background: rgba(148, 163, 184, 0.1);
+      border-color: #334155;
+    }
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0.8rem;
+    }
+    .settings-grid .form-group {
+      margin-bottom: 0;
+    }
+    .strategy-options {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.5rem;
+      margin-bottom: 0.6rem;
+    }
+    .strategy-option {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+      padding: 0.6rem 0.8rem;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+      background: #1e293b;
+    }
+    .strategy-option:hover {
+      border-color: #475569;
+    }
+    .strategy-option.selected {
+      border-color: #38bdf8;
+      background: rgba(56, 189, 248, 0.08);
+    }
+    .strategy-option input {
+      display: none;
+    }
+    .strategy-option .so-name {
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: #e2e8f0;
+    }
+    .strategy-option .so-desc {
+      font-size: 0.72rem;
+      color: #64748b;
+    }
+    .toggle-line {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: #e2e8f0;
+      font-size: 0.9rem;
+      margin-bottom: 0.8rem;
+      cursor: pointer;
+    }
+    .group-foot {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.5rem;
+      margin-top: 0.8rem;
+    }
+    .perm-hint {
+      margin-right: auto;
+      font-size: 0.75rem;
+      color: #f59e0b;
+    }
+    .ro-table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 0;
+    }
+    .ro-table td {
+      padding: 0.4rem 0.6rem;
+      border-bottom: 1px solid #1e293b;
+      font-size: 0.85rem;
+      white-space: normal;
+    }
+    .ro-table td:first-child {
+      color: #94a3b8;
+      width: 45%;
+    }
+    .ro-ok { color: #34d399; }
+    .ro-warn { color: #f87171; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -586,6 +711,7 @@
         <span class="online-dot alive" style="margin:0"></span>
         <span id="serverStatusText">连接中...</span>
       </span>
+      <button class="btn btn-primary" onclick="openSettingsModal()">⚙️ 运行设置</button>
       <button class="btn btn-primary" onclick="showBroadcastModal()">📢 广播消息</button>
       <button class="btn" onclick="refreshNow()">🔄 刷新</button>
       <button class="btn btn-danger" onclick="doLogout()">🚪 退出</button>
@@ -735,6 +861,150 @@
       <div class="modal-actions">
         <button class="btn" onclick="hideEditMetaModal()">取消</button>
         <button class="btn btn-primary" onclick="saveClientMeta()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== Runtime Settings Modal ========== -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal-box settings-box">
+      <h2>⚙️ 运行设置</h2>
+      <p class="settings-sub">
+        修改<b>即时生效</b>并持久化，重启后自动恢复。「恢复默认」回到 config.yaml 的初始值。
+      </p>
+
+      <!-- Routing strategy -->
+      <div class="settings-group" id="groupRouting">
+        <div class="group-head">
+          <h3>路由策略</h3>
+          <span class="group-badge">即时生效</span>
+        </div>
+        <div class="strategy-options" id="routingOptions"></div>
+        <div class="group-foot">
+          <span class="perm-hint" style="display:none">无权限修改</span>
+          <button class="btn btn-primary btn-sm save-btn" onclick="saveSettingsGroup('routing')">保存</button>
+        </div>
+      </div>
+
+      <!-- Circuit breaker -->
+      <div class="settings-group" id="groupCircuitBreaker">
+        <div class="group-head">
+          <h3>熔断器参数</h3>
+          <span class="group-badge">即时生效</span>
+        </div>
+        <div class="settings-grid">
+          <div class="form-group">
+            <label>连续失败阈值（次）</label>
+            <input type="number" id="cbErrorThreshold" class="form-input" min="1">
+          </div>
+          <div class="form-group">
+            <label>计数窗口 window_ms（毫秒）</label>
+            <input type="number" id="cbWindowMs" class="form-input" min="1000">
+          </div>
+          <div class="form-group">
+            <label>恢复探测等待 recovery_timeout_ms（毫秒）</label>
+            <input type="number" id="cbRecoveryMs" class="form-input" min="1000">
+          </div>
+          <div class="form-group">
+            <label>半开最大尝试 half_open_max_attempts（次）</label>
+            <input type="number" id="cbHalfOpen" class="form-input" min="1">
+          </div>
+        </div>
+        <div class="group-foot">
+          <span class="perm-hint" style="display:none">无权限修改</span>
+          <button class="btn btn-sm" onclick="resetSettingsGroup('circuit_breaker')">恢复默认</button>
+          <button class="btn btn-primary btn-sm save-btn" onclick="saveSettingsGroup('circuit_breaker')">保存</button>
+        </div>
+      </div>
+
+      <!-- Bandwidth -->
+      <div class="settings-group" id="groupBandwidth">
+        <div class="group-head">
+          <h3>带宽限制（全局）</h3>
+          <span class="group-badge">即时生效</span>
+        </div>
+        <label class="toggle-line"><input type="checkbox" id="bwEnabled"> 启用带宽限制</label>
+        <div class="settings-grid">
+          <div class="form-group">
+            <label>全局总带宽上限 global_rate（KB/s，0=不限）</label>
+            <input type="number" id="bwGlobalRateKb" class="form-input" min="0">
+          </div>
+          <div class="form-group">
+            <label>每客户端默认限速 default_rate（KB/s）</label>
+            <input type="number" id="bwDefaultRateKb" class="form-input" min="0">
+          </div>
+        </div>
+        <div class="group-foot">
+          <span class="perm-hint" style="display:none">无权限修改</span>
+          <button class="btn btn-sm" onclick="resetSettingsGroup('bandwidth')">恢复默认</button>
+          <button class="btn btn-primary btn-sm save-btn" onclick="saveSettingsGroup('bandwidth')">保存</button>
+        </div>
+      </div>
+
+      <!-- Client params -->
+      <div class="settings-group" id="groupClient">
+        <div class="group-head">
+          <h3>客户端请求参数</h3>
+          <span class="group-badge">即时生效</span>
+        </div>
+        <div class="settings-grid">
+          <div class="form-group">
+            <label>HTTP 请求超时 request_timeout（毫秒）</label>
+            <input type="number" id="clRequestTimeout" class="form-input" min="1000">
+          </div>
+          <div class="form-group">
+            <label>TCP 隧道超时 tunnel_timeout（毫秒）</label>
+            <input type="number" id="clTunnelTimeout" class="form-input" min="1000">
+          </div>
+          <div class="form-group">
+            <label>每节点最大并发 max_concurrent</label>
+            <input type="number" id="clMaxConcurrent" class="form-input" min="1">
+          </div>
+        </div>
+        <div class="group-foot">
+          <span class="perm-hint" style="display:none">无权限修改</span>
+          <button class="btn btn-sm" onclick="resetSettingsGroup('client')">恢复默认</button>
+          <button class="btn btn-primary btn-sm save-btn" onclick="saveSettingsGroup('client')">保存</button>
+        </div>
+      </div>
+
+      <!-- Cache -->
+      <div class="settings-group" id="groupCache">
+        <div class="group-head">
+          <h3>缓存</h3>
+          <span class="group-badge">即时生效</span>
+        </div>
+        <div class="settings-grid">
+          <div class="form-group">
+            <label>默认缓存有效期 default_ttl（毫秒，对新缓存生效）</label>
+            <input type="number" id="cacheTtlMs" class="form-input" min="0">
+          </div>
+        </div>
+        <div class="group-foot">
+          <span class="perm-hint" style="display:none">无权限修改</span>
+          <button class="btn btn-sm" onclick="resetSettingsGroup('cache')">恢复默认</button>
+          <button class="btn btn-primary btn-sm save-btn" onclick="saveSettingsGroup('cache')">保存</button>
+        </div>
+      </div>
+
+      <!-- Restart-only (read only) -->
+      <div class="settings-group readonly-group">
+        <div class="group-head">
+          <h3>需重启生效的参数</h3>
+          <span class="group-badge">只读 · 修改需编辑 config.yaml 后重启</span>
+        </div>
+        <table class="ro-table">
+          <tr><td>Web 面板端口</td><td id="roWebPort">-</td></tr>
+          <tr><td>HTTP 代理端口</td><td id="roHttpPort">-</td></tr>
+          <tr><td>SOCKS5 端口</td><td id="roSocksPort">-</td></tr>
+          <tr><td>Web 管理员用户名</td><td id="roWebUser">-</td></tr>
+          <tr><td>日志级别</td><td id="roLogLevel">-</td></tr>
+          <tr><td>客户端认证令牌</td><td id="roToken">-</td></tr>
+        </table>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn" onclick="hideSettingsModal()">关闭</button>
       </div>
     </div>
   </div>
