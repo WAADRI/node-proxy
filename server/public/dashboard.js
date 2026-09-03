@@ -559,6 +559,9 @@
         // POST responses carry no `editable` field - reload from GET to keep
         // controls enabled and show server-confirmed values.
         loadSettings();
+        // Refresh the main dashboard stats (routing/bandwidth cards) right away
+        // so the change is visibly applied.
+        refreshNow();
       })
       .catch((err) => showToast('请求失败: ' + err.message, 'error'));
   };
@@ -571,6 +574,7 @@
         if (!d.success) return showToast('恢复失败: ' + (d.message || ''), 'error');
         showToast('已恢复默认值', 'success');
         loadSettings();
+        refreshNow();
       })
       .catch((err) => showToast('请求失败: ' + err.message, 'error'));
   };
