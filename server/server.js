@@ -115,6 +115,9 @@ webWss.on('connection', (ws) => {
 
 // Handle HTTP upgrade for WebSocket
 httpServer.on('upgrade', (request, socket, head) => {
+  // The upgrade socket is no longer error-managed by the http server; a peer
+  // reset here must not surface as an uncaught exception.
+  socket.on('error', () => {});
   const urlObj = url.parse(request.url);
   if (urlObj.pathname === '/ws') {
     clientWss.handleUpgrade(request, socket, head, (ws) => {
@@ -283,6 +286,14 @@ function shutdown(signal) {
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('uncaughtException', (err) => {
+  // Transient network errors (a peer resetting a connection, etc.) must not
+  // take down the whole proxy: log and continue. Everything else is still
+  // fatal so we can restart cleanly instead of running in a broken state.
+  const transient = ['ECONNRESET', 'EPIPE', 'ECONNABORTED', 'ETIMEDOUT', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND'];
+  if (err && err.code && transient.includes(err.code)) {
+    logger.warn({ error: err.stack, code: err.code }, 'Transient network error ignored');
+    return;
+  }
   logger.fatal({ error: err.stack }, 'Uncaught exception');
   process.exit(1);
 });
