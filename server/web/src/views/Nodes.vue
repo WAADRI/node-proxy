@@ -1,8 +1,8 @@
 <script setup>
-import { computed, h, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { NButton, NCheckbox, NInput, NModal, NPopover, NDataTable, NTag, useMessage } from 'naive-ui';
 import AppIcon from '../components/AppIcon.vue';
-import { store } from '../store';
+import { store, requestStatus } from '../store';
 import { kickClient, saveClientMeta } from '../api';
 import { formatBytes, formatDuration } from '../utils';
 
@@ -287,8 +287,22 @@ watch(editOpen, (open) => {
   }
 });
 
+let refreshTimer = null;
+
+// The status dot column judges liveness from lastSeen, but the server only
+// pushes status on events (heartbeats alone do not notify), so an idle panel
+// would show clients as stale/dead while they are actually online. Refresh on
+// mount and periodically while this page is visible to keep lastSeen fresh.
+onMounted(() => {
+  requestStatus().catch(() => {});
+  refreshTimer = setInterval(() => {
+    requestStatus().catch(() => {});
+  }, 15000);
+});
+
 onBeforeUnmount(() => {
   if (armTimer) clearTimeout(armTimer);
+  if (refreshTimer) clearInterval(refreshTimer);
 });
 
 const cbRowClass = (row) => {
