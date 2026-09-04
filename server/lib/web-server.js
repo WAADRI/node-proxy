@@ -276,6 +276,30 @@ function createWebServer(clientManager, authManager, config, logger, metricsMana
     res.json(stats);
   });
 
+  // Daily traffic aggregation (frp-style per-day stats).
+  // GET /api/v1/traffic?days=7&client_id=<id>   (client_id optional = all clients)
+  api.get('/traffic', (req, res) => {
+    const days = Math.max(1, Math.min(30, parseInt(req.query.days, 10) || 7));
+    const clientId = req.query.client_id || null;
+    // Validate client exists when specified (avoid leaking arbitrary ids via SQL)
+    if (clientId && !clientManager.getById(clientId)) {
+      return res.status(400).json({ success: false, message: 'Unknown client' });
+    }
+    const storage = clientManager.storage;
+    const daily = storage?.getTrafficDaily(clientId, days) || [];
+    const totals = clientId
+      ? storage?.getTrafficStats(clientId, 0) || { bytesSent: 0, bytesReceived: 0 }
+      : storage?.getTrafficTotals() || { bytesSent: 0, bytesReceived: 0 };
+    const today = daily[daily.length - 1] || { bytesSent: 0, bytesReceived: 0 };
+    res.json({
+      days,
+      clientId,
+      today: { bytesSent: today.bytesSent, bytesReceived: today.bytesReceived },
+      daily,
+      totals,
+    });
+  });
+
   // ===========================================================================
   // Phase 3: User Management API (RBAC)
   // ===========================================================================

@@ -135,6 +135,7 @@
     }
     if (server) {
       document.getElementById('statFailed').textContent = server.failedRequests || 0;
+      document.getElementById('statTraffic').textContent = formatBytes((server.totalBytesSent || 0) + (server.totalBytesReceived || 0));
     }
 
     document.getElementById('clientCount').textContent = `共 ${total} 个节点`;
@@ -145,6 +146,8 @@
 
     // Table
     renderClientTable(clients);
+    // Keep the daily-traffic client selector in sync (only when nodes changed)
+    syncTrafficSelect();
   }
 
   function renderClientTable(clients) {
@@ -154,7 +157,7 @@
     if (!clients || clients.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="16" class="no-data">
+          <td colspan="17" class="no-data">
             <div class="icon">🔌</div>
             <div class="hint">等待客户端节点连接...</div>
           </td>
@@ -179,7 +182,7 @@
     if (filtered.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="16" class="no-data">
+          <td colspan="17" class="no-data">
             <div class="hint">没有匹配的节点</div>
           </td>
         </tr>
@@ -204,6 +207,8 @@
       const tagsHtml = tags.length > 0
         ? tags.map(t => `<span class="tag-badge">${escapeHtml(t)}</span>`).join(' ')
         : '<span class="no-tags">-</span>';
+      const cs = c.clientStats || {};
+      const trafficTotal = (cs.bytesSent || 0) + (cs.bytesReceived || 0);
       const alias = c.alias || '';
       const notes = c.notes || '';
       const effectiveRegion = c.region || info.region || '-';
@@ -229,6 +234,7 @@
           </td>
           <td class="client-pending">${c.pendingRequestsCount}</td>
           <td class="client-pending">${c.pendingTunnelsCount}</td>
+          <td class="traffic-cell" title="本次会话 — 上行 ${formatBytes(cs.bytesSent || 0)} / 下行 ${formatBytes(cs.bytesReceived || 0)}">${formatBytes(trafficTotal)}</td>
           <td class="client-pending">${c.avgResponseTime || '-'}</td>
           <td><span class="cb-badge ${cbState}">${cbState === 'open' ? '🔴 熔断' : cbState === 'half_open' ? '🟡 测试' : '🟢 正常'}</span></td>
           <td class="time-cell" title="${new Date(c.connectedAt).toLocaleString()}">${formatDuration(connectedAgo)}</td>
@@ -246,6 +252,19 @@
   // ===========================================================================
   // Formatting
   // ===========================================================================
+  function formatBytes(bytes) {
+    const n = Number(bytes) || 0;
+    if (n <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    let v = n;
+    while (v >= 1024 && i < units.length - 1) {
+      v /= 1024;
+      i++;
+    }
+    return (i === 0 ? Math.round(v) : v >= 100 ? Math.round(v) : v.toFixed(1)) + ' ' + units[i];
+  }
+
   function formatUptime(seconds) {
     const d = Math.floor(seconds / 86400);
     const h = Math.floor((seconds % 86400) / 3600);
@@ -641,6 +660,98 @@
   };
 
   // ===========================================================================
+  // Daily Traffic chart (frp-style per-day stats)
+  // ===========================================================================
+  let trafficClientIds = '';
+
+  function trafficLabel(c) {
+    return c.alias || (c.info && c.info.hostname) || c.id.substring(0, 8) + '…';
+  }
+
+  // Keep the client <select> in sync with the current node list; rebuild only
+  // when the set of node ids changed (avoid clobbering the user's selection).
+  function syncTrafficSelect() {
+    const sel = document.getElementById('trafficClientSelect');
+    if (!sel) return;
+    const clients = (lastData && lastData.clients) || [];
+    const ids = clients.map((c) => c.id).join('|');
+    if (ids === trafficClientIds) return;
+    trafficClientIds = ids;
+    const previous = sel.value;
+    sel.innerHTML =
+      '<option value="">全部节点</option>' +
+      clients
+        .map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(trafficLabel(c))}</option>`)
+        .join('');
+    if (previous && ids.split('|').includes(previous)) sel.value = previous;
+    // Node list changed - refresh chart data too
+    loadTrafficChart();
+  }
+
+  window.loadTrafficChart = function () {
+    const sel = document.getElementById('trafficClientSelect');
+    const clientId = sel ? sel.value : '';
+    const q = clientId ? '?days=7&client_id=' + encodeURIComponent(clientId) : '?days=7';
+    fetchWithAuth('/api/v1/traffic' + q)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success === false) throw new Error(d.message || '加载失败');
+        renderTrafficChart(d);
+      })
+      .catch((err) => {
+        document.getElementById('trafficSummary').innerHTML =
+          '<span class="ts-label" style="color:#f87171">加载失败: ' + escapeHtml(err.message) + '</span>';
+        document.getElementById('trafficChart').innerHTML = '<div class="chart-placeholder">暂无数据</div>';
+      });
+  };
+
+  function renderTrafficChart(d) {
+    const daily = d.daily || [];
+    const sel = document.getElementById('trafficClientSelect');
+    const scopeName = sel && sel.value ? (sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '节点') : '全部节点';
+    const sum = daily.reduce(
+      (a, x) => ({ sent: a.sent + (x.bytesSent || 0), recv: a.recv + (x.bytesReceived || 0) }),
+      { sent: 0, recv: 0 }
+    );
+    const t = d.totals || {};
+    document.getElementById('trafficSummary').innerHTML = `
+      <div class="ts-item"><span class="ts-label">${escapeHtml(scopeName)} · 今日</span>
+        <span class="ts-value">↑ ${formatBytes((d.today && d.today.bytesSent) || 0)} / ↓ ${formatBytes((d.today && d.today.bytesReceived) || 0)}</span></div>
+      <div class="ts-item"><span class="ts-label">近 7 天合计</span>
+        <span class="ts-value">↑ ${formatBytes(sum.sent)} / ↓ ${formatBytes(sum.recv)}</span></div>
+      <div class="ts-item"><span class="ts-label">历史累计</span>
+        <span class="ts-value">↑ ${formatBytes(t.bytesSent || 0)} / ↓ ${formatBytes(t.bytesReceived || 0)}</span></div>`;
+
+    const chart = document.getElementById('trafficChart');
+    if (!daily.length) {
+      chart.innerHTML = '<div class="chart-placeholder">暂无数据</div>';
+      return;
+    }
+    const max = Math.max(1, ...daily.map((x) => (x.bytesSent || 0) + (x.bytesReceived || 0)));
+    const lastDate = daily[daily.length - 1].date;
+    chart.innerHTML = daily
+      .map((x) => {
+        const up = x.bytesSent || 0;
+        const down = x.bytesReceived || 0;
+        const total = up + down;
+        const label = x.date.slice(5) + (x.date === lastDate ? ' 今天' : '');
+        if (total === 0) {
+          return `<div class="day-col"><span class="day-zero">0</span><span class="day-label">${label}</span></div>`;
+        }
+        const hUp = Math.max(2, Math.round((up / max) * 130));
+        const hDown = Math.max(2, Math.round((down / max) * 130));
+        return `<div class="day-col" title="${x.date}: 上行 ${formatBytes(up)} / 下行 ${formatBytes(down)}">
+          <div class="day-bars">
+            <div class="bar up" style="height:${hUp}px"></div>
+            <div class="bar down" style="height:${hDown}px"></div>
+          </div>
+          <span class="day-label">${label}</span>
+        </div>`;
+      })
+      .join('');
+  }
+
+  // ===========================================================================
   // Toast
   // ===========================================================================
   function showToast(text, type) {
@@ -672,5 +783,13 @@
       refreshNow();
     }
   }, 30000);
+
+  // Refresh the daily traffic chart quietly every 60s
+  setInterval(() => {
+    const section = document.getElementById('trafficSection');
+    if (section && section.offsetParent !== null) {
+      loadTrafficChart();
+    }
+  }, 60000);
 
 })();

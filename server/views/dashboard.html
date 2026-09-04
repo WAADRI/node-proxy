@@ -733,6 +733,137 @@
     }
     .ro-ok { color: #34d399; }
     .ro-warn { color: #f87171; font-weight: 600; }
+
+    /* ========== Daily Traffic chart ========== */
+    .traffic-section {
+      margin-top: 1rem;
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 1rem 1.25rem;
+    }
+    .traffic-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 0.8rem;
+    }
+    .traffic-title h3 {
+      margin: 0 0 0.15rem;
+      font-size: 1rem;
+      color: #e2e8f0;
+    }
+    .traffic-sub {
+      font-size: 0.75rem;
+      color: #64748b;
+    }
+    .traffic-tools {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .traffic-tools select {
+      background: #0f172a;
+      color: #e2e8f0;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 0.35rem 0.6rem;
+      font-size: 0.85rem;
+      outline: none;
+      max-width: 260px;
+    }
+    .traffic-summary {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+    .traffic-summary .ts-item {
+      display: flex;
+      flex-direction: column;
+    }
+    .traffic-summary .ts-label {
+      font-size: 0.7rem;
+      color: #64748b;
+    }
+    .traffic-summary .ts-value {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+    .traffic-chart {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      min-height: 150px;
+      border-bottom: 1px solid #334155;
+      padding: 0 4px;
+      overflow-x: auto;
+    }
+    .chart-placeholder {
+      width: 100%;
+      text-align: center;
+      color: #64748b;
+      font-size: 0.85rem;
+      padding: 3rem 0;
+    }
+    .day-col {
+      flex: 1 1 0;
+      min-width: 46px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      height: 150px;
+    }
+    .day-bars {
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      width: 100%;
+      justify-content: center;
+    }
+    .bar {
+      width: 11px;
+      border-radius: 3px 3px 0 0;
+      min-height: 1px;
+      transition: height 0.3s;
+    }
+    .bar.up { background: #38bdf8; }
+    .bar.down { background: #a78bfa; }
+    .day-zero {
+      align-self: center;
+      color: #475569;
+      font-size: 0.7rem;
+    }
+    .day-label {
+      font-size: 0.68rem;
+      color: #94a3b8;
+      margin-top: 0.3rem;
+      white-space: nowrap;
+    }
+    .traffic-legend {
+      display: flex;
+      gap: 1rem;
+      margin-top: 0.5rem;
+      font-size: 0.75rem;
+      color: #94a3b8;
+    }
+    .traffic-legend .lg {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      margin-right: 0.3rem;
+    }
+    .traffic-legend .lg.up { background: #38bdf8; }
+    .traffic-legend .lg.down { background: #a78bfa; }
+    .traffic-cell {
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -799,6 +930,10 @@
         <div class="value" id="statBW" style="font-size:1.2rem;">关闭</div>
       </div>
       <div class="stat-card">
+        <div class="label">总流量</div>
+        <div class="value" id="statTraffic" style="font-size:1.1rem;" title="全部节点本进程会话累计流量（上行 + 下行）">0 B</div>
+      </div>
+      <div class="stat-card">
         <div class="label">总失败数</div>
         <div class="value" id="statFailed" style="font-size:1.2rem;">0</div>
       </div>
@@ -840,6 +975,7 @@
             <th>备注</th>
             <th>请求</th>
             <th>隧道</th>
+            <th>流量</th>
             <th>响应(ms)</th>
             <th>熔断器</th>
             <th>连接时间</th>
@@ -849,13 +985,35 @@
         </thead>
         <tbody id="clientTableBody">
           <tr>
-            <td colspan="16" class="no-data">
+            <td colspan="17" class="no-data">
               <div class="icon">🔌</div>
               <div class="hint">等待客户端节点连接...</div>
             </td>
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- ========== Daily Traffic Stats ========== -->
+    <div class="traffic-section" id="trafficSection">
+      <div class="traffic-head">
+        <div class="traffic-title">
+          <h3>📊 每日流量统计</h3>
+          <span class="traffic-sub">近 7 天，上行 + 下行</span>
+        </div>
+        <div class="traffic-tools">
+          <select id="trafficClientSelect" onchange="loadTrafficChart()"></select>
+          <button class="btn btn-sm" onclick="loadTrafficChart()" title="刷新">🔄</button>
+        </div>
+      </div>
+      <div class="traffic-summary" id="trafficSummary">加载中...</div>
+      <div class="traffic-chart" id="trafficChart">
+        <div class="chart-placeholder">加载中...</div>
+      </div>
+      <div class="traffic-legend">
+        <span><i class="lg up"></i>上行</span>
+        <span><i class="lg down"></i>下行</span>
+      </div>
     </div>
   </div>
 
