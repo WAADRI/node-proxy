@@ -1,7 +1,9 @@
 import { reactive } from 'vue';
-import { fetchStatus } from './api';
+import { fetchStatus, fetchRequestLogs } from './api';
 
 export const THEME_KEY = 'np_theme';
+
+const MAX_LOG_ENTRIES = 200;
 
 // ---------------------------------------------------------------------------
 // Global reactive store (single source of truth shared by all pages)
@@ -12,6 +14,7 @@ export const store = reactive({
   lastUpdate: null, // timestamp of last status update
   role: localStorage.getItem('np_role') || '',
   theme: localStorage.getItem(THEME_KEY) || 'dark', // dark | light
+  requestLogs: [], // recent proxy request entries (newest first)
 });
 
 export function applyTheme(theme) {
@@ -50,6 +53,8 @@ export function connectWebSocket() {
       if (msg.type === 'status') {
         store.status = msg.data;
         store.lastUpdate = Date.now();
+      } else if (msg.type === 'log' && msg.data) {
+        prependLog(msg.data);
       }
     } catch (err) {
       console.error('WS parse error', err);
@@ -82,4 +87,32 @@ export function requestStatus() {
     .catch((err) => {
       throw err;
     });
+}
+
+// ---------------------------------------------------------------------------
+// Request log helpers
+// ---------------------------------------------------------------------------
+function prependLog(entry) {
+  const logs = store.requestLogs;
+  if (logs.length && logs[0].seq === entry.seq) return; // dedupe
+  logs.unshift(entry);
+  if (logs.length > MAX_LOG_ENTRIES) logs.length = MAX_LOG_ENTRIES;
+}
+
+export function requestLogs(limit = 100) {
+  return fetchRequestLogs(limit)
+    .then((data) => {
+      // merge: keep any newer live entries already received, fill with history
+      const seen = new Set(store.requestLogs.map((e) => e.seq));
+      const fresh = (data.logs || []).filter((e) => !seen.has(e.seq));
+      store.requestLogs = fresh.concat(store.requestLogs).slice(0, MAX_LOG_ENTRIES);
+      return data;
+    })
+    .catch((err) => {
+      throw err;
+    });
+}
+
+export function clearRequestLogs() {
+  store.requestLogs = [];
 }

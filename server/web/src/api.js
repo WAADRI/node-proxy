@@ -68,3 +68,5 @@ export const saveClientMeta = (clientId, field, value) =>
     method: 'POST',
     body: { [field]: value },
   });
+export const fetchRequestLogs = (limit = 100) =>
+  apiFetch('/api/v1/logs?limit=' + limit);
