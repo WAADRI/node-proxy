@@ -79,6 +79,7 @@ const themeOverrides = computed(() =>
 const navItems = [
   { name: 'workbench', path: '/', label: '工作台', icon: 'grid' },
   { name: 'nodes', path: '/nodes', label: '节点管理', icon: 'server' },
+  { name: 'logs', path: '/logs', label: '请求日志', icon: 'list' },
   { name: 'settings', path: '/settings', label: '系统设置', icon: 'sliders' },
 ];
 
