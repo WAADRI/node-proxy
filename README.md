@@ -35,6 +35,8 @@ export NP_AUTH_WEB_PASSWORD='你的强密码'      # 面板登录密码
 docker compose -p node-proxy up -d --build
 ```
 
+> 构建镜像时会自动编译 Web 面板前端（`server/web`，Vue 3 + Vite），无需单独安装 Node.js。GitHub Actions 也会在每次推送时自动构建服务端镜像（tag：`master`）推送至腾讯云 CCR，供生产环境直接拉取。
+
 默认端口（如需改端口映射，编辑 `server/docker-compose.yml`）：
 
 | 用途 | 端口 |
