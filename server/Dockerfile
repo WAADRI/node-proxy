@@ -1,5 +1,6 @@
 # =============================================================================
 # Node-Proxy Server - Dockerfile
+#   Builds the Vue management panel (server/web) and bundles it into the image.
 # =============================================================================
 FROM node:20-alpine AS builder
 
@@ -9,6 +10,13 @@ COPY package.json ./
 # image has no Python/gcc/make toolchain and GitHub prebuild downloads
 # frequently time out on CN networks. storage.js uses pure-JS sql.js.
 RUN npm install --omit=dev
+
+# --- Vue management panel (server/web) ---------------------------------------
+WORKDIR /app/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY web/ ./
+RUN npm run build
 
 # ---
 
@@ -20,6 +28,9 @@ WORKDIR /app
 
 # Copy node_modules from builder
 COPY --from=builder /app/node_modules ./node_modules
+
+# Copy the built management panel from builder
+COPY --from=builder /app/web/dist ./web/dist
 
 # Copy server code (data/certs/logs excluded via .dockerignore)
 COPY . .
