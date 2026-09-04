@@ -80,18 +80,6 @@ cd client && npm install
 SERVER_URL='ws://服务器:3000/ws' AUTH_TOKEN='你的令牌' TAGS='region:cn' npm start
 ```
 
-**免安装二进制版**（无需 Node.js 环境）：从 [GitHub Releases](https://github.com/WAADRI/node-proxy/releases) 下载对应平台文件（`node-proxy-client-v*`，支持 Windows x64 / Linux x64 / Linux arm64），在文件旁放一个 `config.yaml` 或直接用环境变量启动：
-
-```bash
-# 方式一：旁边放 config.yaml（server_url / auth_token / tags / region 等字段同 client/config.yaml）
-./node-proxy-client-linux-x64
-
-# 方式二：环境变量
-SERVER_URL='ws://服务器:3000/ws' AUTH_TOKEN='你的令牌' TAGS='region:cn' ./node-proxy-client-linux-x64
-```
-
-Windows 双击或命令行直接运行即可；注册成功同样会打印 `Registered with ID: ...`，可作为 Windows 服务（WinSW）的程序路径。
-
 启动后日志出现 `Registered with ID: ...` 即接入成功，随后可在服务端面板的节点列表看到该节点。如需固定节点 ID（避免容器重建后 ID 变化），可设置 `CLIENT_ID` 环境变量。
 
 ### 3. 使用与验证
