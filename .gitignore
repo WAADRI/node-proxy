@@ -5,6 +5,9 @@
 # Node.js
 node_modules/
 
+# Vue panel build output (built inside Docker / by CI)
+server/web/dist/
+
 # Logs (all runtime logs)
 *.log
 logs/

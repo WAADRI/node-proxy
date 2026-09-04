@@ -1,0 +1,100 @@
+/* ===========================================================================
+ * Theme CSS - GitHub-inspired palette, driven by [data-theme] on <html>
+ * =========================================================================== */
+:root,
+[data-theme='dark'] {
+  --np-bg: #0d1117;
+  --np-bg-soft: #161b22;
+  --np-bg-hover: #1c2128;
+  --np-border: #30363d;
+  --np-border-soft: #21262d;
+  --np-text: #e6edf3;
+  --np-text-2: #c9d1d9;
+  --np-text-muted: #8b949e;
+  --np-primary: #2f81f7;
+  --np-primary-hover: #58a6ff;
+  --np-success: #3fb950;
+  --np-warning: #d29922;
+  --np-danger: #f85149;
+  --np-danger-bg: rgba(248, 81, 73, 0.12);
+  --np-muted-chip: rgba(110, 118, 129, 0.2);
+}
+
+[data-theme='light'] {
+  --np-bg: #ffffff;
+  --np-bg-soft: #f6f8fa;
+  --np-bg-hover: #eef1f4;
+  --np-border: #d0d7de;
+  --np-border-soft: #d8dee4;
+  --np-text: #1f2328;
+  --np-text-2: #3d444d;
+  --np-text-muted: #656d76;
+  --np-primary: #0969da;
+  --np-primary-hover: #0550ae;
+  --np-success: #1a7f37;
+  --np-warning: #9a6700;
+  --np-danger: #cf222e;
+  --np-danger-bg: rgba(207, 34, 46, 0.08);
+  --np-muted-chip: rgba(101, 109, 118, 0.14);
+}
+
+body {
+  margin: 0;
+  background: var(--np-bg);
+  color: var(--np-text);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Connection dot */
+.np-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.np-dot.alive { background: var(--np-success); box-shadow: 0 0 0 3px rgba(63, 185, 80, 0.18); }
+.np-dot.stale { background: var(--np-warning); box-shadow: 0 0 0 3px rgba(210, 153, 34, 0.18); }
+.np-dot.dead { background: var(--np-danger); }
+.np-dot.idle { background: var(--np-text-muted); }
+
+/* Circuit breaker badge */
+.np-cb {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.np-cb.open { background: var(--np-danger-bg); color: var(--np-danger); }
+.np-cb.half_open { background: rgba(210, 153, 34, 0.15); color: var(--np-warning); }
+.np-cb.closed { background: rgba(63, 185, 80, 0.15); color: var(--np-success); }
+
+/* Tag chips */
+.np-tag-chip {
+  display: inline-flex;
+  padding: 0 8px;
+  height: 20px;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--np-muted-chip);
+  color: var(--np-text-2);
+  margin-right: 4px;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--np-border); border-radius: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* Traffic chart bars */
+.tc-bar.up { background: var(--np-primary); }
+.tc-bar.down { background: var(--np-warning); }

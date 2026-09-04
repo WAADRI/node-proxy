@@ -23,7 +23,14 @@ config.local.yaml
 node_modules/
 npm-debug.log
 
+# Vue panel build output (built inside the Dockerfile builder stage)
+web/dist/
+web/node_modules/
+
 # Docs / deploy files not needed in the image
 deploy/
 README.md
-package-lock.json
+
+# Server lockfile stays out; the web panel ships its own lockfile so the
+# Docker build can run a reproducible `npm ci` for it
+/package-lock.json
