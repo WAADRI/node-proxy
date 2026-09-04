@@ -19,7 +19,7 @@ class LogHub {
       seq: ++this._seq,
       kind: entry.kind || 'http',
       ts: entry.ts || Date.now(),
-      ip: entry.ip || '',
+      ip: String(entry.ip || '').replace(/^::ffff:/i, ''),
       method: entry.method || 'GET',
       url: entry.url || '',
       status: entry.status || 0,

@@ -40,13 +40,16 @@ function checkProxyAuth(req, authManager, logger) {
 
 // Best-effort real client IP: honour X-Forwarded-For when a reverse proxy
 // (e.g. nginx) terminates the client connection, otherwise use the socket.
+// IPv4-mapped IPv6 form (::ffff:1.2.3.4) from dual-stack listening is
+// normalised back to plain IPv4 for display.
 function clientIp(req) {
+  const norm = (v) => String(v || '').replace(/^::ffff:/i, '');
   const xff = req.headers && req.headers['x-forwarded-for'];
   if (xff) {
     const first = String(xff).split(',')[0].trim();
-    if (first) return first;
+    if (first) return norm(first);
   }
-  return (req.socket && req.socket.remoteAddress) || '';
+  return norm(req.socket && req.socket.remoteAddress);
 }
 
 function handleHttpRequest(req, res, clientManager, authManager, config, logger, domainRouter, cache, pluginManager) {
@@ -64,7 +67,7 @@ function handleHttpRequest(req, res, clientManager, authManager, config, logger,
     method: req.method,
     url: req.url,
     headers: req.headers,
-    ip: req.socket?.remoteAddress || '',
+    ip: clientIp(req),
     timestamp: startedAt,
   });
 
@@ -305,7 +308,7 @@ function handleConnect(req, socket, clientManager, authManager, config, logger, 
     method: req.method,
     url: req.url,
     headers: req.headers,
-    ip: req.socket?.remoteAddress || '',
+    ip: clientIp(req),
     timestamp: Date.now(),
   });
 
