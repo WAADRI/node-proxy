@@ -18,8 +18,7 @@ const ALL_COLUMNS = [
   { key: 'ip', label: 'IP 地址', width: 150 },
   { key: 'platform', label: '系统 / 平台', width: 140 },
   { key: 'region', label: '区域', width: 110 },
-  { key: 'tags', label: '标签', width: 130 },
-  { key: 'alias', label: '别名', width: 130 },
+  { key: 'tags', label: '标签', width: 160 },
   { key: 'notes', label: '备注', width: 170 },
   { key: 'req', label: '请求', width: 70 },
   { key: 'tunnel', label: '隧道', width: 70 },
@@ -111,7 +110,7 @@ function rowCtx(row) {
 
 function openEdit(row, field) {
   editClient.value = row;
-  editAlias.value = row.alias || '';
+  editTags.value = (row.tags || []).join(', ');
   editNotes.value = row.notes || '';
   editRegion.value = row.region || (row.info && row.info.region) || '';
   editFocus.value = field || null;
@@ -125,7 +124,7 @@ function openEdit(row, field) {
 const clickable = (row, field, cls) => ({
   class: [cls, 'cell-edit'],
   style: { cursor: 'pointer' },
-  title: '点击编辑' + (field === 'alias' ? '别名' : field === 'notes' ? '备注' : '区域'),
+  title: '点击编辑' + (field === 'tags' ? '标签' : field === 'notes' ? '备注' : '区域'),
   onClick: () => openEdit(row, field),
 });
 
@@ -147,7 +146,7 @@ const tableColumns = computed(() =>
           return h('span', { style: 'font-family: Fira Code, Consolas, monospace; font-size:12px; color: var(--np-text-muted)' },
             row.id.length > 8 ? row.id.substring(0, 8) + '…' : row.id);
         case 'host':
-          return row.alias || ctx.info.hostname || '-';
+          return ctx.info.hostname || '-';
         case 'ip':
           return ctx.info.ip || ctx.info.localIp || '-';
         case 'platform':
@@ -156,13 +155,10 @@ const tableColumns = computed(() =>
           return h('span', clickable(row, 'region', row.region ? 'np-region-ov' : ''), row.region || ctx.info.region || '-');
         case 'tags': {
           const tags = row.tags || [];
-          if (!tags.length) return h('span', { style: 'color: var(--np-text-muted)' }, '-');
-          return tags.map((t) =>
-            h('span', { class: 'np-tag-chip' }, t)
-          );
+          if (!tags.length)
+            return h('span', clickable(row, 'tags', ''), h('span', { style: 'color: var(--np-text-muted)' }, '-'));
+          return h('span', clickable(row, 'tags', ''), tags.map((t) => h('span', { class: 'np-tag-chip' }, t)));
         }
-        case 'alias':
-          return h('span', clickable(row, 'alias', ''), row.alias || h('span', { style: 'color: var(--np-text-muted)' }, '-'));
         case 'notes':
           return h('span', clickable(row, 'notes', ''), row.notes || h('span', { style: 'color: var(--np-text-muted)' }, '-'));
         case 'req':
@@ -207,7 +203,7 @@ const tableColumns = computed(() =>
 // ---------------------------------------------------------------------------
 const editOpen = ref(false);
 const editClient = ref(null);
-const editAlias = ref('');
+const editTags = ref('');
 const editNotes = ref('');
 const editRegion = ref('');
 const editFocus = ref(null);
@@ -253,7 +249,11 @@ function saveEdit() {
   const client = editClient.value;
   if (!client) return;
   saving.value = true;
-  const p1 = saveClientMeta(client.id, 'alias', editAlias.value.trim());
+  const tagsArr = editTags.value
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const p1 = saveClientMeta(client.id, 'tags', tagsArr);
   const p2 = saveClientMeta(client.id, 'notes', editNotes.value.trim());
   const p3 = saveClientMeta(client.id, 'region', editRegion.value.trim());
   Promise.allSettled([p1, p2, p3]).then(([a, b, c]) => {
@@ -272,7 +272,7 @@ function saveEdit() {
 watch(editOpen, (open) => {
   if (open && editFocus.value) {
     setTimeout(() => {
-      const map = { alias: '#editAlias', notes: '#editNotes', region: '#editRegion' };
+      const map = { tags: '#editTags', notes: '#editNotes', region: '#editRegion' };
       const el = document.querySelector(map[editFocus.value]);
       if (el) el.focus();
     }, 120);
@@ -365,11 +365,11 @@ const cbRowClass = (row) => {
           {{ editClient ? editClient.id.substring(0, 8) + '…' : '' }}
         </span>
       </div>
-      <p class="np-edit-sub">修改节点的别名、备注和服务端覆盖区域。</p>
+      <p class="np-edit-sub">修改节点的标签、备注和服务端覆盖区域，保存后即时生效。</p>
 
       <div class="np-form">
-        <label>别名（显示在节点列表替代主机名）</label>
-        <NInput v-model:value="editAlias" id="editAlias" placeholder="如: 北京电信-1" />
+        <label>标签（多个用英文逗号分隔，将替换当前标签）</label>
+        <NInput v-model:value="editTags" id="editTags" placeholder="如: region:cn, isp:unicom, vip" />
       </div>
       <div class="np-form">
         <label>备注（内部备注信息）</label>
