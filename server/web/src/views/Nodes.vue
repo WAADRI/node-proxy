@@ -171,7 +171,15 @@ const tableColumns = computed(() =>
             title: '本次会话 — 上行 ' + formatBytes(ctx.trafficUp) + ' / 下行 ' + formatBytes(ctx.trafficDown),
           }, formatBytes(ctx.trafficUp + ctx.trafficDown));
         case 'ms':
-          return row.avgResponseTime || '-';
+          // Only HTTP plaintext requests are timed; HTTPS goes via CONNECT
+          // tunnels which have no request/response boundary (see /logs).
+          return h(
+            'span',
+            {
+              title: 'HTTP 请求平均响应时间。HTTPS 目标走 CONNECT 隧道，不统计在此列；隧道访问记录见「请求日志」页',
+            },
+            row.avgResponseTime || '-'
+          );
         case 'cb':
           return h('span', { class: 'np-cb ' + ctx.cbState },
             ctx.cbState === 'open' ? '熔断' : ctx.cbState === 'half_open' ? '测试' : '正常');
