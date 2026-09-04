@@ -262,6 +262,13 @@ function handleHttpRequest(req, res, clientManager, authManager, config, logger,
 }
 
 function handleConnect(req, socket, clientManager, authManager, config, logger, domainRouter, head, pluginManager) {
+  // The socket handed to the 'connect' event is not managed by the http server
+  // internals anymore; without an error listener an ECONNRESET from the client
+  // would crash the whole process as an uncaught exception.
+  socket.on('error', (err) => {
+    logger.warn({ error: err.message }, 'CONNECT socket error');
+  });
+
   if (!checkProxyAuth(req, authManager, logger)) {
     socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="Node-Proxy"\r\n\r\n');
     return;
