@@ -168,6 +168,9 @@ domain_rules:
 # =============================================================================
 # Phase 3: Request Cache + Deduplication
 # =============================================================================
+# Security: the shared cache is bypassed for requests carrying Cookie /
+# Authorization, and responses with Cache-Control: private/no-store/no-cache,
+# Set-Cookie, or Vary (beyond Accept) are never stored (see lib/cache.js).
 cache:
   enabled: true
   # Default TTL in milliseconds (5 seconds)

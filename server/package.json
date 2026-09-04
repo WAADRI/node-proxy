@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js --logging-pretty",
+    "test": "node --test test/",
     "gen-cert": "node lib/tls.js --generate",
     "docker:build": "docker build -t node-proxy-server .",
     "docker:run": "docker-compose up -d"
