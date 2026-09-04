@@ -212,6 +212,63 @@ class Storage {
     }
   }
 
+  // Aggregate traffic_stats (minute rows) into per-day buckets for the last N
+  // days (local timezone). clientId omitted = all clients combined.
+  getTrafficDaily(clientId, days = 7) {
+    if (!this.available || !this.db) return [];
+    days = Math.max(1, Math.min(30, Math.floor(days) || 7));
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const since = startOfToday - (days - 1) * 86400000;
+    try {
+      const where = clientId
+        ? `WHERE client_id = '${clientId.replace(/'/g, "''")}' AND period_start >= ${since}`
+        : `WHERE period_start >= ${since}`;
+      const result = this.db.exec(
+        `SELECT period_start, bytes_sent, bytes_received FROM traffic_stats ${where}`
+      );
+      const byDay = {};
+      if (result.length > 0 && result[0].values) {
+        for (const row of result[0].values) {
+          const d = new Date(row[0]);
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          if (!byDay[key]) byDay[key] = { bytesSent: 0, bytesReceived: 0 };
+          byDay[key].bytesSent += row[1] || 0;
+          byDay[key].bytesReceived += row[2] || 0;
+        }
+      }
+      // Fill in every day (including empty ones) oldest -> newest
+      const out = [];
+      for (let i = days - 1; i >= 0; i--) {
+        const d = new Date(startOfToday - i * 86400000);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        out.push({
+          date: key,
+          bytesSent: byDay[key]?.bytesSent || 0,
+          bytesReceived: byDay[key]?.bytesReceived || 0,
+        });
+      }
+      return out;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // Lifetime totals across all recorded traffic (all clients)
+  getTrafficTotals() {
+    if (!this.available || !this.db) return { bytesSent: 0, bytesReceived: 0 };
+    try {
+      const result = this.db.exec(
+        'SELECT COALESCE(SUM(bytes_sent),0), COALESCE(SUM(bytes_received),0) FROM traffic_stats'
+      );
+      if (result.length > 0 && result[0].values.length > 0) {
+        const vals = result[0].values[0];
+        return { bytesSent: vals[0] || 0, bytesReceived: vals[1] || 0 };
+      }
+    } catch (_) {}
+    return { bytesSent: 0, bytesReceived: 0 };
+  }
+
   // ===========================================================================
   // Config Overrides
   // ===========================================================================
