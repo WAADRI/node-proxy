@@ -354,6 +354,9 @@ function handleConnect(req, socket, clientManager, authManager, config, logger, 
   clientManager.pendingTunnels.set(tunnelId, {
     type: 'http', socket, client, timeout, startTime,
     head: head || Buffer.alloc(0),
+    ip: clientIp(req),
+    host,
+    port,
   });
   client.pendingTunnels.add(tunnelId);
   clientManager.trackTunnel(client.id);

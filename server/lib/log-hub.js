@@ -17,6 +17,7 @@ class LogHub {
   record(entry) {
     const e = {
       seq: ++this._seq,
+      kind: entry.kind || 'http',
       ts: entry.ts || Date.now(),
       ip: entry.ip || '',
       method: entry.method || 'GET',

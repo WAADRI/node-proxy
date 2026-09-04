@@ -287,6 +287,24 @@ function handleClientResponse(clientManager, stream, logger) {
   }
 }
 
+// Record a tunnel (HTTPS CONNECT / SOCKS5) into the request log once it closes
+function recordTunnelLog(clientManager, p) {
+  const hub = clientManager && clientManager.requestLog;
+  if (!hub || !p) return;
+  const endTs = Date.now();
+  try {
+    hub.record({
+      kind: 'tunnel',
+      ts: p.startTime || endTs,
+      ip: p.ip || '',
+      method: 'CONNECT',
+      url: (p.host || '') + (p.port ? ':' + p.port : ''),
+      status: 0,
+      ms: Math.max(0, endTs - (p.startTime || endTs)),
+    });
+  } catch (_) {}
+}
+
 function handleTunnelReady(clientManager, stream, logger) {
   const headers = stream.headers || {};
   const msgId = headers.id || stream.id;
@@ -320,6 +338,7 @@ function handleTunnelReady(clientManager, stream, logger) {
   });
 
   socket.on('close', () => {
+    recordTunnelLog(clientManager, p);
     stream.close();
     clientManager.pendingTunnels.delete(msgId);
     if (client) client.pendingTunnels.delete(msgId);
@@ -490,6 +509,7 @@ function handleTunnelReadyLegacy(clientManager, msg, logger) {
   });
 
   socket.on('close', () => {
+    recordTunnelLog(clientManager, p);
     if (client && client.ws.readyState === 1) {
       try { client.ws.send(JSON.stringify({ type: 'tunnel_close', id: msg.id })); } catch (_) {}
     }
