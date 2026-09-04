@@ -1,0 +1,65 @@
+# =============================================================================
+# 工作流：构建并推送服务端镜像
+#   - 镜像：sgccr.ccs.tencentyun.com/misaka-public/waadri-proxy:master（固定 tag）
+#   - 触发：push 与 pull_request 均构建并上传
+#   - 平台：linux/amd64、linux/arm64（多架构 manifest）
+#   - 私密：TENCENT_CCR_USERNAME / TENCENT_CCR_PASSWORD（仓库级私密）
+#   - 说明：来自 fork 的 PR 无法读取仓库私密，自动降级为“只构建校验、不上传”
+#   - 构建阶段（server/Dockerfile）会先完成管理后台前端（server/web）构建
+# =============================================================================
+name: 构建并推送服务端镜像
+
+on:
+  push:
+  pull_request:
+
+env:
+  REGISTRY: sgccr.ccs.tencentyun.com
+  IMAGE_REPOSITORY: misaka-public/waadri-proxy
+  IMAGE_TAG: master
+  PLATFORMS: linux/amd64,linux/arm64
+
+# 同一分支的多次触发只保留最后一次（多平台构建耗时，取消过期任务）
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    name: 构建并推送服务端镜像
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 QEMU（用于 arm64 交叉构建）
+        uses: docker/setup-qemu-action@v3
+
+      - name: 配置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录腾讯云容器镜像服务（CCR）
+        # fork 的 PR 拿不到仓库私密，跳过登录（下方 build 步骤也会自动转为只构建不上传）
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.TENCENT_CCR_USERNAME }}
+          password: ${{ secrets.TENCENT_CCR_PASSWORD }}
+
+      - name: 构建并推送镜像（amd64 + arm64）
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+          # 同仓库 push / PR 上传；fork 的 PR 仅构建校验，避免登录失败
+          push: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          # 用 GitHub Actions 缓存加速重复构建（fork PR 上缓存写入会被自动跳过，不影响结果）
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
