@@ -38,7 +38,19 @@ function checkProxyAuth(req, authManager, logger) {
   return true;
 }
 
+// Best-effort real client IP: honour X-Forwarded-For when a reverse proxy
+// (e.g. nginx) terminates the client connection, otherwise use the socket.
+function clientIp(req) {
+  const xff = req.headers && req.headers['x-forwarded-for'];
+  if (xff) {
+    const first = String(xff).split(',')[0].trim();
+    if (first) return first;
+  }
+  return (req.socket && req.socket.remoteAddress) || '';
+}
+
 function handleHttpRequest(req, res, clientManager, authManager, config, logger, domainRouter, cache, pluginManager) {
+  const startedAt = Date.now();
   if (!checkProxyAuth(req, authManager, logger)) {
     res.writeHead(407, { 'Proxy-Authenticate': 'Basic realm="Node-Proxy"', 'Content-Type': 'text/plain' });
     res.end('Proxy authentication required');
@@ -53,11 +65,22 @@ function handleHttpRequest(req, res, clientManager, authManager, config, logger,
     url: req.url,
     headers: req.headers,
     ip: req.socket?.remoteAddress || '',
-    timestamp: Date.now(),
+    timestamp: startedAt,
   });
 
-  // Plugin hook: onResponse (when response finishes)
+  // Plugin hook: onResponse (when response finishes) + record into LogHub
   res.on('finish', () => {
+    const entry = {
+      ts: Date.now(),
+      ip: clientIp(req),
+      method: req.method,
+      url: req.url,
+      status: res.statusCode || 0,
+      ms: Date.now() - startedAt,
+    };
+    if (clientManager.requestLog) {
+      try { clientManager.requestLog.record(entry); } catch (_) {}
+    }
     runPluginHook(pluginManager, 'onResponse', {
       req,
       res,
@@ -65,8 +88,9 @@ function handleHttpRequest(req, res, clientManager, authManager, config, logger,
       method: req.method,
       url: req.url,
       statusCode: res.statusCode,
-      duration: 0,
-      timestamp: Date.now(),
+      duration: entry.ms,
+      ip: entry.ip,
+      timestamp: entry.ts,
     });
   });
 

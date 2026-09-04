@@ -44,6 +44,7 @@ const { createWebServer } = require('./lib/web-server');
 const { setupClientWebSocket } = require('./lib/ws-server');
 const { loadTLSCredentials } = require('./lib/tls');
 const { SettingsManager } = require('./lib/settings');
+const { LogHub } = require('./lib/log-hub');
 
 // Initialize auth
 const authManager = new AuthManager(config, logger);
@@ -76,6 +77,8 @@ clientManager.cache = cache;
 clientManager.acl = aclManager;
 clientManager.audit = auditLogger;
 clientManager.pluginManager = pluginManager;
+// Recent proxy request log (feeds the panel "Request log" view)
+clientManager.requestLog = new LogHub(logger);
 
 // Load persisted routing strategy & other runtime settings.
 // Storage init is async (sql.js) - wait for it before restoring overrides.
@@ -109,7 +112,17 @@ webWss.on('connection', (ws) => {
   };
   clientManager.onChange(onChange);
 
-  ws.on('close', () => { clientManager.removeOnChange(onChange); });
+  // Push new request log entries to the panel in real time
+  const offLog = clientManager.requestLog.onChange((entry) => {
+    try {
+      ws.send(JSON.stringify({ type: 'log', data: entry }));
+    } catch (_) {}
+  });
+
+  ws.on('close', () => {
+    clientManager.removeOnChange(onChange);
+    offLog();
+  });
   ws.on('error', () => {});
 });
 

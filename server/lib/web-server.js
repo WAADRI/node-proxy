@@ -97,6 +97,14 @@ function createWebServer(clientManager, authManager, config, logger, metricsMana
     res.json(clientManager.getStats());
   });
 
+  // --- Recent request log (for the panel "Request log" view) ---
+  api.get('/logs', (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+    const hub = clientManager.requestLog;
+    if (!hub) return res.json({ logs: [] });
+    res.json({ logs: hub.getRecent(limit) });
+  });
+
   api.get('/config', (req, res) => {
     const safeConfig = {
       server: config.server,
