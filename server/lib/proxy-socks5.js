@@ -202,6 +202,9 @@ function handleTCPConnect(socket, host, port, clientManager, config, logger) {
     clientManager.pendingTunnels.set(tunnelId, {
       type: 'socks5', socket, client, timeout: currentTimeout, startTime: Date.now(),
       stream,
+      ip: socket.remoteAddress || '',
+      host,
+      port,
     });
 
     clientManager.trackTunnel(client.id);
@@ -222,6 +225,9 @@ function handleTCPConnect(socket, host, port, clientManager, config, logger) {
 
     clientManager.pendingTunnels.set(tunnelId, {
       type: 'socks5', socket, client, timeout: currentTimeout, startTime: Date.now(),
+      ip: socket.remoteAddress || '',
+      host,
+      port,
     });
     client.pendingTunnels.add(tunnelId);
     clientManager.trackTunnel(client.id);
