@@ -101,6 +101,149 @@
   }
 
   // ===========================================================================
+  // Column visibility (user-configurable table columns)
+  // ===========================================================================
+  const COLUMNS = [
+    { key: 'status', label: '状态', def: true },
+    { key: 'id', label: '节点 ID', def: true },
+    { key: 'host', label: '主机名', def: true },
+    { key: 'ip', label: 'IP 地址', def: true },
+    { key: 'platform', label: '系统 / 平台', def: true },
+    { key: 'region', label: '区域', def: true },
+    { key: 'tags', label: '标签', def: true },
+    { key: 'alias', label: '别名', def: true },
+    { key: 'notes', label: '备注', def: true },
+    { key: 'req', label: '请求', def: true },
+    { key: 'tunnel', label: '隧道', def: true },
+    { key: 'traffic', label: '流量', def: true },
+    { key: 'ms', label: '响应(ms)', def: true },
+    { key: 'cb', label: '熔断器', def: true },
+    { key: 'conn', label: '连接时间', def: true },
+    { key: 'active', label: '最后活跃', def: true },
+    { key: 'ops', label: '操作', def: true, sticky: true },
+  ];
+  const COL_STORAGE = 'np_visible_cols';
+
+  function loadVisibleCols() {
+    try {
+      const raw = localStorage.getItem(COL_STORAGE);
+      if (raw) {
+        const keys = JSON.parse(raw);
+        if (Array.isArray(keys) && keys.length > 0) {
+          return COLUMNS.map((c) => keys.includes(c.key));
+        }
+      }
+    } catch (_) {}
+    return COLUMNS.map((c) => c.def);
+  }
+  let visibleCols = loadVisibleCols();
+  const visibleColsCount = () => visibleCols.filter(Boolean).length;
+
+  function saveVisibleCols() {
+    try {
+      const keys = COLUMNS.filter((c, i) => visibleCols[i]).map((c) => c.key);
+      localStorage.setItem(COL_STORAGE, JSON.stringify(keys));
+    } catch (_) {}
+  }
+
+  function renderTableHead() {
+    const thead = document.getElementById('clientTableHead');
+    if (!thead) return;
+    thead.innerHTML =
+      '<tr>' +
+      COLUMNS.map((c, i) => (visibleCols[i] ? `<th${c.sticky ? ' class="sticky-col"' : ''}>${c.label}</th>` : '')).join('') +
+      '</tr>';
+    const lbl = document.getElementById('colPickerLabel');
+    if (lbl) lbl.textContent = '已显示 ' + visibleColsCount() + ' 个字段';
+  }
+
+  // Render the column picker panel (checkbox list) once
+  function renderColPanel() {
+    const panel = document.getElementById('colPanel');
+    if (!panel) return;
+    panel.innerHTML =
+      COLUMNS.map(
+        (c, i) => `
+        <label class="cp-item">
+          <input type="checkbox" data-colidx="${i}" ${visibleCols[i] ? 'checked' : ''}>
+          ${c.label}
+        </label>`
+      ).join('') +
+      `<div class="cp-actions">
+        <button class="btn btn-sm" onclick="resetAllCols()">全部显示</button>
+      </div>`;
+  }
+
+  window.toggleColPicker = function (e) {
+    e.stopPropagation();
+    const panel = document.getElementById('colPanel');
+    const isOpen = panel.classList.toggle('open');
+    if (isOpen) renderColPanel();
+  };
+
+  window.setColVisible = function (idx, visible) {
+    visibleCols[idx] = !!visible;
+    saveVisibleCols();
+    renderTableHead();
+    renderClientTable(lastData ? lastData.clients : null);
+  };
+
+  window.resetAllCols = function () {
+    visibleCols = COLUMNS.map((c) => c.def);
+    saveVisibleCols();
+    renderColPanel();
+    renderTableHead();
+    renderClientTable(lastData ? lastData.clients : null);
+  };
+
+  // Cell html per column key
+  function cellHtml(key, c, ctx) {
+    const { info, alias, notes, effectiveRegion, regionClass, tagsHtml, cbState, cs, trafficTotal } = ctx;
+    switch (key) {
+      case 'status':
+        return `<td><span class="online-dot ${ctx.dotClass}"></span></td>`;
+      case 'id':
+        return `<td><span class="client-id" title="${escapeHtml(c.id)}">${escapeHtml(c.id.substring(0, 8))}...</span></td>`;
+      case 'host':
+        return `<td><span class="client-hostname">${escapeHtml(alias || info.hostname || '-')}</span></td>`;
+      case 'ip':
+        return `<td><span class="client-ip">${escapeHtml(info.ip || info.localIp || '-')}</span></td>`;
+      case 'platform':
+        return `<td>${escapeHtml(info.platform || '-')}${info.arch ? ' (' + escapeHtml(info.arch) + ')' : ''}</td>`;
+      case 'region':
+        return `<td class="${regionClass} cell-edit" title="点击编辑区域" onclick="window.editClientMeta('${c.id}','region')">${escapeHtml(effectiveRegion)}</td>`;
+      case 'tags':
+        return `<td>${tagsHtml}</td>`;
+      case 'alias':
+        return `<td class="client-alias cell-edit" title="点击编辑别名" onclick="window.editClientMeta('${c.id}','alias')">
+          ${alias ? escapeHtml(alias) : '<span class="dim">-</span>'}</td>`;
+      case 'notes':
+        return `<td class="client-notes cell-edit" title="点击编辑备注" onclick="window.editClientMeta('${c.id}','notes')">
+          ${notes ? escapeHtml(notes.substring(0, 30)) + (notes.length > 30 ? '...' : '') : '<span class="dim">-</span>'}</td>`;
+      case 'req':
+        return `<td class="client-pending">${c.pendingRequestsCount}</td>`;
+      case 'tunnel':
+        return `<td class="client-pending">${c.pendingTunnelsCount}</td>`;
+      case 'traffic':
+        return `<td class="traffic-cell" title="本次会话 — 上行 ${formatBytes(cs.bytesSent || 0)} / 下行 ${formatBytes(cs.bytesReceived || 0)}">${formatBytes(trafficTotal)}</td>`;
+      case 'ms':
+        return `<td class="client-pending">${c.avgResponseTime || '-'}</td>`;
+      case 'cb':
+        return `<td><span class="cb-badge ${cbState}">${cbState === 'open' ? '熔断' : cbState === 'half_open' ? '测试' : '正常'}</span></td>`;
+      case 'conn':
+        return `<td class="time-cell" title="${new Date(c.connectedAt).toLocaleString()}">${formatDuration(ctx.connectedAgo)}</td>`;
+      case 'active':
+        return `<td class="time-cell" title="${new Date(c.lastSeen).toLocaleString()}">${formatDuration(ctx.lastSeenAgo)}</td>`;
+      case 'ops':
+        return `<td class="sticky-col">
+          <button class="btn btn-sm" onclick="window.editClientMeta('${c.id}')"><svg class="icon"><use href="#i-edit"/></svg>编辑</button>
+        </td>`;
+      default:
+        return '';
+    }
+  }
+
+  // ===========================================================================
   // Rendering
   // ===========================================================================
   function renderDashboard(data) {
@@ -128,10 +271,10 @@
     }
     if (circuitBreaker) {
       const openCount = (clients || []).filter(c => c.circuitBreaker && c.circuitBreaker.state === 'open').length;
-      document.getElementById('statCB').textContent = openCount > 0 ? openCount + ' ⚠️' : '✅ 正常';
+      document.getElementById('statCB').textContent = openCount > 0 ? openCount + ' 个熔断' : '正常';
     }
     if (bandwidth) {
-      document.getElementById('statBW').textContent = bandwidth.enabled ? '✅ 已开启' : '关闭';
+      document.getElementById('statBW').textContent = bandwidth.enabled ? '已开启' : '关闭';
     }
     if (server) {
       document.getElementById('statFailed').textContent = server.failedRequests || 0;
@@ -152,17 +295,21 @@
 
   function renderClientTable(clients) {
     const tbody = document.getElementById('clientTableBody');
+    if (!tbody) return;
     const search = (document.getElementById('searchInput').value || '').toLowerCase();
 
-    if (!clients || clients.length === 0) {
+    const showEmpty = (hint) => {
       tbody.innerHTML = `
         <tr>
-          <td colspan="17" class="no-data">
-            <div class="icon">🔌</div>
-            <div class="hint">等待客户端节点连接...</div>
+          <td colspan="${visibleColsCount()}" class="no-data">
+            <div class="empty-icon"><svg class="icon"><use href="#i-plug"/></svg></div>
+            <div class="hint">${hint}</div>
           </td>
-        </tr>
-      `;
+        </tr>`;
+    };
+
+    if (!clients || clients.length === 0) {
+      showEmpty('等待客户端节点连接...');
       return;
     }
 
@@ -180,17 +327,12 @@
     });
 
     if (filtered.length === 0) {
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="17" class="no-data">
-            <div class="hint">没有匹配的节点</div>
-          </td>
-        </tr>
-      `;
+      showEmpty('没有匹配的节点');
       return;
     }
 
     const now = Date.now();
+    const visibleKeys = COLUMNS.filter((c, i) => visibleCols[i]).map((c) => c.key);
     let html = '';
     for (const c of filtered) {
       const info = c.info || {};
@@ -217,34 +359,8 @@
       const cbState = cb.state || 'closed';
       const cbClass = cbState === 'open' ? ' class="cb-open-row"' : '';
 
-      html += `
-        <tr${cbClass}>
-          <td><span class="online-dot ${dotClass}"></span></td>
-          <td><span class="client-id" title="${escapeHtml(c.id)}">${escapeHtml(c.id.substring(0, 8))}...</span></td>
-          <td><span class="client-hostname">${escapeHtml(alias || info.hostname || '-')}</span></td>
-          <td><span class="client-ip">${escapeHtml(info.ip || info.localIp || '-')}</span></td>
-          <td>${escapeHtml(info.platform || '-')} ${info.arch ? '(' + escapeHtml(info.arch) + ')' : ''}</td>
-          <td class="${regionClass} cell-edit" title="点击编辑区域" onclick="window.editClientMeta('${c.id}','region')">${escapeHtml(effectiveRegion)}</td>
-          <td>${tagsHtml}</td>
-          <td class="client-alias cell-edit" title="点击编辑别名" onclick="window.editClientMeta('${c.id}','alias')">
-            ${alias ? escapeHtml(alias) : '<span class="dim">-</span>'}
-          </td>
-          <td class="client-notes cell-edit" title="点击编辑备注" onclick="window.editClientMeta('${c.id}','notes')">
-            ${notes ? escapeHtml(notes.substring(0, 30)) + (notes.length > 30 ? '...' : '') : '<span class="dim">-</span>'}
-          </td>
-          <td class="client-pending">${c.pendingRequestsCount}</td>
-          <td class="client-pending">${c.pendingTunnelsCount}</td>
-          <td class="traffic-cell" title="本次会话 — 上行 ${formatBytes(cs.bytesSent || 0)} / 下行 ${formatBytes(cs.bytesReceived || 0)}">${formatBytes(trafficTotal)}</td>
-          <td class="client-pending">${c.avgResponseTime || '-'}</td>
-          <td><span class="cb-badge ${cbState}">${cbState === 'open' ? '🔴 熔断' : cbState === 'half_open' ? '🟡 测试' : '🟢 正常'}</span></td>
-          <td class="time-cell" title="${new Date(c.connectedAt).toLocaleString()}">${formatDuration(connectedAgo)}</td>
-          <td class="time-cell" title="${new Date(c.lastSeen).toLocaleString()}">${formatDuration(lastSeenAgo)}</td>
-          <td>
-            <button class="btn btn-sm" onclick="window.editClientMeta('${c.id}')">编辑</button>
-            <button class="btn btn-danger btn-sm" onclick="window.kickClient('${c.id}')">断开</button>
-          </td>
-        </tr>
-      `;
+      const ctx = { info, alias, notes, effectiveRegion, regionClass, tagsHtml, cbState, cs, trafficTotal, dotClass, connectedAgo, lastSeenAgo };
+      html += `<tr${cbClass}>` + visibleKeys.map((k) => cellHtml(k, c, ctx)).join('') + '</tr>';
     }
     tbody.innerHTML = html;
   }
@@ -297,13 +413,110 @@
   // ===========================================================================
   // Actions
   // ===========================================================================
+  // ===========================================================================
+  // Header menu + generic confirm dialog
+  // ===========================================================================
+  window.toggleHeaderMenu = function (e) {
+    if (e) e.stopPropagation();
+    document.getElementById('headerMenu').classList.toggle('open');
+  };
+
+  window.closeHeaderMenu = function () {
+    document.getElementById('headerMenu').classList.remove('open');
+  };
+
+  window.headerMenuAction = function (action) {
+    closeHeaderMenu();
+    switch (action) {
+      case 'refresh':
+        refreshNow();
+        break;
+      case 'settings':
+        openSettingsModal();
+        break;
+      case 'broadcast':
+        showBroadcastModal();
+        break;
+      case 'kickall':
+        requestKickAll();
+        break;
+      case 'logout':
+        doLogout();
+        break;
+    }
+  };
+
+  // Generic confirm dialog (replaces window.confirm for destructive actions)
+  let confirmCb = null;
+  window.showConfirmDialog = function (opts) {
+    opts = opts || {};
+    document.getElementById('confirmTitle').innerHTML =
+      '<svg class="icon"><use href="#i-alert"/></svg> ' + escapeHtml(opts.title || '请确认操作');
+    document.getElementById('confirmMsg').textContent = opts.message || '';
+    const wrap = document.getElementById('confirmCheckWrap');
+    const check = document.getElementById('confirmCheck');
+    if (opts.requireCheck) {
+      wrap.style.display = 'flex';
+      document.getElementById('confirmCheckLabel').textContent = opts.checkLabel || '我了解该操作的影响';
+      check.checked = false;
+    } else {
+      wrap.style.display = 'none';
+    }
+    const okBtn = document.getElementById('confirmOkBtn');
+    okBtn.textContent = opts.okText || '确认';
+    okBtn.disabled = !!opts.requireCheck;
+    confirmCb = opts.onOk || null;
+    check.onchange = () => { okBtn.disabled = !check.checked; };
+    document.getElementById('confirmModal').classList.add('active');
+  };
+
+  window.hideConfirmModal = function () {
+    document.getElementById('confirmModal').classList.remove('active');
+    confirmCb = null;
+  };
+
+  window.confirmOk = function () {
+    const cb = confirmCb;
+    hideConfirmModal();
+    if (typeof cb === 'function') cb();
+  };
+
+  // ---------------------------------------------------------------------------
+  // Kick node (armed two-step from the edit modal)
+  // ---------------------------------------------------------------------------
+  let kickArmTimer = null;
+  function disarmKick() {
+    const btn = document.getElementById('kickClientBtn');
+    if (!btn) return;
+    btn.classList.remove('armed');
+    btn.innerHTML = '断开该节点';
+    if (kickArmTimer) { clearTimeout(kickArmTimer); kickArmTimer = null; }
+  }
+
+  window.armKickClient = function () {
+    const id = document.getElementById('editClientId').value;
+    if (!id) return;
+    const btn = document.getElementById('kickClientBtn');
+    if (!btn.classList.contains('armed')) {
+      // First click arms the button; second click executes
+      btn.classList.add('armed');
+      btn.innerHTML = '再次点击确认断开（5 秒后取消）';
+      if (kickArmTimer) clearTimeout(kickArmTimer);
+      kickArmTimer = setTimeout(disarmKick, 5000);
+      return;
+    }
+    disarmKick();
+    kickClient(id);
+  };
+
   window.kickClient = function (clientId) {
-    if (!confirm('确定要断开节点 ' + clientId.substring(0, 8) + '... 吗？')) return;
     fetchWithAuth('/api/kick/' + clientId, { method: 'POST' })
       .then((r) => r.json())
       .then((d) => {
         if (d.success) {
           showToast('已断开节点', 'success');
+          hideEditMetaModal();
+          refreshNow();
         } else {
           showToast('操作失败: ' + (d.message || ''), 'error');
         }
@@ -311,13 +524,26 @@
       .catch((err) => showToast('请求失败: ' + err.message, 'error'));
   };
 
-  window.kickAll = function () {
-    if (!confirm('确定要断开所有在线节点吗？')) return;
+  // Kick all nodes - triggered from the header menu, confirmed via dialog
+  window.requestKickAll = function () {
     const ids = lastData && lastData.clients ? lastData.clients.map((c) => c.id) : [];
     if (ids.length === 0) {
       showToast('没有在线节点', 'info');
       return;
     }
+    showConfirmDialog({
+      title: '断开全部节点',
+      message: `将断开全部 ${ids.length} 个在线节点。所有节点上的进行中请求会被终止，客户端会自动重连。`,
+      requireCheck: true,
+      checkLabel: '我了解该操作会中断全部节点的活动请求',
+      okText: '确认断开全部',
+      onOk: kickAllConfirmed,
+    });
+  };
+
+  window.kickAllConfirmed = function () {
+    const ids = lastData && lastData.clients ? lastData.clients.map((c) => c.id) : [];
+    if (ids.length === 0) return;
     let done = 0;
     let failed = 0;
     for (const id of ids) {
@@ -327,13 +553,15 @@
           if (d.success) done++;
           else failed++;
           if (done + failed === ids.length) {
-            showToast(`已断开 ${done} 个节点${failed ? ', ' + failed + ' 个失败' : ''}`, 'success');
+            showToast(`已断开 ${done} 个节点${failed ? ', ' + failed + ' 个失败' : ''}`, failed ? 'error' : 'success');
+            refreshNow();
           }
         })
         .catch(() => {
           failed++;
           if (done + failed === ids.length) {
-            showToast(`已断开 ${done} 个节点${failed ? ', ' + failed + ' 个失败' : ''}`, done > 0 ? 'success' : 'error');
+            showToast(`已断开 ${done} 个节点${failed ? ', ' + failed + ' 个失败' : ''}`, done > 0 ? 'error' : 'error');
+            refreshNow();
           }
         });
     }
@@ -348,6 +576,7 @@
     document.getElementById('editNotes').value = client.notes || '';
     document.getElementById('editRegion').value = client.region || client.info?.region || '';
     document.getElementById('editMetaModal').classList.add('active');
+    disarmKick();
     if (focusField) {
       const el = document.getElementById('edit' + focusField.charAt(0).toUpperCase() + focusField.slice(1));
       if (el) { el.focus(); el.select(); }
@@ -366,7 +595,7 @@
     function done() {
       if (pending === 0) {
         showToast('保存完成' + (failed ? ', ' + failed + ' 个失败' : ''), failed > 0 ? 'error' : 'success');
-        document.getElementById('editMetaModal').classList.remove('active');
+        hideEditMetaModal();
         refreshNow();
       }
     }
@@ -395,6 +624,7 @@
 
   window.hideEditMetaModal = function () {
     document.getElementById('editMetaModal').classList.remove('active');
+    disarmKick();
   };
 
   window.refreshNow = function () {
@@ -508,7 +738,7 @@
     const tokenOk = ro.auth && ro.auth.token_configured;
     const roToken = document.getElementById('roToken');
     if (roToken) {
-      roToken.textContent = tokenOk ? '已设置为非默认值' : '仍为默认值 node-proxy-default-token ⚠';
+      roToken.textContent = tokenOk ? '已设置为非默认值' : '仍为默认值 node-proxy-default-token';
       roToken.className = tokenOk ? 'ro-ok' : 'ro-warn';
     }
   }
@@ -586,16 +816,29 @@
   };
 
   window.resetSettingsGroup = function (group) {
-    if (!confirm('确定将该组恢复为 config.yaml 默认值？')) return;
-    fetchWithAuth('/api/v1/settings/' + group + '/reset', { method: 'POST' })
-      .then((r) => r.json())
-      .then((d) => {
-        if (!d.success) return showToast('恢复失败: ' + (d.message || ''), 'error');
-        showToast('已恢复默认值', 'success');
-        loadSettings();
-        refreshNow();
-      })
-      .catch((err) => showToast('请求失败: ' + err.message, 'error'));
+    const names = {
+      routing: '路由策略',
+      cb: '熔断器',
+      bandwidth: '带宽限制',
+      client: '客户端超时/并发',
+      cache: '缓存 TTL',
+    };
+    showConfirmDialog({
+      title: '恢复默认设置',
+      message: `确定将该组（${names[group] || group}）恢复为 config.yaml 默认值？`,
+      okText: '恢复默认',
+      onOk: () => {
+        fetchWithAuth('/api/v1/settings/' + group + '/reset', { method: 'POST' })
+          .then((r) => r.json())
+          .then((d) => {
+            if (!d.success) return showToast('恢复失败: ' + (d.message || ''), 'error');
+            showToast('已恢复默认值', 'success');
+            loadSettings();
+            refreshNow();
+          })
+          .catch((err) => showToast('请求失败: ' + err.message, 'error'));
+      },
+    });
   };
 
   // ===========================================================================
@@ -634,12 +877,26 @@
       .catch((err) => showToast('请求失败: ' + err.message, 'error'));
   };
 
-  // Close modal on overlay click
+  // Close popovers when clicking outside them
   document.addEventListener('click', function (e) {
+    if (!e.target.closest('#headerMenuWrap')) closeHeaderMenu();
+    if (!e.target.closest('#colPicker')) {
+      const panel = document.getElementById('colPanel');
+      if (panel) panel.classList.remove('open');
+    }
     if (e.target.classList.contains('modal-overlay')) {
       hideBroadcastModal();
       hideEditMetaModal();
       hideSettingsModal();
+      hideConfirmModal();
+    }
+  });
+
+  // Column picker checkboxes
+  document.addEventListener('change', function (e) {
+    const el = e.target;
+    if (el && el.dataset && el.dataset.colidx !== undefined) {
+      setColVisible(parseInt(el.dataset.colidx, 10), el.checked);
     }
   });
 
@@ -649,6 +906,10 @@
       hideBroadcastModal();
       hideEditMetaModal();
       hideSettingsModal();
+      hideConfirmModal();
+      closeHeaderMenu();
+      const panel = document.getElementById('colPanel');
+      if (panel) panel.classList.remove('open');
     }
   });
 
@@ -771,6 +1032,9 @@
   // ===========================================================================
   // Init
   // ===========================================================================
+  // Render table header from the column config
+  renderTableHead();
+
   // Initial load
   refreshNow();
 
