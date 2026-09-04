@@ -5,6 +5,7 @@
 
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const cookieParser = require('cookie-parser');
 
 function createWebServer(clientManager, authManager, config, logger, metricsManager, domainRouter, cache, pluginManager, aclManager, auditLogger, autoUpdater, settingsManager) {
@@ -19,6 +20,15 @@ function createWebServer(clientManager, authManager, config, logger, metricsMana
 
   // Static files
   app.use(express.static(path.join(__dirname, '..', 'public')));
+
+  // Vue management panel (built from server/web via `npm run build`).
+  // Assets are served unauthenticated (like /public); the HTML entry itself
+  // is protected by the auth middleware below.
+  const webDist = path.join(__dirname, '..', 'web', 'dist');
+  const webIndex = path.join(webDist, 'index.html');
+  if (fs.existsSync(webIndex)) {
+    app.use('/app/assets', express.static(path.join(webDist, 'assets'), { index: false, maxAge: '1h' }));
+  }
 
   // ===========================================================================
   // Auth Routes
@@ -48,11 +58,21 @@ function createWebServer(clientManager, authManager, config, logger, metricsMana
   app.use(authManager.webAuthMiddleware());
 
   // ===========================================================================
-  // Dashboard
+  // Vue management panel (auth-protected; the single panel entry point)
   // ===========================================================================
   app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, '..', 'views', 'dashboard.html'));
+    if (fs.existsSync(webIndex)) return res.redirect('/app/');
+    res
+      .status(503)
+      .type('text/plain')
+      .send('管理面板尚未构建。请在 server/web 目录执行 npm install && npm run build 后重启。');
   });
+
+  if (fs.existsSync(webIndex)) {
+    app.get(['/app', '/app/*'], (req, res) => {
+      res.sendFile(webIndex);
+    });
+  }
 
   // ===========================================================================
   // Metrics endpoint

@@ -38,7 +38,7 @@
         if (!localStorage.getItem('np_token')) {
           localStorage.setItem('np_token', token);
         }
-        window.location.href = '/';
+        window.location.href = '/app/';
       } else {
         clearToken();
       }
@@ -69,7 +69,7 @@
       if (data.success && data.token) {
         localStorage.setItem('np_token', data.token);
         document.cookie = 'token=' + data.token + '; path=/; max-age=86400';
-        window.location.href = data.redirect || '/';
+        window.location.href = data.redirect || '/app/';
       } else {
         errorMsg.textContent = data.message || '登录失败，请检查用户名和密码';
         btn.disabled = false;
