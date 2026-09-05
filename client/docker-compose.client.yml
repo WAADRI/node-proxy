@@ -7,11 +7,13 @@
 # 常用环境变量覆盖：
 #   SERVER_URL=ws://你的服务器IP:3000/ws   （必改）
 #   AUTH_TOKEN=my-secret-token            （必改，需与服务端一致）
+#   CLIENT_ID=np-node-beijing-01          （可选：固定节点 ID，便于面板识别；
+#                                          不设置则由客户端自动生成并持久化）
 #   TAGS=region:cn,isp:unicom             （节点标签，逗号分隔）
 #   REGION=cn                             （区域标识）
 #
 # 示例：
-#   SERVER_URL=ws://1.2.3.4:3000/ws AUTH_TOKEN=secret TAGS=region:cn \
+#   SERVER_URL=ws://1.2.3.4:3000/ws AUTH_TOKEN=secret CLIENT_ID=np-node-01 TAGS=region:cn \
 #     docker compose -f docker-compose.client.yml up -d
 # =============================================================================
 
@@ -28,6 +30,7 @@ services:
       - SERVER_URL=${SERVER_URL:-ws://127.0.0.1:3000/ws}
       - AUTH_TOKEN=${AUTH_TOKEN:-node-proxy-default-token}
       # 可选：节点信息
+      - CLIENT_ID=${CLIENT_ID:-}
       - REGION=${REGION:-unknown}
       - TAGS=${TAGS:-}
       # 可选：连接参数
