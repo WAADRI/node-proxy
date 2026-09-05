@@ -1,0 +1,117 @@
+# =============================================================================
+# 工作流：构建并发布客户端二进制（单文件、免安装 Node.js）
+#   - 打包器：Bun（bun build --compile，内嵌运行时与依赖）
+#   - 触发：
+#       * 推送到 main：构建三平台二进制并滚动更新 dev 发布（每次提交自动刷新）
+#       * pull_request：仅做三平台构建校验，不发布
+#       * workflow_dispatch：手动重建一次
+#   - 版本：项目不做语义化版本号，统一用 dev
+#     （产物名 node-proxy-client-dev-<平台>，附件每次覆盖更新）
+#   - 平台：Windows x64 / Linux x64 / Linux arm64（Bun 支持交叉编译）
+#   - 下载：GitHub Releases 的 Latest 发布即最新 dev 构建
+# =============================================================================
+name: 构建并发布客户端二进制
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支/PR 的多次触发只保留最后一次（三平台构建耗时，取消过期任务）
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 构建 ${{ matrix.id }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: win-x64
+            target: bun-windows-x64
+            ext: .exe
+          - id: linux-x64
+            target: bun-linux-x64
+            ext: ''
+          - id: linux-arm64
+            target: bun-linux-arm64
+            ext: ''
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: 安装依赖（使用已提交的 bun.lock）
+        working-directory: client
+        run: bun install --frozen-lockfile --no-progress
+
+      - name: 编译单文件二进制（版本固定为 dev）
+        working-directory: client
+        run: |
+          mkdir -p dist
+          bun build --compile \
+            --target=${{ matrix.target }} \
+            --outfile dist/node-proxy-client-dev-${{ matrix.id }}${{ matrix.ext }} \
+            client.js
+          ls -lh dist/
+
+      - name: 上传构建产物（供发布作业汇总）
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-bin-${{ matrix.id }}
+          path: client/dist/node-proxy-client-dev-*${{ matrix.ext }}
+          if-no-files-found: error
+
+  release:
+    name: 更新 dev 发布
+    needs: build
+    # PR 只保留上面的构建校验；推送到 main 或手动触发才更新发布
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 汇总各平台产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: client-bin-*
+          merge-multiple: true
+          path: bins
+
+      - name: 生成发布说明
+        run: |
+          cat > notes.md <<'EOF'
+          持续更新的 dev 构建：每次推送到 main 都会自动重建并覆盖本发布下的附件，无需人工打版本号。
+
+          本次构建：
+          - 提交：${{ github.sha }}
+          - 触发：${{ github.event_name }}
+          - 产物：node-proxy-client-dev-win-x64.exe / node-proxy-client-dev-linux-x64 / node-proxy-client-dev-linux-arm64
+
+          配置方式与 Node.js 版一致：将 config.yaml 放到可执行文件旁，或用 SERVER_URL / AUTH_TOKEN / CLIENT_ID 环境变量启动。
+          EOF
+          echo "- 构建时间：$(date -u '+%Y-%m-%d %H:%M UTC')" >> notes.md
+
+      - name: 更新 GitHub Release（tag=dev，滚动覆盖附件）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="dev"
+          # 首次运行会创建指向本次提交的 tag=dev Release；已存在时忽略报错，交给下方 edit/upload 刷新
+          gh release create "$TAG" \
+            --title "dev 自动构建" \
+            --notes-file notes.md \
+            --target "${{ github.sha }}" >/dev/null 2>&1 || true
+          # 已存在时刷新说明，让发布页始终展示最新一次构建的 commit
+          gh release edit "$TAG" --notes-file notes.md >/dev/null 2>&1 || true
+          # --clobber：覆盖同名旧附件，保证用户下载到的始终是最新构建
+          gh release upload "$TAG" bins/* --clobber
