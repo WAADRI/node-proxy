@@ -80,6 +80,8 @@ cd client && npm install
 SERVER_URL='ws://服务器:3000/ws' AUTH_TOKEN='你的令牌' TAGS='region:cn' npm start
 ```
 
+也支持改文件方式：`cp client/config.yaml.example config.yaml` 后填写即可（与二进制版一致，见下方模板说明）。
+
 **免安装二进制版**（无需 Node.js 环境）：本仓库不做语义化版本号，二进制为**持续更新的 `dev` 构建**——每次推送到 `main` 都会删除旧发布并用本次构建重建 [GitHub Releases](https://github.com/WAADRI/node-proxy/releases) 的 Latest。按平台下载 `client-*`（Windows x64 / Linux x64 / Linux arm64），可用下面固定链接直取最新构建：
 
 ```bash
@@ -91,10 +93,10 @@ curl -L -o node-proxy-client-linux-x64 https://github.com/WAADRI/node-proxy/rele
 curl -L -o node-proxy-client-linux-arm64 https://github.com/WAADRI/node-proxy/releases/latest/download/client-linux-arm64
 ```
 
-在文件旁放一个 `config.yaml` 或直接用环境变量启动（两者均与 Node.js 版完全一致）：
+在文件旁放一个 `config.yaml` 或直接用环境变量启动（两者均与 Node.js 版完全一致）。`config.yaml` 可直接从仓库的 `client/config.yaml.example` 复制后填写：
 
 ```bash
-# 方式一：旁边放 config.yaml（server_url / auth_token / tags / region 等字段同 client/config.yaml）
+# 方式一：旁边放 config.yaml（server_url / auth_token / tags / region 等字段见模板注释）
 ./node-proxy-client-linux-x64
 
 # 方式二：环境变量

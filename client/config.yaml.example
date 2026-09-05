@@ -1,0 +1,53 @@
+# =============================================================================
+# Node-Proxy Client 配置模板
+# =============================================================================
+# 使用方法：
+#   1) 复制本文件为 config.yaml：   cp config.yaml.example config.yaml
+#   2) 按需修改下面字段后保存即可。
+#
+# 放置位置（程序会按顺序查找第一个存在的 config.yaml / config.yml）：
+#   - 源码运行：放在 client/ 目录（与 client.js 同目录或运行目录）
+#   - 免安装二进制：把 config.yaml 放到可执行文件旁边，并与其同目录运行
+#   - Docker（docker compose）：把宿主 config.yaml 挂载到容器 /app/config.yaml
+#   - 也可用 CONFIG_PATH 环境变量显式指定配置文件的绝对路径
+#
+# 只有 server_url / auth_token 必填；其余字段省略时使用内置默认值。
+# 优先级：环境变量 > 配置文件 > 内置默认值。
+# 环境变量方式无需本文件，例如：
+#   SERVER_URL=ws://服务器:3000/ws AUTH_TOKEN=令牌 ./client-linux-x64
+
+# ---- 必填 ----------------------------------------------------------------
+# 服务端 WebSocket 地址（服务端默认监听 ws://<ip>:3000/ws）
+server_url: "ws://你的服务器IP或域名:3000/ws"
+# 认证令牌，需与服务端 config.yaml 的 auth.token 保持一致
+auth_token: "你的随机令牌"
+
+# ---- 连接参数（可选，默认值与内置默认一致）----------------------------------
+# 断线后首次重连等待（毫秒）
+# reconnect_delay: 3000
+# 重连等待上限（毫秒，指数退避封顶）
+# max_reconnect_delay: 30000
+# 心跳间隔（毫秒）
+# heartbeat_interval: 15000
+# 单个 HTTP 请求超时（毫秒）
+# request_timeout: 30000
+# TCP 隧道建立超时（毫秒）
+# tunnel_timeout: 30000
+# 单节点最大并发请求数
+# max_concurrent_requests: 100
+
+# ---- 节点信息（可选，用于服务端面板与按标签路由/ACL）-------------------------
+# 区域标识（亦可用环境变量 REGION / NODE_REGION 覆盖）
+# region: cn
+# 节点标签，逗号分隔，如 "region:cn,isp:unicom"
+# tags: "region:cn,isp:unicom"
+
+# ---- 安全（可选）-----------------------------------------------------------
+# 服务端为内网自签证书时是否校验证书（false = 不校验，便于内网部署）
+# tls_reject_unauthorized: false
+
+# ---- 节点固定 ID（仅环境变量，本文件不支持）----------------------------------
+# 需要固定节点 ID（避免重启后 ID 变化、服务端面板保留别名/备注）时设置：
+#   CLIENT_ID=my-node-01
+# 或指定 ID 持久化文件路径：
+#   CLIENT_ID_FILE=/etc/node-proxy-client-id
