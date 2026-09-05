@@ -2,12 +2,12 @@
 # 工作流：构建并发布客户端二进制（单文件、免安装 Node.js）
 #   - 打包器：Bun（bun build --compile，内嵌运行时与依赖）
 #   - 触发：
-#       * 推送到 main：构建三平台二进制并滚动更新 dev 发布（每次提交自动刷新）
+#       * 推送到 main：构建三平台二进制，删除旧的 dev 发布并重建（tag 始终指向本次提交）
 #       * pull_request：仅做三平台构建校验，不发布
 #       * workflow_dispatch：手动重建一次
-#   - 版本：项目不做语义化版本号，统一用 dev
-#     （产物名 node-proxy-client-dev-<平台>，附件每次覆盖更新）
+#   - 版本：项目不做语义化版本号，发布统一挂到 dev（产物名 client-<平台>）
 #   - 平台：Windows x64 / Linux x64 / Linux arm64（Bun 支持交叉编译）
+#   - 产物：client-win-x64.exe / client-linux-x64 / client-linux-arm64
 #   - 下载：GitHub Releases 的 Latest 发布即最新 dev 构建
 # =============================================================================
 name: 构建并发布客户端二进制
@@ -54,13 +54,13 @@ jobs:
         working-directory: client
         run: bun install --frozen-lockfile --no-progress
 
-      - name: 编译单文件二进制（版本固定为 dev）
+      - name: 编译单文件二进制
         working-directory: client
         run: |
           mkdir -p dist
           bun build --compile \
             --target=${{ matrix.target }} \
-            --outfile dist/node-proxy-client-dev-${{ matrix.id }}${{ matrix.ext }} \
+            --outfile dist/client-${{ matrix.id }}${{ matrix.ext }} \
             client.js
           ls -lh dist/
 
@@ -68,13 +68,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: client-bin-${{ matrix.id }}
-          path: client/dist/node-proxy-client-dev-*${{ matrix.ext }}
+          path: client/dist/client-*${{ matrix.ext }}
           if-no-files-found: error
 
   release:
-    name: 更新 dev 发布
+    name: 重建 dev 发布
     needs: build
-    # PR 只保留上面的构建校验；推送到 main 或手动触发才更新发布
+    # PR 只保留上面的构建校验；推送到 main 或手动触发才重建发布
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -94,28 +94,27 @@ jobs:
       - name: 生成发布说明
         run: |
           cat > notes.md <<'EOF'
-          持续更新的 dev 构建：每次推送到 main 都会自动重建并覆盖本发布下的附件，无需人工打版本号。
+          持续更新的 dev 构建：每次推送到 main 都会删除旧发布并用本次构建重建，无需人工打版本号。
 
           本次构建：
           - 提交：${{ github.sha }}
           - 触发：${{ github.event_name }}
-          - 产物：node-proxy-client-dev-win-x64.exe / node-proxy-client-dev-linux-x64 / node-proxy-client-dev-linux-arm64
+          - 产物：client-win-x64.exe / client-linux-x64 / client-linux-arm64
 
           配置方式与 Node.js 版一致：将 config.yaml 放到可执行文件旁，或用 SERVER_URL / AUTH_TOKEN / CLIENT_ID 环境变量启动。
           EOF
           echo "- 构建时间：$(date -u '+%Y-%m-%d %H:%M UTC')" >> notes.md
 
-      - name: 更新 GitHub Release（tag=dev，滚动覆盖附件）
+      - name: 重建 GitHub Release（删除旧的 tag=dev 并以本次提交重建）
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="dev"
-          # 首次运行会创建指向本次提交的 tag=dev Release；已存在时忽略报错，交给下方 edit/upload 刷新
+          # 删除旧发布及 dev 标签（不存在时忽略报错），使 tag 能随 --target 指向本次提交
+          gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
+          # 重建：tag=dev 指向本次提交，并直接附带三平台二进制
           gh release create "$TAG" \
             --title "dev 自动构建" \
             --notes-file notes.md \
-            --target "${{ github.sha }}" >/dev/null 2>&1 || true
-          # 已存在时刷新说明，让发布页始终展示最新一次构建的 commit
-          gh release edit "$TAG" --notes-file notes.md >/dev/null 2>&1 || true
-          # --clobber：覆盖同名旧附件，保证用户下载到的始终是最新构建
-          gh release upload "$TAG" bins/* --clobber
+            --target "${{ github.sha }}" \
+            bins/*

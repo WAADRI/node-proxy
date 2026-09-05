@@ -80,15 +80,15 @@ cd client && npm install
 SERVER_URL='ws://服务器:3000/ws' AUTH_TOKEN='你的令牌' TAGS='region:cn' npm start
 ```
 
-**免安装二进制版**（无需 Node.js 环境）：本仓库不做语义化版本号，二进制为**持续更新的 `dev` 构建**——每次推送到 `main` 都会自动重建并覆盖 [GitHub Releases](https://github.com/WAADRI/node-proxy/releases) 的 Latest 附件。按平台下载 `node-proxy-client-dev-*`（Windows x64 / Linux x64 / Linux arm64），可用下面固定链接直取最新构建：
+**免安装二进制版**（无需 Node.js 环境）：本仓库不做语义化版本号，二进制为**持续更新的 `dev` 构建**——每次推送到 `main` 都会删除旧发布并用本次构建重建 [GitHub Releases](https://github.com/WAADRI/node-proxy/releases) 的 Latest。按平台下载 `client-*`（Windows x64 / Linux x64 / Linux arm64），可用下面固定链接直取最新构建：
 
 ```bash
 # Windows x64
-curl -L -o node-proxy-client.exe https://github.com/WAADRI/node-proxy/releases/latest/download/node-proxy-client-dev-win-x64.exe
+curl -L -o node-proxy-client.exe https://github.com/WAADRI/node-proxy/releases/latest/download/client-win-x64.exe
 # Linux x64
-curl -L -o node-proxy-client-linux-x64 https://github.com/WAADRI/node-proxy/releases/latest/download/node-proxy-client-dev-linux-x64
+curl -L -o node-proxy-client-linux-x64 https://github.com/WAADRI/node-proxy/releases/latest/download/client-linux-x64
 # Linux arm64
-curl -L -o node-proxy-client-linux-arm64 https://github.com/WAADRI/node-proxy/releases/latest/download/node-proxy-client-dev-linux-arm64
+curl -L -o node-proxy-client-linux-arm64 https://github.com/WAADRI/node-proxy/releases/latest/download/client-linux-arm64
 ```
 
 在文件旁放一个 `config.yaml` 或直接用环境变量启动（两者均与 Node.js 版完全一致）：
@@ -101,7 +101,7 @@ curl -L -o node-proxy-client-linux-arm64 https://github.com/WAADRI/node-proxy/re
 SERVER_URL='ws://服务器:3000/ws' AUTH_TOKEN='你的令牌' TAGS='region:cn' ./node-proxy-client-linux-x64
 ```
 
-Windows 双击或命令行直接运行即可；注册成功同样会打印 `Registered with ID: ...`，可作为 Windows 服务（WinSW）的程序路径。因为每次 main 提交都会刷新附件，机器上已下载的旧版本可随时重新下载覆盖更新。
+Windows 双击或命令行直接运行即可；注册成功同样会打印 `Registered with ID: ...`，可作为 Windows 服务（WinSW）的程序路径。因为每次 main 提交都会重建发布，机器上已下载的旧版本可随时重新下载覆盖更新。
 
 启动后日志出现 `Registered with ID: ...` 即接入成功，随后可在服务端面板的节点列表看到该节点。如需固定节点 ID（避免容器重建后 ID 变化），可设置 `CLIENT_ID` 环境变量。
 
