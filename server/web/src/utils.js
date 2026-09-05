@@ -30,9 +30,9 @@ export function formatUptime(seconds) {
   if (s < 60) return s + ' 秒';
   const m = Math.floor(s / 60);
   if (m < 60) return m + ' 分钟';
-  const h = Math.floor(m / 3600);
+  const h = Math.floor(m / 60);
   if (h < 24) return h + ' 小时';
-  return Math.floor(h / 86400) + ' 天 ' + Math.floor((m % 3600) / 60) + ' 小时';
+  return Math.floor(h / 24) + ' 天 ' + (h % 24) + ' 小时';
 }
 
 export function timeStr(ts) {
