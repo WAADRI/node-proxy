@@ -38,7 +38,7 @@ services:
       - TUNNEL_TIMEOUT=${TUNNEL_TIMEOUT:-30000}
       - MAX_CONCURRENT_REQUESTS=${MAX_CONCURRENT_REQUESTS:-100}
       - TLS_REJECT_UNAUTHORIZED=${TLS_REJECT_UNAUTHORIZED:-false}
-    # 可选：挂载客户端配置文件（config.yaml）
+    # 可选：挂载客户端配置文件（config.yaml，模板见同目录 config.yaml.example）
     volumes:
       - ./config.yaml:/app/config.yaml:ro
     logging:
