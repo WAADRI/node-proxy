@@ -90,6 +90,15 @@ class NetworkTestManager {
       error: null,
       _watchdog: null,
     };
+    // Snapshot display names (alias > hostname > id) at dispatch time
+    task.clientLabels = {};
+    if (mode === 'nodes') {
+      for (const clientId of task.clients) {
+        task.clientLabels[clientId] = this.getClientLabel ? this.getClientLabel(clientId) : clientId;
+      }
+    } else {
+      task.clientLabels.server = '服务器本机';
+    }
     this.tasks.set(id, task);
 
     if (mode === 'nodes') {
@@ -145,7 +154,7 @@ class NetworkTestManager {
   onClientProgress(clientId, msg) {
     const task = this.tasks.get(msg.taskId);
     if (!task || task.state !== 'running') return;
-    const clientLabel = this.getClientLabel ? this.getClientLabel(clientId) : clientId;
+    const clientLabel = this._labelOf(task, clientId);
     task.results.push({
       clientId,
       clientLabel,
@@ -188,7 +197,7 @@ class NetworkTestManager {
     const reported = new Set(
       task.results.filter((r) => r.clientId === clientId).map((r) => r.index)
     );
-    const clientLabel = this.getClientLabel ? this.getClientLabel(clientId) : clientId;
+    const clientLabel = this._labelOf(task, clientId);
     for (let i = 0; i < task.targets.length; i++) {
       if (reported.has(i)) continue;
       task.results.push({
@@ -204,6 +213,12 @@ class NetworkTestManager {
       task.state = 'done';
       if (task._watchdog) clearTimeout(task._watchdog);
     }
+  }
+
+  // Resolve display name: prefer the snapshot taken at dispatch time.
+  _labelOf(task, clientId) {
+    if (task.clientLabels && task.clientLabels[clientId]) return task.clientLabels[clientId];
+    return this.getClientLabel ? this.getClientLabel(clientId) : clientId;
   }
 
   // One local (server) test at a time (anti-abuse: sequential work only)

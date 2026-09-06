@@ -85,7 +85,9 @@ clientManager.netTest = new NetworkTestManager(logger);
 clientManager.netTest.listClientIds = () => Array.from(clientManager.clients.keys());
 clientManager.netTest.getClientLabel = (id) => {
   const c = clientManager.getById(id);
-  if (c && c.info && c.info.hostname) return c.info.hostname;
+  if (!c) return id;
+  if (c.alias) return c.alias;
+  if (c.info && c.info.hostname) return c.info.hostname;
   return id;
 };
 clientManager.netTest.sendToClient = (clientId, obj) => {
