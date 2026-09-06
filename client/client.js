@@ -16,6 +16,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { StreamMux } = require('./lib/stream-mux');
+const { ClientNetTest } = require('./lib/network-test');
+const netTestRunner = new ClientNetTest({ warn: (m) => log && log('warn', m), info: (m) => log && log('info', m), error: (m) => log && log('error', m) });
+let netTestBusy = false;
 
 // =============================================================================
 // Configuration
@@ -325,6 +328,10 @@ function handleMessage(msg) {
       log('info', `[Broadcast] ${msg.message}`);
       break;
 
+    case 'net_test':
+      handleNetTest(msg);
+      break;
+
     case 'error':
       log('warn', 'Server error: ' + (msg.message || ''));
       break;
@@ -332,6 +339,45 @@ function handleMessage(msg) {
     default:
       log('debug', 'Unknown message type: ' + msg.type);
   }
+}
+
+// =============================================================================
+// Network test task (issue #31): server asks THIS node to run tests locally
+// =============================================================================
+function safeSend(obj) {
+  try {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  } catch (_) {}
+}
+
+function handleNetTest(msg) {
+  const { taskId, payload } = msg || {};
+  const targets = payload && Array.isArray(payload.targets) ? payload.targets.filter(Boolean) : [];
+  if (!taskId || !payload || !targets.length) {
+    return safeSend({ type: 'net_test_done', taskId, error: 'invalid task payload' });
+  }
+  if (netTestBusy) {
+    return safeSend({ type: 'net_test_done', taskId, error: '节点忙：已有测试任务在执行' });
+  }
+  netTestBusy = true;
+  log('info', `Net test started: ${payload.type} x ${targets.length} targets (${taskId})`);
+  Promise.resolve()
+    .then(() =>
+      netTestRunner.run(payload.type, targets, payload.options || {}, (r) => {
+        safeSend(Object.assign({ type: 'net_test_progress', taskId }, r));
+      })
+    )
+    .then(() => {
+      log('info', `Net test done: ${taskId}`);
+      safeSend({ type: 'net_test_done', taskId });
+    })
+    .catch((err) => {
+      log('error', `Net test failed: ${err.message}`);
+      safeSend({ type: 'net_test_done', taskId, error: err.message || String(err) });
+    })
+    .finally(() => {
+      netTestBusy = false;
+    });
 }
 
 // =============================================================================

@@ -73,7 +73,10 @@ export const fetchRequestLogs = (limit = 100) =>
 
 // --- Network test toolkit (issue #31) ------------------------------------
 export const fetchNetworkTestTypes = () => apiFetch('/api/v1/network-test/types');
-export const startNetworkTest = (type, targets, options) =>
-  apiFetch('/api/v1/network-test', { method: 'POST', body: { type, targets, options } });
+export const startNetworkTest = (type, targets, options, clients) => {
+  const body = { type, targets, options };
+  if (clients !== undefined) body.clients = clients;
+  return apiFetch('/api/v1/network-test', { method: 'POST', body });
+};
 export const getNetworkTestTask = (taskId) =>
   apiFetch('/api/v1/network-test/' + encodeURIComponent(taskId));

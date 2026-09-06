@@ -82,6 +82,26 @@ clientManager.pluginManager = pluginManager;
 clientManager.requestLog = new LogHub(logger);
 // Network testing toolkit (issue #31) - ping / tcping / http / dns / traceroute
 clientManager.netTest = new NetworkTestManager(logger);
+clientManager.netTest.listClientIds = () => Array.from(clientManager.clients.keys());
+clientManager.netTest.getClientLabel = (id) => {
+  const c = clientManager.getById(id);
+  if (c && c.info && c.info.hostname) return c.info.hostname;
+  return id;
+};
+clientManager.netTest.sendToClient = (clientId, obj) => {
+  const c = clientManager.getById(clientId);
+  if (c && c.ws && c.ws.readyState === 1) {
+    try {
+      c.ws.send(JSON.stringify(obj));
+      return true;
+    } catch (_) {}
+  }
+  return false;
+};
+// If a running node test loses its node, mark the missing targets failed.
+clientManager.onChange(() => {
+  clientManager.netTest.onClientsChanged((id) => !!clientManager.getById(id));
+});
 
 // Load persisted routing strategy & other runtime settings.
 // Storage init is async (sql.js) - wait for it before restoring overrides.
