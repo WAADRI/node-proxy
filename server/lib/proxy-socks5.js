@@ -36,6 +36,12 @@ function createSocks5Proxy(clientManager, authManager, config, logger, pluginMan
     }
 
     socket.on('data', (data) => {
+      // Handshake complete: this parser is done. Tunnel/UDP traffic is
+      // forwarded by ws-server listeners; never buffer or re-parse it here,
+      // otherwise every chunk would be appended to `bufs` and re-concatenated
+      // (memory grows with traffic, O(n^2) copies) — see issue #33.
+      if (state === 'tunnel' || state === 'udp') return;
+
       bufs.push(data);
       bufLen += data.length;
       const buf = Buffer.concat(bufs, bufLen);
