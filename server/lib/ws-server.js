@@ -305,6 +305,30 @@ function recordTunnelLog(clientManager, p) {
   } catch (_) {}
 }
 
+// Arm an idle reclaimer for an established tunnel: when no data flows in
+// either direction for `client.tunnel_idle_timeout` ms, the tunnel is closed
+// so orphaned tunnels (e.g. after a client process is killed without a FIN
+// reaching us) do not pile up on the panel. p._touchIdle() resets the timer
+// on traffic; the socket 'close' handler runs the normal cleanup/logging.
+function armTunnelIdle(clientManager, p, socket) {
+  const ms =
+    (clientManager.config && clientManager.config.client && clientManager.config.client.tunnel_idle_timeout) || 0;
+  if (!(ms > 0)) {
+    p._touchIdle = null;
+    return;
+  }
+  p._touchIdle = () => {
+    if (p._idleTimer) clearTimeout(p._idleTimer);
+    p._idleTimer = setTimeout(() => {
+      p._idleTimer = null;
+      if (socket && !socket.destroyed) {
+        try { socket.end(); } catch (_) {}
+      }
+    }, ms);
+  };
+  p._touchIdle();
+}
+
 function handleTunnelReady(clientManager, stream, logger) {
   const headers = stream.headers || {};
   const msgId = headers.id || stream.id;
@@ -331,6 +355,7 @@ function handleTunnelReady(clientManager, stream, logger) {
 
   // Forward tunnel data through the stream
   socket.on('data', (data) => {
+    if (p._touchIdle) p._touchIdle();
     if (stream.state !== 'closed' && stream.state !== 'half_closed_local') {
       stream.sendData(data);
       clientManager.trackBytes(client?.id, data.length, 0);
@@ -338,6 +363,7 @@ function handleTunnelReady(clientManager, stream, logger) {
   });
 
   socket.on('close', () => {
+    if (p._idleTimer) clearTimeout(p._idleTimer);
     recordTunnelLog(clientManager, p);
     stream.close();
     clientManager.pendingTunnels.delete(msgId);
@@ -348,6 +374,7 @@ function handleTunnelReady(clientManager, stream, logger) {
 
   // Forward stream data back to the socket
   stream._onData = (chunk) => {
+    if (p._touchIdle) p._touchIdle();
     if (socket && !socket.destroyed) {
       socket.write(chunk);
       clientManager.trackBytes(client?.id, 0, chunk.length);
@@ -368,6 +395,7 @@ function handleTunnelReady(clientManager, stream, logger) {
     if (client) client.pendingTunnels.delete(msgId);
   };
 
+  armTunnelIdle(clientManager, p, socket);
   p.ready = true;
 }
 
@@ -380,6 +408,7 @@ function handleTunnelData(clientManager, stream, logger) {
 
   // Collect data from the stream
   stream._onData = (chunk) => {
+    if (p._touchIdle) p._touchIdle();
     p.socket.write(chunk);
     clientManager.trackBytes(p.client?.id, 0, chunk.length);
   };
@@ -502,6 +531,7 @@ function handleTunnelReadyLegacy(clientManager, msg, logger) {
   clientManager.trackSuccess(client?.id);
 
   socket.on('data', (data) => {
+    if (p._touchIdle) p._touchIdle();
     if (client && client.ws.readyState === 1) {
       client.ws.send(JSON.stringify({ type: 'tunnel_data', id: msg.id, data: data.toString('base64') }));
       clientManager.trackBytes(client.id, data.length, 0);
@@ -509,6 +539,7 @@ function handleTunnelReadyLegacy(clientManager, msg, logger) {
   });
 
   socket.on('close', () => {
+    if (p._idleTimer) clearTimeout(p._idleTimer);
     recordTunnelLog(clientManager, p);
     if (client && client.ws.readyState === 1) {
       try { client.ws.send(JSON.stringify({ type: 'tunnel_close', id: msg.id })); } catch (_) {}
@@ -519,12 +550,14 @@ function handleTunnelReadyLegacy(clientManager, msg, logger) {
 
   socket.on('error', () => {});
 
+  armTunnelIdle(clientManager, p, socket);
   p.ready = true;
 }
 
 function handleTunnelDataLegacy(clientManager, msg, logger) {
   const p = clientManager.pendingTunnels.get(msg.id);
   if (!p || !p.socket || p.socket.destroyed) return;
+  if (p._touchIdle) p._touchIdle();
   const data = Buffer.from(msg.data, 'base64');
   p.socket.write(data);
   clientManager.trackBytes(p.client?.id, 0, data.length);

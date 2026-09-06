@@ -98,6 +98,10 @@ client:
   request_timeout: 30000
   # TCP tunnel establishment timeout (milliseconds)
   tunnel_timeout: 15000
+  # Idle tunnel reclamation (milliseconds): close tunnels with no traffic in
+  # either direction after this long (0 disables), so orphaned tunnels from
+  # clients that died without closing TCP do not accumulate.
+  tunnel_idle_timeout: 60000
   # Maximum concurrent requests per client
   max_concurrent: 100
 

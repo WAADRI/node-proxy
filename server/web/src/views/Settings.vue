@@ -64,6 +64,7 @@ function setFromRuntime() {
     bwDefaultRateKb: r.bandwidth && r.bandwidth.default_rate != null ? Math.round(r.bandwidth.default_rate / 1024) : 0,
     clRequestTimeout: r.client ? r.client.request_timeout : null,
     clTunnelTimeout: r.client ? r.client.tunnel_timeout : null,
+    clTunnelIdleTimeout: r.client ? r.client.tunnel_idle_timeout : null,
     clMaxConcurrent: r.client ? r.client.max_concurrent : null,
     cacheTtlMs: r.cache ? r.cache.default_ttl : null,
   };
@@ -104,6 +105,7 @@ function collectPayload(group) {
       return {
         request_timeout: num('clRequestTimeout'),
         tunnel_timeout: num('clTunnelTimeout'),
+        tunnel_idle_timeout: num('clTunnelIdleTimeout'),
         max_concurrent: num('clMaxConcurrent'),
       };
     case 'cache':
@@ -273,6 +275,10 @@ function doReset() {
         <div class="s-form">
           <label>隧道超时（毫秒）</label>
           <NInputNumber v-model:value="fieldValues.clTunnelTimeout" :min="1" :disabled="!editable.client" style="width: 100%" />
+        </div>
+        <div class="s-form">
+          <label title="隧道无双向流量超过该时长即被关闭（0 = 关闭回收）">隧道空闲回收（毫秒，0=关）</label>
+          <NInputNumber v-model:value="fieldValues.clTunnelIdleTimeout" :min="0" :disabled="!editable.client" style="width: 100%" />
         </div>
         <div class="s-form">
           <label>单节点最大并发数</label>
