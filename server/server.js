@@ -45,6 +45,7 @@ const { setupClientWebSocket } = require('./lib/ws-server');
 const { loadTLSCredentials } = require('./lib/tls');
 const { SettingsManager } = require('./lib/settings');
 const { LogHub } = require('./lib/log-hub');
+const { NetworkTestManager } = require('./lib/network-test');
 
 // Initialize auth
 const authManager = new AuthManager(config, logger);
@@ -79,6 +80,8 @@ clientManager.audit = auditLogger;
 clientManager.pluginManager = pluginManager;
 // Recent proxy request log (feeds the panel "Request log" view)
 clientManager.requestLog = new LogHub(logger);
+// Network testing toolkit (issue #31) - ping / tcping / http / dns / traceroute
+clientManager.netTest = new NetworkTestManager(logger);
 
 // Load persisted routing strategy & other runtime settings.
 // Storage init is async (sql.js) - wait for it before restoring overrides.
