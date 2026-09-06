@@ -2,6 +2,7 @@
 import { computed, h, ref } from 'vue';
 import { NButton, NCard, NCheckbox, NCheckboxGroup, NCollapse, NCollapseItem, NDataTable, NInput, NInputNumber, NProgress, NSelect, NSpace, NTag, NText, useMessage } from 'naive-ui';
 import { startNetworkTest, getNetworkTestTask, fetchNetworkTestTypes } from '../api';
+import { store } from '../store';
 
 const message = useMessage();
 
@@ -9,6 +10,8 @@ const message = useMessage();
 const types = ref([]);
 const selectedType = ref('ping');
 const targetsText = ref('');
+const allNodes = ref(true);          // test from every online node
+const clientIds = ref([]);           // manual selection when allNodes is off
 const options = ref({
   port: 80,
   timeout: 3000,
@@ -30,15 +33,27 @@ const done = ref(0);
 const taskState = ref('');
 const pollTimer = ref(null);
 
-// Load types on mount
+const onlineClients = computed(() => (store.status ? store.status.clients || [] : []));
+const clientOptions = computed(() =>
+  onlineClients.value.map((c) => ({
+    label: (c.info && c.info.hostname) || c.id,
+    value: c.id,
+  }))
+);
+
 fetchNetworkTestTypes().then((d) => { types.value = d.types || []; }).catch(() => {});
 
-// Start test
+// Pick every online node
+function pickAll() {
+  clientIds.value = onlineClients.value.map((c) => c.id);
+}
+
 async function startTest() {
   const targets = targetsText.value.split('\n').map((t) => t.trim()).filter(Boolean);
   if (!targets.length) return message.warning('请输入至少一个目标');
   if (targets.length > 256) return message.warning('目标数量不能超过 256 个');
   if (!selectedType.value) return message.warning('请选择测试类型');
+  if (!allNodes.value && !clientIds.value.length) return message.warning('请至少选择一个执行节点，或勾选「全部节点」');
 
   running.value = true;
   results.value = [];
@@ -48,7 +63,8 @@ async function startTest() {
   taskState.value = '';
 
   try {
-    const data = await startNetworkTest(selectedType.value, targets, prepareOptions());
+    const clients = allNodes.value ? 'all' : clientIds.value;
+    const data = await startNetworkTest(selectedType.value, targets, prepareOptions(), clients);
     taskId.value = data.taskId;
     pollTask();
   } catch (err) {
@@ -96,7 +112,6 @@ async function pollTask() {
       if (task.state === 'error') message.error('测试出错: ' + (task.error || ''));
       return;
     }
-    // Continue polling
     pollTimer.value = setTimeout(pollTask, 500);
   } catch (err) {
     running.value = false;
@@ -115,19 +130,25 @@ function clearResults() {
   running.value = false;
 }
 
+// node x target table: stable sort by node then target index
+const sorted = computed(() =>
+  [...results.value].sort((a, b) =>
+    (a.clientId === b.clientId ? a.index - b.index : (a.clientId < b.clientId ? -1 : 1)))
+);
+
 function exportCSV() {
-  const rows = results.value.map((r, i) => [
-    i + 1, r.target, r.ok ? '成功' : '失败', r.ms || '', (r.error || '').replace(/"/g, '""'),
+  const rows = sorted.value.map((r) => [
+    r.clientLabel || r.clientId, r.index + 1, r.target, r.ok ? '成功' : '失败', r.ms || '', (r.error || '').replace(/"/g, '""'),
     (r.detail || '').replace(/"/g, '""'),
   ]);
-  const csv = ['序号,目标,状态,耗时(ms),错误,详情']
-    .concat(rows.map((r) => r.map((v) => (v.includes(',') ? '"' + v + '"' : v)).join(',')))
+  const csv = ['节点,序号,目标,状态,耗时(ms),错误,详情']
+    .concat(rows.map((r) => r.map((v) => (String(v).includes(',') ? '"' + v + '"' : v)).join(',')))
     .join('\n');
   download(csv, '网络测试结果.csv', 'text/csv;charset=utf-8');
 }
 
 function exportJSON() {
-  const json = JSON.stringify({ type: selectedType.value, results: results.value }, null, 2);
+  const json = JSON.stringify({ type: selectedType.value, mode: allNodes.value ? 'all-nodes' : clientIds.value, results: sorted.value }, null, 2);
   download(json, '网络测试结果.json', 'application/json');
 }
 
@@ -139,17 +160,20 @@ function download(content, filename, mime) {
   URL.revokeObjectURL(url);
 }
 
-// Table columns
+// Table columns: node x target
 const columns = computed(() => [
-  { key: 'index', title: '#', width: 50, render: (_, i) => i + 1 },
-  { key: 'target', title: '目标', width: 200, ellipsis: { tooltip: true } },
+  { key: 'client', title: '节点', width: 150, ellipsis: { tooltip: true },
+    render: (row) => row.clientLabel || row.clientId },
+  { key: 'seq', title: '#', width: 45, render: (row) => row.index + 1 },
+  { key: 'target', title: '目标', width: 190, ellipsis: { tooltip: true } },
   {
-    key: 'status', title: '状态', width: 80,
+    key: 'status', title: '状态', width: 75,
     render: (row) => h(NTag, { type: row.ok ? 'success' : 'error', size: 'small' },
       { default: () => row.ok ? '成功' : '失败' }),
   },
-  { key: 'ms', title: '耗时(ms)', width: 100, render: (row) => row.ms != null ? String(row.ms) : '-' },
-  { key: 'detail', title: '详情', ellipsis: { tooltip: true } },
+  { key: 'ms', title: '耗时(ms)', width: 95, render: (row) => row.ms != null ? String(row.ms) : '-' },
+  { key: 'detail', title: '详情', ellipsis: { tooltip: true },
+    render: (row) => (row.error && !row.ok ? row.error : (row.detail || '')) },
 ]);
 
 // Type-specific options visibility
@@ -162,7 +186,7 @@ const isTraceroute = computed(() => selectedType.value === 'traceroute');
 
 <template>
   <div class="network-test">
-    <NCard title="网络测试" size="small">
+    <NCard title="网络测试（由所选节点执行）" size="small">
       <NSpace vertical>
         <!-- Type selector -->
         <div class="nt-row">
@@ -174,8 +198,25 @@ const isTraceroute = computed(() => selectedType.value === 'traceroute');
             :disabled="running"
           />
           <NText depth="3" style="margin-left: 8px; font-size: 12px;">
-            目标数量：{{ targetsText.split('\n').filter(Boolean).length }} / 256
+            在线节点：{{ onlineClients.length }} 个 · 目标：{{ targetsText.split('\n').filter(Boolean).length }} / 256
           </NText>
+        </div>
+
+        <!-- Executor nodes -->
+        <div class="nt-row">
+          <NCheckbox v-model:checked="allNodes" :disabled="running">全部在线节点执行</NCheckbox>
+          <template v-if="!allNodes">
+            <NSelect
+              v-model:value="clientIds"
+              multiple
+              :options="clientOptions"
+              placeholder="选择执行节点"
+              style="width: 420px"
+              :disabled="running"
+              :max-tag-count="3"
+            />
+            <NButton size="small" :disabled="running" @click="pickAll">选全部</NButton>
+          </template>
         </div>
 
         <!-- Targets -->
@@ -194,28 +235,24 @@ const isTraceroute = computed(() => selectedType.value === 'traceroute');
               <div v-if="isPing || isTcping || isHttp || isTraceroute" class="nt-row">
                 <div v-if="isPing">
                   <NInputNumber v-model:value="options.count" :min="1" :max="10" size="small" style="width: 80px" />
-                  <span style="margin-left: 6px; font-size: 12px;">Ping 次数</span>
+                  <span style="margin-left: 6px; font-size: 12px;">次数</span>
                 </div>
-                <div v-if="isTcping || isPing || isHttp || isTraceroute">
-                  <NInputNumber v-model:value="options.timeout" :min="500" :step="500" size="small" style="width: 80px" />
-                  <span style="margin-left: 6px; font-size: 12px;">超时 (ms)</span>
-                </div>
-                <div v-if="isTcping">
-                  <NInputNumber v-model:value="options.port" :min="1" :max="65535" size="small" style="width: 80px; margin-left: 12px;" />
-                  <span style="margin-left: 6px; font-size: 12px;">端口</span>
-                </div>
+                <NInputNumber v-model:value="options.timeout" :min="500" :step="500" size="small" style="width: 80px" />
+                <span style="margin-left: 6px; font-size: 12px;">超时 (ms)</span>
+                <NInputNumber v-if="isTcping" v-model:value="options.port" :min="1" :max="65535" size="small" style="width: 80px" />
+                <span v-if="isTcping" style="margin-left: 6px; font-size: 12px;">端口</span>
               </div>
 
               <div v-if="isHttp" class="nt-row">
                 <NSelect v-model:value="options.method" :options="[{label:'GET',value:'GET'},{label:'POST',value:'POST'}]" size="small" style="width: 90px" />
-                <NSelect v-model:value="options.protocol" :options="[{label:'HTTP/1.1',value:'1.1'},{label:'HTTP/2',value:'2'},{label:'HTTP/3',value:'3'}]" size="small" style="width: 120px; margin-left: 8px;" />
-                <NInputNumber v-model:value="options.redirects" :min="0" :max="10" size="small" style="width: 70px; margin-left: 8px;" />
-                <span style="margin-left: 6px; font-size: 12px;">最大重定向</span>
+                <NSelect v-model:value="options.protocol" :options="[{label:'HTTP/1.1',value:'1.1'},{label:'HTTP/2',value:'2'},{label:'HTTP/3',value:'3'}]" size="small" style="width: 120px" />
+                <NInputNumber v-model:value="options.redirects" :min="0" :max="10" size="small" style="width: 70px" />
+                <span style="font-size: 12px;">最大重定向</span>
               </div>
 
               <div v-if="isHttp" class="nt-row">
                 <NInput v-model:value="options.referer" placeholder="Referer（可选）" size="small" style="width: 200px" />
-                <NInput v-model:value="options.userAgent" placeholder="User-Agent（可选）" size="small" style="width: 250px; margin-left: 8px;" />
+                <NInput v-model:value="options.userAgent" placeholder="User-Agent（可选）" size="small" style="width: 250px" />
               </div>
 
               <div v-if="isHttp && options.method === 'POST'" class="nt-row">
@@ -240,18 +277,12 @@ const isTraceroute = computed(() => selectedType.value === 'traceroute');
 
         <!-- Actions -->
         <NSpace>
-          <NButton type="primary" :loading="running" @click="startTest" :disabled="running">
-            {{ running ? '测试中...' : '开始测试' }}
+          <NButton type="primary" :loading="running" @click="startTest" :disabled="running || !onlineClients.length">
+            {{ !onlineClients.length ? '无在线节点' : running ? '测试中...' : '开始测试' }}
           </NButton>
-          <NButton @click="clearResults" :disabled="running && !results.length">
-            清空
-          </NButton>
-          <NButton v-if="results.length && !running" @click="exportCSV">
-            导出 CSV
-          </NButton>
-          <NButton v-if="results.length && !running" @click="exportJSON">
-            导出 JSON
-          </NButton>
+          <NButton @click="clearResults" :disabled="running && !results.length">清空</NButton>
+          <NButton v-if="results.length && !running" @click="exportCSV">导出 CSV</NButton>
+          <NButton v-if="results.length && !running" @click="exportJSON">导出 JSON</NButton>
         </NSpace>
       </NSpace>
     </NCard>
@@ -259,16 +290,16 @@ const isTraceroute = computed(() => selectedType.value === 'traceroute');
     <!-- Progress -->
     <NCard v-if="running || results.length" size="small" style="margin-top: 12px;">
       <NProgress v-if="running" type="line" :percentage="progress" :indicator-placement="'inside'" />
-      <NText v-if="running" depth="3" style="font-size: 12px;">
-        已完成 {{ done }}/{{ total }} 个目标{{ taskState === 'error' ? ' — 出错' : '' }}
+      <NText depth="3" style="font-size: 12px;">
+        已完成 {{ done }}/{{ total }} 项{{ taskState === 'error' ? ' — 出错' : '' }}
       </NText>
     </NCard>
 
-    <!-- Results table -->
+    <!-- Results table (node x target) -->
     <NCard v-if="results.length" size="small" style="margin-top: 12px;">
       <NDataTable
         :columns="columns"
-        :data="results"
+        :data="sorted"
         :max-height="500"
         :striped="true"
         :bordered="true"
@@ -281,7 +312,7 @@ const isTraceroute = computed(() => selectedType.value === 'traceroute');
 
 <style scoped>
 .network-test {
-  max-width: 960px;
+  max-width: 1040px;
   margin: 0 auto;
 }
 .nt-row {

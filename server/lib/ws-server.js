@@ -145,6 +145,15 @@ function setupClientWebSocket(httpServer, clientManager, authManager, config, lo
             }
             break;
 
+          // Network test (issue #31): node-side execution reports
+          case 'net_test_progress':
+            if (clientManager.netTest) clientManager.netTest.onClientProgress(clientId, msg);
+            break;
+
+          case 'net_test_done':
+            if (clientManager.netTest) clientManager.netTest.onClientDone(clientId, msg);
+            break;
+
           default:
             ws.send(JSON.stringify({ type: 'error', message: `Unknown type: ${msg.type}` }));
         }

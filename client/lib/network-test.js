@@ -1,13 +1,11 @@
 // =============================================================================
-// NetworkTestManager - In-panel network testing toolkit (issue #31)
+// Client-side network test runner (issue #31) - runs INSIDE a proxy node
 // Tools: ping / tcping / http speed test / traceroute / dns lookup
-// - Targets are tested sequentially (round-robin, never concurrent), up to 256.
-// - HTTP body capped at 1MB to avoid abuse.
-// - Pure Node.js + npm deps only (raw-socket used for ICMP/UDP when available).
+// Mirrors the server runner so results are consistent whichever side executes.
+// Pure Node.js + npm deps only (raw-socket for ICMP/UDP when available).
 // =============================================================================
 'use strict';
 
-const { v4: uuidv4 } = require('uuid');
 const dnsPromises = require('dns').promises;
 const net = require('net');
 const http = require('http');
@@ -15,12 +13,10 @@ const https = require('https');
 const http2 = require('http2');
 const { URL } = require('url');
 
-const MAX_TARGETS = 256;
 const HTTP_BODY_LIMIT = 1024 * 1024; // 1 MB
 const TRACEROUTE_MAX_HOPS = 30;
-const TRACEROUTE_PROBES = 1;
 
-// ICMP/UDP raw sockets (optional; needs native module + root/CAP_NET_RAW)
+// ICMP/UDP raw sockets (optional; native module + root/CAP_NET_RAW)
 let raw = null;
 let rawError = null;
 try {
@@ -29,216 +25,14 @@ try {
   rawError = err.message;
 }
 
-class NetworkTestManager {
+class ClientNetTest {
   constructor(logger) {
-    this.log = logger;
-    this.tasks = new Map(); // id -> task
-    this._running = null;
+    this.log = logger || { warn: () => {}, info: () => {}, error: () => {} };
   }
 
-  // ---------------------------------------------------------------------------
-  // Public API
-  // ---------------------------------------------------------------------------
-  // meta.clients: undefined -> run on THIS server; 'all' -> all online nodes;
-  //               [clientId...] -> the selected nodes run the tests.
-  start(type, targets, options = {}, meta = {}) {
-    if (!['ping', 'tcping', 'http', 'dns', 'traceroute'].includes(type)) {
-      const err = new Error('Unknown test type: ' + type);
-      err.code = 400;
-      throw err;
-    }
-    const list = (Array.isArray(targets) ? targets : []).map((t) => String(t).trim()).filter(Boolean);
-    if (list.length === 0) {
-      const err = new Error('No targets provided');
-      err.code = 400;
-      throw err;
-    }
-    if (list.length > MAX_TARGETS) {
-      const err = new Error(`Too many targets (max ${MAX_TARGETS})`);
-      err.code = 400;
-      throw err;
-    }
-
-    let clients = null;
-    let mode = 'server';
-    if (meta.clients) {
-      if (meta.clients === 'all') {
-        clients = this.listClientIds ? this.listClientIds() : [];
-      } else if (Array.isArray(meta.clients)) {
-        clients = meta.clients.map(String).filter(Boolean);
-      }
-      if (!clients || clients.length === 0) {
-        const err = new Error('没有可用的在线节点（clients 为空）');
-        err.code = 400;
-        throw err;
-      }
-      mode = 'nodes';
-    }
-
-    const id = uuidv4().slice(0, 12);
-    const task = {
-      id,
-      type,
-      targets: list,
-      options,
-      mode,
-      clients: mode === 'nodes' ? clients : ['server'],
-      expect: mode === 'nodes' ? clients.length * list.length : list.length,
-      state: 'queued',
-      createdAt: Date.now(),
-      results: [],
-      error: null,
-      _watchdog: null,
-    };
-    this.tasks.set(id, task);
-
-    if (mode === 'nodes') {
-      task.state = 'running';
-      this._dispatchNodeTask(task);
-      this._scheduleWatchdog(task);
-    } else {
-      this._kick();
-    }
-    return id;
-  }
-
-  get(id) {
-    const t = this.tasks.get(id);
-    if (!t) return null;
-    return {
-      id: t.id,
-      type: t.type,
-      mode: t.mode,
-      state: t.state,
-      createdAt: t.createdAt,
-      clients: t.clients,
-      total: t.expect,
-      done: t.results.length,
-      results: t.results,
-      error: t.error,
-    };
-  }
-
-  // Send the task to every selected node; immediately fail nodes that are gone.
-  _dispatchNodeTask(task) {
-    for (const clientId of task.clients) {
-      const ok = this.sendToClient
-        ? this.sendToClient(clientId, { type: 'net_test', taskId: task.id, payload: { type: task.type, targets: task.targets, options: task.options } })
-        : false;
-      if (!ok) this._finalizeClient(task, clientId, '节点不可达（发送失败）');
-    }
-  }
-
-  _scheduleWatchdog(task) {
-    const perTargetBudget = Math.min(parseInt(task.options.timeout, 10) || 3000, 30000) + 5000;
-    const deadline = perTargetBudget * Math.max(task.targets.length, 1) + 15000;
-    task._watchdog = setTimeout(() => {
-      if (task.state !== 'running') return;
-      for (const clientId of task.clients) {
-        this._finalizeClient(task, clientId, '节点响应超时');
-      }
-      task.state = 'done';
-    }, Math.min(deadline, 15 * 60 * 1000));
-  }
-
-  // Called by ws-server when a node reports one finished target.
-  onClientProgress(clientId, msg) {
-    const task = this.tasks.get(msg.taskId);
-    if (!task || task.state !== 'running') return;
-    const clientLabel = this.getClientLabel ? this.getClientLabel(clientId) : clientId;
-    task.results.push({
-      clientId,
-      clientLabel,
-      index: Number(msg.index) || 0,
-      target: msg.target,
-      ok: !!msg.ok,
-      ms: msg.ms,
-      detail: msg.detail,
-      error: msg.error,
-    });
-    if (task.results.length >= task.expect) {
-      task.state = 'done';
-      if (task._watchdog) clearTimeout(task._watchdog);
-    }
-  }
-
-  // Called by ws-server when a node finished the whole batch.
-  onClientDone(clientId, msg) {
-    const task = this.tasks.get(msg.taskId);
-    if (!task || task.state !== 'running') return;
-    if (msg.error) {
-      this._finalizeClient(task, clientId, msg.error);
-      if (task.results.length >= task.expect) task.state = 'done';
-    }
-  }
-
-  // Called when clients connect/disconnect (server.js wires clientManager.onChange)
-  onClientsChanged(presentFn) {
-    for (const task of this.tasks.values()) {
-      if (task.mode !== 'nodes' || task.state !== 'running') continue;
-      for (const clientId of task.clients) {
-        if (!presentFn(clientId)) this._finalizeClient(task, clientId, '节点已断开');
-      }
-      if (task.results.length >= task.expect) task.state = 'done';
-    }
-  }
-
-  // Mark a client's not-yet-reported targets as failed; conclude task when full.
-  _finalizeClient(task, clientId, reason) {
-    const reported = new Set(
-      task.results.filter((r) => r.clientId === clientId).map((r) => r.index)
-    );
-    const clientLabel = this.getClientLabel ? this.getClientLabel(clientId) : clientId;
-    for (let i = 0; i < task.targets.length; i++) {
-      if (reported.has(i)) continue;
-      task.results.push({
-        clientId,
-        clientLabel,
-        index: i,
-        target: task.targets[i],
-        ok: false,
-        error: reason,
-      });
-    }
-    if (task.results.length >= task.expect && task.state === 'running') {
-      task.state = 'done';
-      if (task._watchdog) clearTimeout(task._watchdog);
-    }
-  }
-
-  // One local (server) test at a time (anti-abuse: sequential work only)
-  _kick() {
-    if (this._running) return;
-    for (const task of this.tasks.values()) {
-      if (task.state === 'queued') {
-        this._running = task;
-        task.state = 'running';
-        this._run(task)
-          .catch((err) => {
-            task.error = err.message;
-            task.state = 'error';
-          })
-          .finally(() => {
-            this._running = null;
-            if (task.state === 'running') task.state = 'done';
-            // opportunistic gc of finished tasks
-            if (this.tasks.size > 100) {
-              for (const [k, v] of this.tasks) {
-                if (v.state === 'done' || v.state === 'error') this.tasks.delete(k);
-                if (this.tasks.size <= 100) break;
-              }
-            }
-            this._kick();
-          });
-        return;
-      }
-    }
-  }
-
-  async _run(task) {
-    const { type, targets, options } = task;
+  // Run one target at a time; invoke onTarget after each result.
+  async run(type, targets, options = {}, onTarget) {
     for (let i = 0; i < targets.length; i++) {
-      if (task.state !== 'running') break; // cancelled
       const target = targets[i];
       let res;
       try {
@@ -246,13 +40,12 @@ class NetworkTestManager {
       } catch (err) {
         res = { ok: false, error: err.message || String(err) };
       }
-      task.results.push(Object.assign({ clientId: 'server', clientLabel: '服务器本机', index: i, target }, res));
+      try {
+        if (onTarget) await onTarget({ index: i, target, ...res });
+      } catch (_) {}
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Individual tools
-  // ---------------------------------------------------------------------------
   async runTarget(type, target, options = {}) {
     switch (type) {
       case 'ping': return this._ping(target, options);
@@ -269,19 +62,16 @@ class NetworkTestManager {
     const count = Math.min(Math.max(parseInt(options.count, 10) || 3, 1), 10);
     const timeout = parseInt(options.timeout, 10) || 2000;
     const host = this._hostOf(target);
-
-    // ICMP echo via raw-socket when the native module is available + privileged
     if (raw) {
       try {
         return await this._icmpPing(host, count, timeout);
       } catch (err) {
-        this.log.warn({ host, err: err.message }, 'ICMP ping failed, falling back to TCP');
+        this.log.warn('ICMP ping failed, falling back to TCP: ' + err.message);
       }
     }
     return this._tcpPingFallback(host, count, timeout);
   }
 
-  // Full ICMP echo ping (needs root / CAP_NET_RAW on Linux)
   _icmpPing(host, count, timeout) {
     return new Promise((resolve, reject) => {
       require('dns').lookup(host, { family: 4 }, (err, addr) => {
@@ -293,9 +83,7 @@ class NetworkTestManager {
           return reject(new Error('无法创建 ICMP socket: ' + e.message));
         }
         const times = [];
-        let sent = 0;
-        let replied = 0;
-        const sendMap = {}; // seq -> startedAt
+        const sendMap = {};
         const id = (process.pid & 0xffff);
         const seqBase = Math.floor(Math.random() * 0xffff);
         const settled = { done: false };
@@ -313,29 +101,25 @@ class NetworkTestManager {
             detail: `min ${Math.round(Math.min(...times))}ms / avg ${Math.round(avg)}ms / max ${Math.round(Math.max(...times))}ms (${times.length}/${count} 回)`,
           });
         };
-
         const sendOne = (seq) => {
           const packet = Buffer.alloc(8 + 24);
-          packet.writeUInt8(8, 0); // type: echo request
-          packet.writeUInt8(0, 1); // code
-          packet.writeUInt16BE(0, 2); // checksum (filled below)
+          packet.writeUInt8(8, 0);
+          packet.writeUInt8(0, 1);
+          packet.writeUInt16BE(0, 2);
           packet.writeUInt16BE(id, 4);
           packet.writeUInt16BE(seq, 6);
           for (let i = 8; i < packet.length; i++) packet.writeUInt8(i & 0xff, i);
-          // checksum
           let sum = 0;
           for (let i = 0; i < packet.length; i += 2) {
             sum += (packet[i] << 8) + packet[i + 1];
           }
           while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
           packet.writeUInt16BE(~sum & 0xffff, 2);
-          sent++;
           sendMap[seq] = Date.now();
           sock.send(packet, 0, packet.length, 0, addr, (err) => {
             if (err) finish(new Error('发送失败: ' + err.message));
           });
         };
-
         sock.on('message', (buffer) => {
           if (buffer.length < 8) return;
           const type = buffer.readUInt8(0);
@@ -345,17 +129,14 @@ class NetworkTestManager {
           const startedAt = sendMap[seq];
           if (startedAt == null) return;
           delete sendMap[seq];
-          replied++;
           times.push(Date.now() - startedAt);
-          if (replied >= count) finish();
+          if (times.length >= count) finish();
         });
         sock.on('error', (e) => finish(new Error('ICMP socket error: ' + e.message)));
-
         let idx = 0;
         const loop = () => {
           if (settled.done) return;
           if (idx >= count) {
-            // wait a short grace for late replies, then settle
             setTimeout(() => finish(), Math.min(timeout, 500));
             return;
           }
@@ -368,7 +149,6 @@ class NetworkTestManager {
     });
   }
 
-  // TCP-connect fallback ping (no privileges needed) - labelled as such
   async _tcpPingFallback(host, count, timeout) {
     const times = [];
     const probe = () =>
@@ -376,7 +156,7 @@ class NetworkTestManager {
     for (let i = 0; i < count; i++) {
       const t = await probe();
       if (t != null) times.push(t);
-      if (i < count - 1) await this._sleep(200);
+      if (i < count - 1) await new Promise((r) => setTimeout(r, 200));
     }
     if (!times.length) throw new Error('TCP ping: no reply (ICMP unavailable, TCP 80/443 unreachable)');
     const ms = times.reduce((a, b) => a + b, 0) / times.length;
@@ -417,7 +197,7 @@ class NetworkTestManager {
     const method = String(options.method || 'GET').toUpperCase();
     const redirects = Math.min(Math.max(parseInt(options.redirects, 10) || 0, 0), 10);
     const timeout = parseInt(options.timeout, 10) || 8000;
-    const protocol = String(options.protocol || '1.1'); // '1.1' | '2' | '3'
+    const protocol = String(options.protocol || '1.1');
     const headers = {};
     if (options.referer) headers['Referer'] = String(options.referer);
     if (options.userAgent) headers['User-Agent'] = String(options.userAgent);
@@ -470,9 +250,7 @@ class NetworkTestManager {
         done = true;
         reject(err);
       };
-
       if (protocol === '2' && url.protocol === 'https:') {
-        // HTTP/2 over TLS (ALPN)
         const client = http2.connect(url.origin, { timeout });
         client.on('error', (e) => { try { client.destroy(); } catch (_) {} fail(e); });
         const req = client.request({
@@ -496,8 +274,6 @@ class NetworkTestManager {
         setTimeout(() => { try { req.destroy(); } catch (_) {} fail(new Error('HTTP/2 请求超时')); }, timeout);
         return;
       }
-
-      // HTTP/1.1 (also the target when protocol=2 on plain http)
       const lib = url.protocol === 'https:' ? https : http;
       const req = lib.request(
         {
@@ -563,7 +339,6 @@ class NetworkTestManager {
 
   _fmtRecords(type, values) {
     if (type === 'MX') return values.map((v) => `${v.exchange} (pri ${v.priority})`);
-    if (type === 'CAA') return values.map((v) => `${v.issue ? 'issue=' + v.issue : ''}${v.issuemail ? 'iodef=' + v.issuemail : ''}`.trim());
     return (Array.isArray(values) ? values : [values]).map((v) => String(v));
   }
 
@@ -576,7 +351,6 @@ class NetworkTestManager {
     return this._udpTraceroute(host);
   }
 
-  // UDP-based traceroute: probe each TTL sequentially, parse ICMP replies
   _udpTraceroute(host) {
     return new Promise((resolve, reject) => {
       require('dns').lookup(host, { family: 4 }, (err, addr) => {
@@ -594,7 +368,6 @@ class NetworkTestManager {
         const perHopTimeout = 800;
         const hops = [];
         let ttl = 0;
-        let curHop = null;
         let settled = false;
         let watchdog = setTimeout(() => done(), 25000);
         const cleanup = () => {
@@ -608,41 +381,27 @@ class NetworkTestManager {
           cleanup();
           resolve({ ok: true, detail: hops.map((h) => `${h.ttl}. ${h.ip || '*'}  ${h.ms != null ? h.ms + 'ms' : '超时'}`).join('\n'), hops });
         };
-
         const probeNext = () => {
           if (settled) return;
           ttl++;
           if (ttl > TRACEROUTE_MAX_HOPS) return done();
-          const seq = (ttl * 64 + Math.floor(Math.random() * 200)) & 0xffff;
           const packet = Buffer.alloc(16);
           packet.writeUInt32BE(0xfeedface, 0);
-          packet.writeUInt16BE(seq, 4);
-          curHop = { ttl, ip: null, ms: null, seq };
+          packet.writeUInt16BE((ttl * 64 + Math.floor(Math.random() * 200)) & 0xffff, 4);
           const started = Date.now();
           udp.send(packet, 0, packet.length, basePort + ttl, destIp, { ttl }, (err) => {
             if (err) { cleanup(); return reject(new Error('发送失败: ' + err.message)); }
           });
-          const timer = setTimeout(() => {
-            // timeout for this hop (no ICMP seen)
-            curHop.ms = null;
-            probeNext();
-          }, perHopTimeout);
-          const finishHop = (hopIp, reached) => {
-            clearTimeout(timer);
-            if (curHop && curHop.ttl === ttl) {
-              curHop.ip = hopIp || null;
-              curHop.ms = Math.round(Date.now() - started);
-              if (reached || ttl >= TRACEROUTE_MAX_HOPS) return done();
-              probeNext();
-            }
-          };
+          const timer = setTimeout(() => probeNext(), perHopTimeout);
           icmp.once('message', (buffer, source) => {
             const hopIp = this._bufToIp(source) || this._bufToIp(buffer);
-            const reached = buffer.length >= 8 && buffer.readUInt8(0) === 3 && buffer.readUInt8(1) === 3; // dest port unreachable
-            finishHop(hopIp, reached);
+            const reached = buffer.length >= 8 && buffer.readUInt8(0) === 3 && buffer.readUInt8(1) === 3;
+            clearTimeout(timer);
+            hops.push({ ttl, ip: hopIp, ms: Math.round(Date.now() - started) });
+            if (reached || ttl >= TRACEROUTE_MAX_HOPS) return done();
+            probeNext();
           });
         };
-
         icmp.on('error', (e) => { cleanup(); reject(new Error('ICMP socket error: ' + e.message)); });
         udp.on('error', (e) => { cleanup(); reject(new Error('UDP socket error: ' + e.message)); });
         probeNext();
@@ -654,9 +413,6 @@ class NetworkTestManager {
     if (!buf) return '';
     if (Buffer.isBuffer(buf)) {
       if (buf.length === 4) return [buf[0], buf[1], buf[2], buf[3]].join('.');
-      if (buf.length === 16) {
-        return Array.from(buf.subarray(0, 16)).join('.'); // best-effort (unlikely)
-      }
       return String(buf);
     }
     return String(buf);
@@ -664,8 +420,7 @@ class NetworkTestManager {
 
   // --- helpers -------------------------------------------------------------
   _hostOf(target) {
-    const urlMatch = /^[a-z]+:\/\//i.test(target) ? new URL(target) : null;
-    if (urlMatch) return urlMatch.hostname;
+    if (/^[a-z]+:\/\//i.test(target)) return new URL(target).hostname;
     if (target.includes(':')) return target.split(':')[0];
     return target;
   }
@@ -687,10 +442,6 @@ class NetworkTestManager {
     if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
     return (n / 1048576).toFixed(2) + ' MB';
   }
-
-  _sleep(ms) {
-    return new Promise((r) => setTimeout(r, ms));
-  }
 }
 
-module.exports = { NetworkTestManager, MAX_TARGETS };
+module.exports = { ClientNetTest };

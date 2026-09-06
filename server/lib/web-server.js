@@ -121,9 +121,12 @@ function createWebServer(clientManager, authManager, config, logger, metricsMana
   api.post('/network-test', (req, res) => {
     const nt = clientManager.netTest;
     if (!nt) return res.status(501).json({ success: false, message: 'Network test manager not available' });
-    const { type, targets, options } = req.body || {};
+    // clients: undefined -> run on this server; 'all' -> all online nodes;
+    //          [clientId...] -> the selected nodes execute the tests (issue #31)
+    const { type, targets, options, clients } = req.body || {};
     try {
-      const taskId = nt.start(type, targets, options || {});
+      const meta = clients !== undefined ? { clients } : {};
+      const taskId = nt.start(type, targets, options || {}, meta);
       res.json({ success: true, taskId });
     } catch (err) {
       res.status(err.code === 400 ? 400 : 500).json({ success: false, message: err.message });
