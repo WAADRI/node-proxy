@@ -75,6 +75,7 @@ class SettingsManager {
       client: {
         request_timeout: c.client?.request_timeout,
         tunnel_timeout: c.client?.tunnel_timeout,
+        tunnel_idle_timeout: c.client?.tunnel_idle_timeout,
         max_concurrent: c.client?.max_concurrent,
       },
       cache: { default_ttl: m.cache ? m.cache.defaultTTL : null },
@@ -154,10 +155,16 @@ class SettingsManager {
         break;
       }
       case 'client': {
-        const num = this._numFields(v, ['request_timeout', 'tunnel_timeout', 'max_concurrent'], 1);
+        // tunnel_idle_timeout may be 0 to disable idle tunnel reclamation
+        const isZeroIdle = String(v.tunnel_idle_timeout) === '0';
+        const rest = isZeroIdle ? { ...v, tunnel_idle_timeout: undefined } : v;
+        const num = this._numFields(rest, ['request_timeout', 'tunnel_timeout', 'tunnel_idle_timeout', 'max_concurrent'], 1);
         if (num.error) return num;
-        this.config.client = { ...(this.config.client || {}), ...num.values };
-        this._persist(group, num.values);
+        const patch = { ...num.values };
+        if (isZeroIdle) patch.tunnel_idle_timeout = 0;
+        if (Object.keys(patch).length === 0) return { ok: false, error: 'No valid numeric fields provided' };
+        this.config.client = { ...(this.config.client || {}), ...patch };
+        this._persist(group, patch);
         break;
       }
       case 'cache': {

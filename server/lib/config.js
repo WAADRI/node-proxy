@@ -49,6 +49,7 @@ const DEFAULTS = {
   client: {
     request_timeout: 30000,
     tunnel_timeout: 15000,
+    tunnel_idle_timeout: 60000,
     max_concurrent: 100,
   },
 };
