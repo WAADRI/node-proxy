@@ -70,3 +70,10 @@ export const saveClientMeta = (clientId, field, value) =>
   });
 export const fetchRequestLogs = (limit = 100) =>
   apiFetch('/api/v1/logs?limit=' + limit);
+
+// --- Network test toolkit (issue #31) ------------------------------------
+export const fetchNetworkTestTypes = () => apiFetch('/api/v1/network-test/types');
+export const startNetworkTest = (type, targets, options) =>
+  apiFetch('/api/v1/network-test', { method: 'POST', body: { type, targets, options } });
+export const getNetworkTestTask = (taskId) =>
+  apiFetch('/api/v1/network-test/' + encodeURIComponent(taskId));

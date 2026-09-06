@@ -22,6 +22,12 @@ const router = createRouter({
       meta: { title: '请求日志' },
     },
     {
+      path: '/network-test',
+      name: 'networkTest',
+      component: () => import('./views/NetworkTest.vue'),
+      meta: { title: '网络测试' },
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('./views/Settings.vue'),

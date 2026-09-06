@@ -105,6 +105,39 @@ function createWebServer(clientManager, authManager, config, logger, metricsMana
     res.json({ logs: hub.getRecent(limit) });
   });
 
+  // --- Network testing toolkit (issue #31): ping / tcping / http / dns / traceroute ---
+  api.get('/network-test/types', (req, res) => {
+    res.json({
+      types: [
+        { id: 'ping', label: 'Ping' },
+        { id: 'tcping', label: 'Tcping' },
+        { id: 'http', label: '请求测速' },
+        { id: 'dns', label: 'DNS 查询' },
+        { id: 'traceroute', label: '路由追踪' },
+      ],
+    });
+  });
+
+  api.post('/network-test', (req, res) => {
+    const nt = clientManager.netTest;
+    if (!nt) return res.status(501).json({ success: false, message: 'Network test manager not available' });
+    const { type, targets, options } = req.body || {};
+    try {
+      const taskId = nt.start(type, targets, options || {});
+      res.json({ success: true, taskId });
+    } catch (err) {
+      res.status(err.code === 400 ? 400 : 500).json({ success: false, message: err.message });
+    }
+  });
+
+  api.get('/network-test/:id', (req, res) => {
+    const nt = clientManager.netTest;
+    if (!nt) return res.status(501).json({ success: false, message: 'Network test manager not available' });
+    const task = nt.get(req.params.id);
+    if (!task) return res.status(404).json({ success: false, message: 'Task not found or expired' });
+    res.json(task);
+  });
+
   api.get('/config', (req, res) => {
     const safeConfig = {
       server: config.server,
