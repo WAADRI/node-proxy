@@ -83,13 +83,9 @@ clientManager.requestLog = new LogHub(logger);
 // Network testing toolkit (issue #31) - ping / tcping / http / dns / traceroute
 clientManager.netTest = new NetworkTestManager(logger);
 clientManager.netTest.listClientIds = () => Array.from(clientManager.clients.keys());
-clientManager.netTest.getClientLabel = (id) => {
-  const c = clientManager.getById(id);
-  if (!c) return id;
-  if (c.alias) return c.alias;
-  if (c.info && c.info.hostname) return c.info.hostname;
-  return id;
-};
+// Issue #31: the node column intentionally shows the CLIENT_ID (stable id the
+// operator configures on the node), not hostname/alias.
+clientManager.netTest.getClientLabel = (id) => id;
 clientManager.netTest.sendToClient = (clientId, obj) => {
   const c = clientManager.getById(clientId);
   if (c && c.ws && c.ws.readyState === 1) {
