@@ -107,9 +107,12 @@ node-proxy/
 - **禁止动态取值**：不得用运行时可变的字符串做属性/路由/key 访问（如 `obj[userInput]`、
   动态拼接后 `require`/`import`、`req.body[key]` 未经校验直接取值）。访问必须经过
   显式字段或 OpenAPI schema 声明的结构。
-- **HTTP 接口必须遵守 OpenAPI 规范**：文档在 `server/openapi/openapi.yaml`；改接口时同步
-  更新文档，`npm run openapi:validate` 与 CI 会校验文档合法；不允许出现文档外的
-  “隐形接口”。（骨架期 responses 允许宽松 schema，Phase 1 起逐端点精确化并加实现一致性校验。）
+- **HTTP 接口必须遵守 OpenAPI 规范**：契约唯一真源是 **`server/lib/swagger.js` 的 `swaggerSpec`**
+  （运行时由 `/api/swagger.json` 输出、`/api/docs` 提供 Swagger UI）。新增/修改接口时必须同步更新
+  `swaggerSpec`。CI「质量检查」执行 `npm run openapi:validate`，包含两层强制：
+  1. **结构合法**：导出 spec 经 `@redocly/cli lint` 校验（operationId 自动补全，不必手写）；
+  2. **无隐形接口**：`server/scripts/check-openapi-routes.js` 对照服务端实际注册的路由，
+     实现有而文档没有 → 报错（exit 1）；文档有而实现没有 → 警告。
 - 迁移/校验命令：`npm run typecheck` / `npm run lint` / `npm run openapi:validate`（需根目录 `npm ci`）。
 
 ## 禁止事项
