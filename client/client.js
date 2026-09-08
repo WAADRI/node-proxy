@@ -66,6 +66,14 @@ let heartbeatTimer = null;
 let currentClientId = null;
 let intentionalClose = false;
 
+// Liveness detection: the server never replies to the JSON heartbeat, so we
+// additionally send ws protocol-level pings and expect pongs. A TCP connection
+// that silently dies (server killed without FIN, NAT/firewall idle timeout)
+// fires no close/error event - without this counter the node would hang
+// forever instead of reconnecting.
+let missedPongs = 0;
+const MAX_MISSED_PONGS = 3; // ~3 x heartbeat_interval before declaring death
+
 // =============================================================================
 // Logging
 // =============================================================================
@@ -138,7 +146,13 @@ function connect() {
     log('info', 'Connected to server');
     reconnectAttempt = 0;
     intentionalClose = false;
+    missedPongs = 0;
     ws.send(JSON.stringify({ type: 'auth', token: CONFIG.auth_token }));
+  });
+
+  // ws protocol pong (server auto-replies to ping frames) -> connection alive
+  ws.on('pong', () => {
+    missedPongs = 0;
   });
 
   // Create StreamMux for multiplexed streams (binary frames)
@@ -191,6 +205,20 @@ function startHeartbeat() {
   if (CONFIG.heartbeat_interval <= 0) return;
   heartbeatTimer = setInterval(() => {
     if (ws && ws.readyState === WebSocket.OPEN) {
+      // Protocol-level ping: server (ws library) auto-replies with a pong.
+      // If the pong stops arriving the TCP connection is half-dead even
+      // though no close/error fired - force a reconnect in that case.
+      ws.ping();
+      missedPongs++;
+      if (missedPongs >= MAX_MISSED_PONGS) {
+        log('warn', `No pong from server for ${missedPongs} heartbeats - terminating dead connection`);
+        missedPongs = 0;
+        try {
+          ws.terminate(); // triggers 'close' -> scheduleReconnect
+        } catch (_) {}
+        return;
+      }
+      // Server-side liveness (JSON heartbeat keeps server health-check happy)
       ws.send(JSON.stringify({ type: 'heartbeat' }));
       // Also send stats
       ws.send(JSON.stringify({
