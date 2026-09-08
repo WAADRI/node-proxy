@@ -12,7 +12,7 @@ const yaml = require('js-yaml');
 const root = path.join(__dirname, '..', '..');
 
 // --- server ------------------------------------------------------------------
-const { DEFAULTS } = require('../lib/config');
+const { DEFAULTS } = require('../lib/config.ts');
 const serverHead = [
   '# =============================================================================',
   '# Node-Proxy Server - config.yaml.example',

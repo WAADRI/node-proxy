@@ -1,4 +1,4 @@
-name: 质量检查
+﻿name: 质量检查
 # Issue #42 (Phase 0)：TypeScript 编译检查 / ESLint（禁 any）/ OpenAPI 校验骨架。
 # 规则只作用于新增 .ts 文件与 OpenAPI 文档；存量 JS 在迁移完成前不被硬性拦截。
 on:
@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - name: 安装根工具依赖
         run: npm ci
@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - name: 安装根工具依赖
         run: npm ci
@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - name: 安装根工具依赖
         run: npm ci
