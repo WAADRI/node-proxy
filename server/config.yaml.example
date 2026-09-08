@@ -1,0 +1,42 @@
+# =============================================================================
+# Node-Proxy Server - config.yaml.example
+# 本文件由 server/lib/config.js 的 DEFAULTS 自动生成 —— 请勿手改。
+# 部署用法：复制为 config.yaml 后按需修改；NP_* 环境变量与 config.local.yaml 可覆盖。
+# 变更源头见 server/lib/config.js；CI（同步配置示例）会自动同步本文件。
+# =============================================================================
+server:
+  host: 0.0.0.0
+  web_port: 3000
+  http_proxy_port: 8080
+  socks5_port: 1080
+tls:
+  enabled: false
+  cert: ''
+  key: ''
+  auto_generate: true
+auth:
+  token: node-proxy-default-token
+  proxy:
+    enabled: false
+    username: proxy
+    password: proxy-pass
+  web:
+    enabled: true
+    username: admin
+    password: admin123
+    jwt_secret: ''
+logging:
+  level: info
+  file: ''
+  max_size: 10485760
+  max_files: 5
+  pretty: false
+health_check:
+  ping_interval: 10000
+  ping_timeout: 5000
+  max_failures: 3
+client:
+  request_timeout: 30000
+  tunnel_timeout: 15000
+  tunnel_idle_timeout: 60000
+  max_concurrent: 100

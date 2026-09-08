@@ -21,86 +21,18 @@ const netTestRunner = new ClientNetTest({ warn: (m) => log && log('warn', m), in
 let netTestBusy = false;
 
 // =============================================================================
-// Configuration
+// Configuration (schema-driven; see lib/config-schema.js - issue #41)
 // =============================================================================
-const DEFAULTS = {
-  server_url: 'ws://127.0.0.1:3000/ws',
-  auth_token: 'node-proxy-default-token',
-  reconnect_delay: 3000,
-  max_reconnect_delay: 30000,
-  reconnect_jitter: 1000,
-  heartbeat_interval: 15000,
-  request_timeout: 30000,
-  tunnel_timeout: 30000,
-  max_concurrent_requests: 100,
-  region: 'unknown',
-  tags: '',
-  tls_reject_unauthorized: false,
-};
-
-function loadConfig() {
-  const config = { ...DEFAULTS };
-
-  // Try to load config file
-  const configPaths = [
+const { loadClientConfig } = require('./lib/config-schema');
+const CONFIG = loadClientConfig({
+  filePaths: [
     process.env.CONFIG_PATH,
     path.join(process.cwd(), 'config.yaml'),
     path.join(process.cwd(), 'config.yml'),
     path.join(__dirname, 'config.yaml'),
     path.join(__dirname, 'config.yml'),
-  ];
-
-  for (const cp of configPaths) {
-    if (cp && fs.existsSync(cp)) {
-      try {
-        const yaml = require('js-yaml');
-        const doc = yaml.load(fs.readFileSync(cp, 'utf8'));
-        if (doc && doc.server_url) config.server_url = doc.server_url;
-        if (doc && doc.auth_token) config.auth_token = doc.auth_token;
-        if (doc && doc.reconnect_delay) config.reconnect_delay = doc.reconnect_delay;
-        if (doc && doc.max_reconnect_delay) config.max_reconnect_delay = doc.max_reconnect_delay;
-        if (doc && doc.heartbeat_interval) config.heartbeat_interval = doc.heartbeat_interval;
-        if (doc && doc.request_timeout) config.request_timeout = doc.request_timeout;
-        if (doc && doc.tunnel_timeout) config.tunnel_timeout = doc.tunnel_timeout;
-        if (doc && doc.max_concurrent_requests) config.max_concurrent_requests = doc.max_concurrent_requests;
-        if (doc && doc.region) config.region = doc.region;
-        if (doc && doc.tags) config.tags = doc.tags;
-        if (doc && doc.tls_reject_unauthorized !== undefined) config.tls_reject_unauthorized = doc.tls_reject_unauthorized;
-      } catch (_) {}
-      break;
-    }
-  }
-
-  // Override with env vars
-  const envMap = {
-    SERVER_URL: 'server_url',
-    AUTH_TOKEN: 'auth_token',
-    RECONNECT_DELAY: 'reconnect_delay',
-    MAX_RECONNECT_DELAY: 'max_reconnect_delay',
-    HEARTBEAT_INTERVAL: 'heartbeat_interval',
-    REQUEST_TIMEOUT: 'request_timeout',
-    TUNNEL_TIMEOUT: 'tunnel_timeout',
-    MAX_CONCURRENT_REQUESTS: 'max_concurrent_requests',
-    REGION: 'region',
-    NODE_REGION: 'region',
-    TAGS: 'tags',
-    TLS_REJECT_UNAUTHORIZED: 'tls_reject_unauthorized',
-  };
-
-  for (const [envKey, configKey] of Object.entries(envMap)) {
-    if (process.env[envKey] !== undefined) {
-      let val = process.env[envKey];
-      if (val === 'true') val = true;
-      else if (val === 'false') val = false;
-      else if (/^\d+$/.test(val)) val = parseInt(val, 10);
-      config[configKey] = val;
-    }
-  }
-
-  return config;
-}
-
-const CONFIG = loadConfig();
+  ],
+});
 
 // =============================================================================
 // Persistent client ID (stable across reconnects so server metadata persists)

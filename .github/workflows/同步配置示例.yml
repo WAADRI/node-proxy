@@ -1,0 +1,53 @@
+name: 同步配置示例
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'server/lib/config.js'
+      - 'client/lib/config-schema.js'
+      - 'client/client.js'
+      - 'server/scripts/**'
+
+concurrency:
+  group: sync-config-example
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The generator loads server/lib/config.js which needs js-yaml.
+      - name: 安装依赖
+        run: npm install --prefix server --no-audit --no-fund
+
+      - name: 重新生成 config.yaml.example（server + client）
+        run: node server/scripts/gen-config-example.js
+
+      - name: 检查是否有变更
+        id: diff
+        run: |
+          if git diff --quiet -- server/config.yaml.example client/config.yaml.example; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 自动提交并推送（github-actions[bot]）
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/config.yaml.example client/config.yaml.example
+          git commit -m "chore(config): sync generated config.yaml.example [auto]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
