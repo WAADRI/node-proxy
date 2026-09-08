@@ -3,8 +3,8 @@ on:
   push:
     branches: ['**']
     paths:
-      - 'server/lib/config.js'
-      - 'client/lib/config-schema.js'
+      - 'server/lib/config.*'
+      - 'client/lib/config-schema.*'
       - 'client/client.js'
       - 'server/scripts/**'
 
@@ -25,7 +25,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       # The generator loads server/lib/config.js which needs js-yaml.
       - name: 安装依赖

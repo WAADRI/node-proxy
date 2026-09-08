@@ -11,7 +11,7 @@ const https = require('https');
 const url = require('url');
 
 // Load configuration first
-const { loadConfig } = require('./lib/config');
+const { loadConfig } = require('./lib/config.ts');
 const config = loadConfig();
 
 // Initialize logger
