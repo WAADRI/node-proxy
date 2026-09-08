@@ -11,6 +11,7 @@ import type { Socket } from 'net';
 import type { WebSocket } from 'ws';
 import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
+import type { StreamMux } from './stream-mux.js';
 
 // --- External modules injected by server.js (duck-typed minimal contracts) ---
 
@@ -74,7 +75,8 @@ export interface ClientInfo {
 
 export interface PendingRecord {
   timeout: NodeJS.Timeout | null;
-  reject(err: Error): void;
+  reject?: ((err: Error) => void) | null;
+  resolve?: ((value: unknown) => void) | null;
   res?: ServerResponse;
   socket?: Socket;
   type?: string;
@@ -120,8 +122,8 @@ export interface ClientNode {
   notes?: string | null;
   region?: string | null;
   // Attached by the WebSocket layer (mux per protocol capability, RTT from
-  // StreamMux ping): untyped here to stay decoupled from stream-mux.
-  mux?: unknown;
+  // StreamMux ping).
+  mux?: StreamMux | null;
   rtt?: number;
 }
 
@@ -159,6 +161,8 @@ export class ClientManager {
   };
   onUdpData?: (msg: Record<string, unknown>) => void;
   requestLog?: { record(entry: Record<string, unknown>): void };
+  // ACL hook (set by server.js to the ACLManager)
+  acl?: { check(clientId: string | null, host: string, protocol: string, port: number, ip: string): boolean } | null;
 
   // Stats
   stats: ManagerStats = {
@@ -274,7 +278,7 @@ export class ClientManager {
       const p = this.pendingRequests.get(reqId);
       if (p) {
         if (p.timeout) clearTimeout(p.timeout);
-        p.reject(new Error('Client disconnected'));
+      if (p.reject) p.reject(new Error('Client disconnected'));
         if (p.res && !p.res.headersSent) {
           try {
             p.res.writeHead(502);
