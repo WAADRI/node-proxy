@@ -11,7 +11,7 @@ import type { Socket } from 'net';
 import type { WebSocket } from 'ws';
 import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
-import type { StreamMux } from './stream-mux.js';
+import type { StreamMux, MuxStreamLike } from './stream-mux.js';
 
 // --- External modules injected by server.js (duck-typed minimal contracts) ---
 
@@ -89,6 +89,8 @@ export interface PendingRecord {
   client?: ClientNode | null;
   clientId?: string | null;
   ready?: boolean;
+  // mux stream reserved for a socks5 tunnel (openTunnel path)
+  stream?: MuxStreamLike | null;
   _onResponse?: (headers: Record<string, unknown>, body?: Buffer) => void;
   _audit?: Record<string, unknown>;
   _touchIdle?: (() => void) | null;
@@ -138,6 +140,12 @@ interface ManagerStats {
 
 type ChangeListener = () => void;
 
+interface UdpAssociation {
+  udpServer: import('dgram').Socket;
+  udpClients: Map<string, unknown>;
+  socket: unknown;
+}
+
 export class ClientManager {
   config: ServerConfig;
   log: AppLogger;
@@ -162,7 +170,13 @@ export class ClientManager {
   onUdpData?: (msg: Record<string, unknown>) => void;
   requestLog?: { record(entry: Record<string, unknown>): void };
   // ACL hook (set by server.js to the ACLManager)
-  acl?: { check(clientId: string | null, host: string, protocol: string, port: number, ip: string): boolean } | null;
+  acl?: {
+    check(client: ClientNode | null, targetHost: string, protocol: string, targetPort?: number, sourceIp?: string): boolean;
+  } | null;
+  // Plugin hooks reached through the manager (SOCKS5 tunnel path)
+  pluginManager?: { executeHook(hook: string, context: Record<string, unknown>): unknown } | null;
+  // UDP ASSOCIATE relays registered by the SOCKS5 server (id -> relay state)
+  udpAssociations?: Map<string, UdpAssociation>;
 
   // Stats
   stats: ManagerStats = {

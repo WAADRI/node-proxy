@@ -38,6 +38,7 @@ export class StreamMux {
   );
   onStream(cb: (stream: MuxStreamLike) => void): void;
   createStream(priority?: number): MuxStreamLike;
+  openTunnel(host: string, port: number, priority?: number): MuxStreamLike | null;
   destroy(): void;
   ping(cb: (rtt: number) => void): void;
 }
