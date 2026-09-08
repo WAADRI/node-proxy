@@ -39,7 +39,7 @@ const { RequestCache } = require('./lib/cache.ts');
 const { PluginManager } = require('./lib/plugin-manager.ts');
 const { ACMEManager } = require('./lib/acme.ts');
 const { createHttpProxy } = require('./lib/proxy-http.ts');
-const { createSocks5Proxy } = require('./lib/proxy-socks5');
+const { createSocks5Proxy } = require('./lib/proxy-socks5.ts');
 const { createWebServer } = require('./lib/web-server');
 const { setupClientWebSocket } = require('./lib/ws-server.ts');
 const { loadTLSCredentials } = require('./lib/tls');
@@ -334,3 +334,4 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   logger.error({ error: reason }, 'Unhandled rejection');
 });
+
