@@ -14,7 +14,9 @@ const swaggerSpec = {
   servers: [
     { url: '/api/v1', description: 'v1 API' },
     { url: '/api', description: 'Legacy API' },
+    { url: '/', description: 'Root endpoints (metrics)' },
   ],
+  security: [],
   components: {
     securitySchemes: {
       BearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
@@ -437,6 +439,179 @@ const swaggerSpec = {
         summary: 'Get stream multiplexer statistics for all clients',
         security: [{ BearerAuth: [] }],
         responses: { '200': { description: 'Mux stats per client' } },
+      },
+    },
+    // --- Auth (mounted under /api) ---
+    '/login': {
+      post: {
+        tags: ['Auth'],
+        summary: 'Web administrator login',
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', required: ['username', 'password'], properties: { username: { type: 'string' }, password: { type: 'string' } } } } },
+        },
+        responses: {
+          '200': {
+            description: 'Login success',
+            content: { 'application/json': { schema: { type: 'object', required: ['success', 'token', 'role', 'redirect'], properties: { success: { type: 'boolean' }, token: { type: 'string' }, role: { type: 'string', enum: ['admin', 'operator', 'viewer'] }, redirect: { type: 'string' } } } } },
+          },
+          '401': { description: 'Invalid credentials' },
+        },
+      },
+    },
+    '/logout': {
+      post: {
+        tags: ['Auth'],
+        summary: 'Web logout',
+        security: [{ BearerAuth: [] }],
+        responses: { '200': { description: 'Logged out', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' } } } } } } },
+      },
+    },
+    // --- Request log ---
+    '/logs': {
+      get: {
+        tags: ['Logs'],
+        summary: 'Recent proxied request log',
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'limit', in: 'query', required: false, schema: { type: 'integer', maximum: 500 } }],
+        responses: { '200': { description: 'Log entries', content: { 'application/json': { schema: { type: 'object', properties: { logs: { type: 'array', items: { type: 'object' } } } } } } } },
+      },
+    },
+    // --- Runtime settings ---
+    '/settings': {
+      get: {
+        tags: ['Settings'],
+        summary: 'List runtime settings and edit permissions',
+        security: [{ BearerAuth: [] }],
+        responses: { '200': { description: 'Settings snapshot + editable map' } },
+      },
+    },
+    '/settings/{group}': {
+      post: {
+        tags: ['Settings'],
+        summary: 'Apply runtime settings for a group',
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'group', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } },
+        responses: {
+          '200': { description: 'Applied; returns full settings snapshot' },
+          '400': { description: 'Unknown group or invalid values' },
+          '403': { description: 'Permission denied' },
+        },
+      },
+    },
+    '/settings/{group}/reset': {
+      post: {
+        tags: ['Settings'],
+        summary: 'Reset a runtime settings group to defaults',
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'group', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          '200': { description: 'Reset; returns full settings snapshot' },
+          '400': { description: 'Unknown group' },
+          '403': { description: 'Permission denied' },
+        },
+      },
+    },
+    // --- Network testing toolkit (executed on proxy nodes, issue #31) ---
+    '/network-test/types': {
+      get: {
+        tags: ['NetworkTest'],
+        summary: 'Supported network test types',
+        security: [{ BearerAuth: [] }],
+        responses: { '200': { description: 'Test type descriptors' } },
+      },
+    },
+    '/network-test': {
+      post: {
+        tags: ['NetworkTest'],
+        summary: 'Start a network test batch on selected nodes (or this server)',
+        security: [{ BearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['type', 'targets'],
+                properties: {
+                  type: { type: 'string', enum: ['ping', 'tcping', 'http', 'dns', 'traceroute'] },
+                  targets: { type: 'array', maxItems: 256, items: { type: 'string' } },
+                  options: { type: 'object' },
+                  clients: { oneOf: [{ type: 'string', enum: ['all'] }, { type: 'array', items: { type: 'string' } }], description: "undefined = run on this server; 'all' or array = run on nodes" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Task created', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, taskId: { type: 'string' } } } } } },
+          '400': { description: 'Bad request' },
+        },
+      },
+    },
+    '/network-test/{id}': {
+      get: {
+        tags: ['NetworkTest'],
+        summary: 'Poll a network test task',
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          '200': { description: 'Task snapshot with per-node results' },
+          '404': { description: 'Task not found or expired' },
+        },
+      },
+    },
+    // --- Client metadata (alias / notes / region) ---
+    '/client/{id}/alias': {
+      post: {
+        tags: ['Clients'],
+        summary: 'Set client alias',
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { alias: { type: 'string', nullable: true } } } } } },
+        responses: { '200': { description: 'Alias updated' } },
+      },
+    },
+    '/client/{id}/notes': {
+      post: {
+        tags: ['Clients'],
+        summary: 'Set client notes',
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { notes: { type: 'string', nullable: true } } } } } },
+        responses: { '200': { description: 'Notes updated' } },
+      },
+    },
+    '/client/{id}/region': {
+      post: {
+        tags: ['Clients'],
+        summary: 'Set client region override',
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { region: { type: 'string', nullable: true } } } } } },
+        responses: { '200': { description: 'Region updated' } },
+      },
+    },
+    // --- Traffic aggregation ---
+    '/traffic': {
+      get: {
+        tags: ['Traffic'],
+        summary: 'Per-day traffic aggregation (frp-style); client_id optional = all clients',
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          { name: 'days', in: 'query', required: false, schema: { type: 'integer' } },
+          { name: 'client_id', in: 'query', required: false, schema: { type: 'string' } },
+        ],
+        responses: { '200': { description: 'Traffic stats' } },
+      },
+    },
+    // --- Prometheus metrics (root server, text/plain) ---
+    '/metrics': {
+      get: {
+        tags: ['Metrics'],
+        summary: 'Prometheus metrics (text/plain exposition)',
+        responses: { '200': { description: 'Metrics in Prometheus text format', content: { 'text/plain': { schema: { type: 'string' } } } } },
       },
     },
   },

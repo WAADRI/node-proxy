@@ -54,3 +54,5 @@ client/slow.log
 client/slow-server.js
 client/route-server.js
 client/timeout-test.js
+
+server/openapi/generated.json
