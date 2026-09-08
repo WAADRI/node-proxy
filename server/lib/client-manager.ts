@@ -27,6 +27,7 @@ export interface ClientMeta {
 interface RouterLike {
   strategy?: string;
   select(clients: ClientNode[], cb: unknown, tag?: string | null): ClientNode | null;
+  setStrategy(strategy: string): boolean;
   setWeight(id: string, weight: number): void;
   recordResponseTime(id: string | null | undefined, ms: number): void;
 }
@@ -35,6 +36,7 @@ interface CircuitBreakerLike {
   isAllowed(id: string): boolean;
   getStatus(id: string): { state?: string } | null;
   getState(id: string): string;
+  getAllStatuses(): Record<string, Record<string, unknown>>;
   onFailure(id: string): void;
   onSuccess(id: string): void;
   reset(id: string): void;
@@ -52,7 +54,16 @@ interface BandwidthLimiterLike {
 interface StorageLike {
   logClientEvent(id: string, event: string, data?: Record<string, unknown>): void;
   getClientMetadata(id: string): ClientMeta | null;
+  setClientMetadata(id: string, meta: Record<string, unknown>): void;
   recordTraffic(id: string | null | undefined, sent: number, received: number, requests?: number): void;
+  getClientEvents(id: string, limit?: number): Record<string, unknown>[];
+  getTrafficStats(id: string, since?: number): { bytesSent: number; bytesReceived: number; requests: number };
+  getTrafficDaily(id: string | null | undefined, days?: number): { date: string; bytesSent: number; bytesReceived: number }[];
+  getTrafficTotals(): { bytesSent: number; bytesReceived: number };
+  setConfigOverride(key: string, value: unknown): void;
+  getConfigOverride(key: string): unknown;
+  getAllOverrides(): Record<string, unknown>;
+  deleteConfigOverride(key: string): void;
 }
 
 interface MetricsLike {
@@ -166,9 +177,14 @@ export class ClientManager {
   netTest?: {
     onClientProgress(clientId: string | null, msg: Record<string, unknown>): void;
     onClientDone(clientId: string | null, msg: Record<string, unknown>): void;
+    start(type: string, targets: unknown, options: Record<string, unknown>, meta?: Record<string, unknown>): string;
+    get(id: string): unknown;
   };
   onUdpData?: (msg: Record<string, unknown>) => void;
-  requestLog?: { record(entry: Record<string, unknown>): void };
+  requestLog?: {
+    record(entry: Record<string, unknown>): void;
+    getRecent(limit: number): Record<string, unknown>[];
+  };
   // ACL hook (set by server.js to the ACLManager)
   acl?: {
     check(client: ClientNode | null, targetHost: string, protocol: string, targetPort?: number, sourceIp?: string): boolean;
@@ -203,7 +219,8 @@ export class ClientManager {
     this._onChangeListeners.delete(cb);
   }
 
-  private _notify() {
+  // Public: the web panel notifies listeners after direct mutations (tags etc.)
+  _notify() {
     for (const cb of this._onChangeListeners) {
       try {
         cb();
