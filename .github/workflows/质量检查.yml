@@ -1,4 +1,4 @@
-﻿name: 质量检查
+name: 质量检查
 # Issue #42 (Phase 0)：TypeScript 编译检查 / ESLint（禁 any）/ OpenAPI 校验骨架。
 # 规则只作用于新增 .ts 文件与 OpenAPI 文档；存量 JS 在迁移完成前不被硬性拦截。
 on:
@@ -21,6 +21,8 @@ jobs:
           cache: npm
       - name: 安装根工具依赖
         run: npm ci
+      - name: 安装 server 运行依赖（tsc 解析其类型）
+        run: npm install --prefix server --no-audit --no-fund
       - name: TypeScript 编译检查（server + client）
         run: npm run typecheck
 
