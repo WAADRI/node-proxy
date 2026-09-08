@@ -1,0 +1,51 @@
+name: 质量检查
+# Issue #42 (Phase 0)：TypeScript 编译检查 / ESLint（禁 any）/ OpenAPI 校验骨架。
+# 规则只作用于新增 .ts 文件与 OpenAPI 文档；存量 JS 在迁移完成前不被硬性拦截。
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: 安装根工具依赖
+        run: npm ci
+      - name: TypeScript 编译检查（server + client）
+        run: npm run typecheck
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: 安装根工具依赖
+        run: npm ci
+      - name: ESLint（新增 .ts 必须无 any）
+        run: npm run lint
+
+  openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: 安装根工具依赖
+        run: npm ci
+      - name: OpenAPI 规范校验
+        run: npm run openapi:validate

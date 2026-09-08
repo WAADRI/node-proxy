@@ -96,6 +96,22 @@ node-proxy/
 - 服务端镜像构建与编排文件（`Dockerfile`、`docker-compose.yml`、`prometheus.yml`）**归属 `server/`**；改镜像相关配置时同步更新 `server/` 下对应文件及 `.github/workflows/`。
 - 现状：根目录仍有这三个文件，属历史遗留（暂不迁移）；正式迁移需单独开 PR 完成，迁移后根目录不再保留。
 
+## TypeScript / OpenAPI 规范（issue #42）
+
+> 迁移状态：存量代码为 JS（server ≈ 7.8k 行、client ≈ 2.6k 行）。Phase 0 已就绪工具链
+> （根 `package.json`、`tsconfig.base.json`、`eslint.config.mjs`、CI「质量检查」），迁移逐模块进行。
+
+- **新增代码一律 TypeScript**（`.ts`），放原模块同目录；禁止把新逻辑写成 JS。
+- **禁止 `any` 类型注解**（含隐式 any）：ESLint `@typescript-eslint/no-explicit-any` 为 error，
+  由 CI「质量检查」强制校验（规则仅作用于 `.ts`，存量 JS 暂不拦截）。
+- **禁止动态取值**：不得用运行时可变的字符串做属性/路由/key 访问（如 `obj[userInput]`、
+  动态拼接后 `require`/`import`、`req.body[key]` 未经校验直接取值）。访问必须经过
+  显式字段或 OpenAPI schema 声明的结构。
+- **HTTP 接口必须遵守 OpenAPI 规范**：文档在 `server/openapi/openapi.yaml`；改接口时同步
+  更新文档，`npm run openapi:validate` 与 CI 会校验文档合法；不允许出现文档外的
+  “隐形接口”。（骨架期 responses 允许宽松 schema，Phase 1 起逐端点精确化并加实现一致性校验。）
+- 迁移/校验命令：`npm run typecheck` / `npm run lint` / `npm run openapi:validate`（需根目录 `npm ci`）。
+
 ## 禁止事项
 
 - ❌ 本地合并分支或直推 `main`；❌ 用 `gh pr merge` 之外的方式合入 PR。
