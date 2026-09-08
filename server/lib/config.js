@@ -141,6 +141,15 @@ function loadConfig() {
     deepMerge(config, yamlConfig);
   }
 
+  // Load optional per-host overlay next to the main config (e.g. config.local.yaml).
+  // Kept out of git so `git pull` never clobbers production-only values (issue #41).
+  if (configFile) {
+    const localFile = configFile.replace(/\.ya?ml$/i, '.local.yaml');
+    if (localFile !== configFile && fs.existsSync(localFile)) {
+      deepMerge(config, loadYamlConfig(localFile));
+    }
+  }
+
   // Load from environment variables (NP_ prefix)
   const envConfig = mapEnvToConfig(process.env, 'NP_');
   deepMerge(config, envConfig);
