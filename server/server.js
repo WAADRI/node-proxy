@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 
 // =============================================================================
 // Node-Proxy Server v3.0 - Main Entry Point
@@ -38,7 +38,7 @@ const { DomainRouter } = require('./lib/domain-router.ts');
 const { RequestCache } = require('./lib/cache.ts');
 const { PluginManager } = require('./lib/plugin-manager.ts');
 const { ACMEManager } = require('./lib/acme.ts');
-const { createHttpProxy } = require('./lib/proxy-http');
+const { createHttpProxy } = require('./lib/proxy-http.ts');
 const { createSocks5Proxy } = require('./lib/proxy-socks5');
 const { createWebServer } = require('./lib/web-server');
 const { setupClientWebSocket } = require('./lib/ws-server.ts');
