@@ -1,56 +1,175 @@
 // =============================================================================
 // ClientManager - Manages client connections with health checks
 // v2.1 - Integrated with circuit breaker, router, bandwidth, storage, metrics
+// Migrated to TypeScript (issue #42, Phase 2). ESM syntax; Node 24 type
+// stripping runs it via require('./lib/client-manager.ts').
 // =============================================================================
-'use strict';
 
-const { v4: uuidv4 } = require('uuid');
+import { v4 as uuidv4 } from 'uuid';
+import type { ServerResponse } from 'http';
+import type { Socket } from 'net';
+import type { WebSocket } from 'ws';
+import type { ServerConfig } from './config.ts';
+import type { AppLogger } from './logger.ts';
 
-class ClientManager {
-  constructor(config, logger) {
+// --- External modules injected by server.js (duck-typed minimal contracts) ---
+
+export interface ClientMeta {
+  tags?: string[];
+  weight?: number;
+  bandwidth_limit?: number;
+  alias?: string | null;
+  notes?: string | null;
+  region?: string | null;
+}
+
+interface RouterLike {
+  strategy?: string;
+  select(clients: ClientNode[], cb: unknown, tag?: string | null): ClientNode | null;
+  setWeight(id: string, weight: number): void;
+  recordResponseTime(id: string | null | undefined, ms: number): void;
+}
+
+interface CircuitBreakerLike {
+  isAllowed(id: string): boolean;
+  getStatus(id: string): { state?: string } | null;
+  getState(id: string): string;
+  onFailure(id: string): void;
+  onSuccess(id: string): void;
+  reset(id: string): void;
+  cleanup(ids: Iterable<string>): void;
+}
+
+interface BandwidthLimiterLike {
+  enabled: boolean;
+  setLimit(id: string, rate: number): void;
+  getUtilization(id: string): number | undefined;
+  getStats(): unknown;
+}
+
+interface StorageLike {
+  logClientEvent(id: string, event: string, data?: Record<string, unknown>): void;
+  getClientMetadata(id: string): ClientMeta | null;
+  recordTraffic(id: string | null | undefined, sent: number, received: number, requests?: number): void;
+}
+
+interface MetricsLike {
+  activeClients: { set(value: number): void };
+  recordRequest(type: string, status: number, durationMs: number): void;
+  recordTunnel(result: string): void;
+  recordBytes(dir: string, clientId: string | null | undefined, bytes: number): void;
+  recordError(type: string, clientId?: string | null): void;
+  updateGauges(cm: unknown): void;
+  updateCircuitBreakerGauge(id: string, state: string): void;
+}
+
+export interface ClientInfo {
+  clientId?: string;
+  hostname?: string;
+  region?: string;
+  tags?: string[];
+  [key: string]: unknown;
+}
+
+export interface PendingRecord {
+  timeout: NodeJS.Timeout;
+  reject(err: Error): void;
+  res?: ServerResponse;
+  socket?: Socket;
+  type?: string;
+}
+
+export interface ClientStatsEntry {
+  requestsHandled: number;
+  tunnelsHandled: number;
+  bytesSent: number;
+  bytesReceived: number;
+  errors: number;
+  responseTimeSum: number;
+  responseTimeCount: number;
+}
+
+export interface ClientNode {
+  id: string;
+  ws: WebSocket;
+  info: ClientInfo;
+  tags: string[];
+  connectedAt: number;
+  lastSeen: number;
+  lastPing: number;
+  pingFailures: number;
+  pendingRequests: Set<string>;
+  pendingTunnels: Set<string>;
+  stats: ClientStatsEntry;
+  lastActivity: number;
+  alias?: string | null;
+  notes?: string | null;
+  region?: string | null;
+}
+
+interface ManagerStats {
+  totalRequests: number;
+  totalTunnels: number;
+  totalBytesSent: number;
+  totalBytesReceived: number;
+  failedRequests: number;
+  startTime: number;
+}
+
+type ChangeListener = () => void;
+
+export class ClientManager {
+  config: ServerConfig;
+  log: AppLogger;
+  clients: Map<string, ClientNode> = new Map();
+  pendingRequests: Map<string, PendingRecord> = new Map();
+  pendingTunnels: Map<string, PendingRecord> = new Map();
+  private _onChangeListeners: Set<ChangeListener> = new Set();
+  private _healthTimer: ReturnType<typeof setInterval> | null = null;
+
+  // External modules (set by server.js)
+  circuitBreaker: CircuitBreakerLike | null = null;
+  router: RouterLike | null = null;
+  bandwidthLimiter: BandwidthLimiterLike | null = null;
+  storage: StorageLike | null = null;
+  metrics: MetricsLike | null = null;
+
+  // Stats
+  stats: ManagerStats = {
+    totalRequests: 0,
+    totalTunnels: 0,
+    totalBytesSent: 0,
+    totalBytesReceived: 0,
+    failedRequests: 0,
+    startTime: Date.now(),
+  };
+
+  constructor(config: ServerConfig, logger: AppLogger) {
     this.config = config;
     this.log = logger;
-    this.clients = new Map();
-    this.pendingRequests = new Map();
-    this.pendingTunnels = new Map();
-    this._onChangeListeners = new Set();
-    this._healthTimer = null;
-
-    // External modules (set by server.js)
-    this.circuitBreaker = null;
-    this.router = null;
-    this.bandwidthLimiter = null;
-    this.storage = null;
-    this.metrics = null;
-
-    // Stats
-    this.stats = {
-      totalRequests: 0,
-      totalTunnels: 0,
-      totalBytesSent: 0,
-      totalBytesReceived: 0,
-      failedRequests: 0,
-      startTime: Date.now(),
-    };
   }
 
-  onChange(cb) {
+  onChange(cb: ChangeListener) {
     if (typeof cb === 'function') {
       this._onChangeListeners.add(cb);
     }
   }
 
-  removeOnChange(cb) {
+  removeOnChange(cb: ChangeListener) {
     this._onChangeListeners.delete(cb);
   }
 
-  _notify() {
+  private _notify() {
     for (const cb of this._onChangeListeners) {
-      try { cb(); } catch (_) {}
+      try {
+        cb();
+      } catch (_) {
+        // listener errors must not break notification
+      }
     }
   }
 
-  add(ws, info) {
+  add(ws: WebSocket, info?: ClientInfo): string {
     // Reuse the client-provided stable ID if present (persisted metadata key)
     const id = info?.clientId || uuidv4();
 
@@ -58,10 +177,14 @@ class ClientManager {
     // replace the old connection so the clients map stays consistent.
     const existing = this.clients.get(id);
     if (existing && existing.ws && existing.ws !== ws) {
-      try { existing.ws.close(4000, 'Replaced by new connection'); } catch (_) {}
+      try {
+        existing.ws.close(4000, 'Replaced by new connection');
+      } catch (_) {
+        // ignore
+      }
       this.remove(id, 'replaced');
     }
-    const client = {
+    const client: ClientNode = {
       id,
       ws,
       info: info || {},
@@ -81,7 +204,6 @@ class ClientManager {
         responseTimeSum: 0,
         responseTimeCount: 0,
       },
-      // Track last request time for load calculation
       lastActivity: Date.now(),
     };
     this.clients.set(id, client);
@@ -109,7 +231,7 @@ class ClientManager {
     return id;
   }
 
-  remove(id, reason = 'unknown') {
+  remove(id: string, reason = 'unknown') {
     const client = this.clients.get(id);
     if (!client) return;
 
@@ -128,7 +250,12 @@ class ClientManager {
         clearTimeout(p.timeout);
         p.reject(new Error('Client disconnected'));
         if (p.res && !p.res.headersSent) {
-          try { p.res.writeHead(502); p.res.end('Client disconnected'); } catch (_) {}
+          try {
+            p.res.writeHead(502);
+            p.res.end('Client disconnected');
+          } catch (_) {
+            // ignore
+          }
         }
         this.pendingRequests.delete(reqId);
         this.stats.failedRequests++;
@@ -145,7 +272,9 @@ class ClientManager {
           try {
             if (p.type === 'socks5') p.socket.write(encodeSocks5Reply(0x03));
             p.socket.end();
-          } catch (_) {}
+          } catch (_) {
+            // ignore
+          }
         }
         this.pendingTunnels.delete(tunId);
       }
@@ -159,21 +288,21 @@ class ClientManager {
   // ===========================================================================
   // Client Metadata Setters
   // ===========================================================================
-  setAlias(id, alias) {
+  setAlias(id: string, alias: string | null | undefined) {
     const client = this.clients.get(id);
     if (!client) return;
     client.alias = alias || null;
     this._notify();
   }
 
-  setNotes(id, notes) {
+  setNotes(id: string, notes: string | null | undefined) {
     const client = this.clients.get(id);
     if (!client) return;
     client.notes = notes || null;
     this._notify();
   }
 
-  setRegion(id, region) {
+  setRegion(id: string, region: string | null | undefined) {
     const client = this.clients.get(id);
     if (!client) return;
     client.region = region || null;
@@ -183,7 +312,7 @@ class ClientManager {
   // ===========================================================================
   // Client Selection (delegates to Router)
   // ===========================================================================
-  selectClient(tag) {
+  selectClient(tag?: string | null): ClientNode | null {
     const clients = Array.from(this.clients.values());
     if (clients.length === 0) return null;
 
@@ -192,37 +321,37 @@ class ClientManager {
     }
 
     // Fallback to random with circuit breaker check
-    const candidates = clients.filter(c => {
+    const candidates = clients.filter((c) => {
       return !this.circuitBreaker || this.circuitBreaker.isAllowed(c.id);
     });
     if (candidates.length === 0) return null;
     if (tag) {
-      const tagged = candidates.filter(c => (c.tags || []).includes(tag));
+      const tagged = candidates.filter((c) => (c.tags || []).includes(tag));
       if (tagged.length > 0) return tagged[Math.floor(Math.random() * tagged.length)];
     }
     return candidates[Math.floor(Math.random() * candidates.length)];
   }
 
-  getRandom() {
+  getRandom(): ClientNode | null {
     return this.selectClient(null);
   }
 
-  getById(id) {
+  getById(id: string): ClientNode | null {
     return this.clients.get(id) || null;
   }
 
-  getAll() {
+  getAll(): ClientNode[] {
     return Array.from(this.clients.values());
   }
 
-  getByTag(tag) {
-    return this.getAll().filter(c => (c.tags || []).includes(tag));
+  getByTag(tag: string): ClientNode[] {
+    return this.getAll().filter((c) => (c.tags || []).includes(tag));
   }
 
-  getAllTags() {
-    const tags = new Set();
+  getAllTags(): string[] {
+    const tags = new Set<string>();
     for (const c of this.clients.values()) {
-      for (const t of (c.tags || [])) tags.add(t);
+      for (const t of c.tags || []) tags.add(t);
     }
     return Array.from(tags).sort();
   }
@@ -310,7 +439,7 @@ class ClientManager {
     }
   }
 
-  _performHealthCheck() {
+  private _performHealthCheck() {
     const hc = this.config.health_check;
     const now = Date.now();
 
@@ -322,7 +451,11 @@ class ClientManager {
 
         if (client.pingFailures >= hc.max_failures) {
           this.log.warn({ clientId: id, failures: client.pingFailures, elapsed }, 'Client removed due to health check failure');
-          try { client.ws.close(4001, 'Health check timeout'); } catch (_) {}
+          try {
+            client.ws.close(4001, 'Health check timeout');
+          } catch (_) {
+            // ignore
+          }
           this.remove(id, 'health_check_timeout');
           continue;
         }
@@ -338,7 +471,7 @@ class ClientManager {
     }
   }
 
-  recordPong(clientId) {
+  recordPong(clientId: string) {
     const client = this.clients.get(clientId);
     if (client) {
       client.lastPing = Date.now();
@@ -350,9 +483,9 @@ class ClientManager {
   // ===========================================================================
   // Stats Tracking
   // ===========================================================================
-  trackRequest(type, status, durationMs, clientId) {
+  trackRequest(type: string, status: number, durationMs: number, clientId?: string | null) {
     this.stats.totalRequests++;
-    const client = this.clients.get(clientId);
+    const client = clientId ? this.clients.get(clientId) : undefined;
     if (client) {
       client.stats.requestsHandled++;
       client.lastActivity = Date.now();
@@ -362,12 +495,12 @@ class ClientManager {
       }
     }
     this.metrics?.recordRequest(type, status, durationMs || 0);
-    this.router?.recordResponseTime(clientId, durationMs || 0);
+    this.router?.recordResponseTime(clientId || null, durationMs || 0);
   }
 
-  trackTunnel(clientId) {
+  trackTunnel(clientId?: string | null) {
     this.stats.totalTunnels++;
-    const client = this.clients.get(clientId);
+    const client = clientId ? this.clients.get(clientId) : undefined;
     if (client) {
       client.stats.tunnelsHandled++;
       client.lastActivity = Date.now();
@@ -375,10 +508,10 @@ class ClientManager {
     this.metrics?.recordTunnel('success');
   }
 
-  trackBytes(clientId, sent, received) {
+  trackBytes(clientId: string | null | undefined, sent: number, received: number) {
     this.stats.totalBytesSent += sent;
     this.stats.totalBytesReceived += received;
-    const client = this.clients.get(clientId);
+    const client = clientId ? this.clients.get(clientId) : undefined;
     if (client) {
       client.stats.bytesSent += sent;
       client.stats.bytesReceived += received;
@@ -388,9 +521,9 @@ class ClientManager {
     this.storage?.recordTraffic(clientId, sent, received);
   }
 
-  trackError(clientId, type = 'request') {
+  trackError(clientId?: string | null, type = 'request') {
     this.stats.failedRequests++;
-    const client = this.clients.get(clientId);
+    const client = clientId ? this.clients.get(clientId) : undefined;
     if (client) client.stats.errors++;
     this.metrics?.recordError(type, clientId);
 
@@ -403,7 +536,7 @@ class ClientManager {
     }
   }
 
-  trackSuccess(clientId) {
+  trackSuccess(clientId?: string | null) {
     if (this.circuitBreaker && clientId) {
       this.circuitBreaker.onSuccess(clientId);
       if (this.metrics) {
@@ -413,11 +546,12 @@ class ClientManager {
   }
 }
 
-function encodeSocks5Reply(replyCode) {
+function encodeSocks5Reply(replyCode: number): Buffer {
   const buf = Buffer.alloc(10);
-  buf[0] = 0x05; buf[1] = replyCode; buf[2] = 0x00; buf[3] = 0x01;
+  buf[0] = 0x05;
+  buf[1] = replyCode;
+  buf[2] = 0x00;
+  buf[3] = 0x01;
   for (let i = 4; i < 10; i++) buf[i] = 0x00;
   return buf;
 }
-
-module.exports = { ClientManager };

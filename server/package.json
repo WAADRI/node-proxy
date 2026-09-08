@@ -12,16 +12,20 @@
     "docker:run": "docker-compose up -d"
   },
   "dependencies": {
-    "express": "^4.21.0",
-    "ws": "^8.18.0",
-    "uuid": "^10.0.0",
-    "pino": "^9.4.0",
-    "pino-pretty": "^11.3.0",
-    "js-yaml": "^4.1.0",
-    "jsonwebtoken": "^9.0.2",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.6",
+    "express": "^4.21.0",
+    "js-yaml": "^4.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "pino": "^9.4.0",
+    "pino-pretty": "^11.3.0",
+    "prom-client": "^15.1.0",
     "sql.js": "^1.6.2",
-    "prom-client": "^15.1.0"
+    "uuid": "^10.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1"
   }
 }
