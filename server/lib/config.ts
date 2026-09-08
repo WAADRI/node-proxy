@@ -127,6 +127,10 @@ export interface StorageSection {
   path?: string;
 }
 
+export interface PluginsSection {
+  dir?: string;
+}
+
 export interface ServerConfig {
   server: ServerSection;
   tls: TlsSection;
@@ -143,7 +147,7 @@ export interface ServerConfig {
   acme?: AcmeSection;
   storage?: StorageSection;
   domain_rules?: DomainRuleEntry[];
-  plugins?: unknown;
+  plugins?: PluginsSection;
   acl?: unknown;
   audit?: unknown;
   update?: unknown;
