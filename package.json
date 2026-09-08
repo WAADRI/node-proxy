@@ -1,0 +1,18 @@
+{
+  "name": "node-proxy-tooling",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dev tooling only (TypeScript / ESLint / OpenAPI validation). Not part of any runtime image.",
+  "scripts": {
+    "typecheck": "tsc -p server/tsconfig.json && tsc -p client/tsconfig.json",
+    "lint": "eslint --no-error-on-unmatched-pattern \"server/**/*.ts\" \"client/**/*.ts\"",
+    "openapi:validate": "redocly lint --extends=minimal server/openapi/openapi.yaml"
+  },
+  "devDependencies": {
+    "@redocly/cli": "^1.16.0",
+    "@types/node": "^20.14.0",
+    "eslint": "^9.9.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.0.0"
+  }
+}

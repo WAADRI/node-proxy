@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noImplicitAny": true
+  },
+  "include": ["**/*.js", "**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "web/node_modules",
+    "web/dist",
+    "public",
+    "storage",
+    "config.local.yaml"
+  ]
+}
