@@ -47,10 +47,9 @@ export interface WebAuthSection {
 
 export interface WebUserEntry {
   username: string;
-  password_hash?: string;
+  password?: string;
   role?: 'admin' | 'operator' | 'viewer';
   enabled?: boolean;
-  created_at?: number;
 }
 
 export interface AuthSection {

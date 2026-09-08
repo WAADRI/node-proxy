@@ -27,13 +27,13 @@ const logger = createLogger({
 logger.info('Node-Proxy Server v3.0 starting...');
 
 // Initialize modules
-const { AuthManager } = require('./lib/auth');
+const { AuthManager } = require('./lib/auth.ts');
 const { ClientManager } = require('./lib/client-manager.ts');
 const { CircuitBreaker } = require('./lib/circuit-breaker.ts');
 const { Router } = require('./lib/router.ts');
 const { BandwidthLimiter } = require('./lib/bandwidth.ts');
 const { Storage } = require('./lib/storage');
-const { MetricsManager } = require('./lib/metrics');
+const { MetricsManager } = require('./lib/metrics.ts');
 const { DomainRouter } = require('./lib/domain-router');
 const { RequestCache } = require('./lib/cache');
 const { PluginManager } = require('./lib/plugin-manager');

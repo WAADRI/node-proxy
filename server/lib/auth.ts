@@ -1,13 +1,26 @@
 // =============================================================================
 // Auth v3.0 - Multi-user authentication with RBAC (Role-Based Access Control)
+// Migrated to TypeScript (issue #42, Phase 2). ESM syntax; Node 24 type
+// stripping runs it via require('./lib/auth.ts').
 // =============================================================================
-'use strict';
 
-const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
+import jwt from 'jsonwebtoken';
+import { randomBytes } from 'crypto';
+import type { Response, NextFunction } from 'express';
+import type { ServerConfig } from './config.ts';
+import type { AppLogger } from './logger.ts';
+
+export type RoleName = 'admin' | 'operator' | 'viewer';
+
+const VALID_ROLES: RoleName[] = ['admin', 'operator', 'viewer'];
+
+function toRoleName(value: string | undefined): RoleName {
+  if (value === 'admin' || value === 'operator' || value === 'viewer') return value;
+  return 'viewer';
+}
 
 // Built-in roles with permission sets
-const ROLES = {
+export const ROLES: Record<RoleName, { permissions: string[] }> = {
   admin: {
     permissions: [
       'client:list', 'client:kick', 'client:tag', 'client:weight',
@@ -52,16 +65,44 @@ const ROLES = {
   },
 };
 
-class AuthManager {
-  constructor(config, logger) {
+interface AuthUserValue {
+  password: string;
+  role: RoleName;
+  enabled: boolean;
+  createdAt: number;
+}
+
+// Request enriched by the auth middleware with the authenticated user.
+// Structural subset of express.Request so the middleware stays decoupled
+// from @types/express version-specific cookie typing.
+export interface AuthWebRequest {
+  path: string;
+  headers: { authorization?: string | string[] };
+  cookies?: Record<string, string>;
+  user?: string;
+  role?: string;
+}
+
+export type WebAuthResult =
+  | { valid: true; username?: string; role?: string }
+  | { valid: false; error?: string };
+
+export type AuthMiddleware = (req: AuthWebRequest, res: Response, next: NextFunction) => void;
+
+export class AuthManager {
+  config: ServerConfig;
+  log: AppLogger;
+  private jwtSecret: string;
+  private users: Map<string, AuthUserValue> = new Map(); // username -> entry
+
+  constructor(config: ServerConfig, logger: AppLogger) {
     this.config = config;
     this.log = logger;
-    this.jwtSecret = config.auth.web?.jwt_secret || crypto.randomBytes(32).toString('hex');
-    this.users = new Map(); // username -> { password, role, enabled, createdAt }
+    this.jwtSecret = config.auth.web?.jwt_secret || randomBytes(32).toString('hex');
     this._initUsers();
   }
 
-  _initUsers() {
+  private _initUsers() {
     const web = this.config.auth.web || {};
     // Always add the configured admin user
     this.users.set(web.username || 'admin', {
@@ -74,8 +115,8 @@ class AuthManager {
     const extraUsers = this.config.auth.users || [];
     for (const u of extraUsers) {
       this.users.set(u.username, {
-        password: u.password,
-        role: u.role || 'viewer',
+        password: u.password || '',
+        role: toRoleName(u.role),
         enabled: u.enabled !== false,
         createdAt: Date.now(),
       });
@@ -85,8 +126,8 @@ class AuthManager {
   // ===========================================================================
   // User Management
   // ===========================================================================
-  listUsers() {
-    const result = [];
+  listUsers(): { username: string; role: RoleName; enabled: boolean; createdAt: number }[] {
+    const result: { username: string; role: RoleName; enabled: boolean; createdAt: number }[] = [];
     for (const [username, data] of this.users) {
       result.push({
         username,
@@ -98,31 +139,31 @@ class AuthManager {
     return result;
   }
 
-  addUser(username, password, role = 'viewer') {
+  addUser(username: string, password: string, role: RoleName = 'viewer'): boolean {
     if (this.users.has(username)) return false;
-    if (!['admin', 'operator', 'viewer'].includes(role)) return false;
+    if (!VALID_ROLES.includes(role)) return false;
     this.users.set(username, { password, role, enabled: true, createdAt: Date.now() });
     return true;
   }
 
-  deleteUser(username) {
+  deleteUser(username: string): boolean {
     // Cannot delete the last admin
-    const adminCount = this.listUsers().filter(u => u.role === 'admin').length;
+    const adminCount = this.listUsers().filter((u) => u.role === 'admin').length;
     const user = this.users.get(username);
     if (user && user.role === 'admin' && adminCount <= 1) return false;
     return this.users.delete(username);
   }
 
-  modifyUser(username, updates) {
+  modifyUser(username: string, updates: { password?: string; role?: string; enabled?: boolean }): boolean {
     const user = this.users.get(username);
     if (!user) return false;
     if (updates.password) user.password = updates.password;
-    if (updates.role && ['admin', 'operator', 'viewer'].includes(updates.role)) user.role = updates.role;
+    if (updates.role && VALID_ROLES.includes(updates.role as RoleName)) user.role = updates.role as RoleName;
     if (updates.enabled !== undefined) user.enabled = updates.enabled;
     return true;
   }
 
-  getRole(username) {
+  getRole(username: string): RoleName | null {
     const user = this.users.get(username);
     return user ? user.role : null;
   }
@@ -130,7 +171,7 @@ class AuthManager {
   // ===========================================================================
   // Permission Check
   // ===========================================================================
-  hasPermission(username, permission) {
+  hasPermission(username: string, permission: string): boolean {
     const user = this.users.get(username);
     if (!user || !user.enabled) return false;
     const role = ROLES[user.role];
@@ -138,7 +179,7 @@ class AuthManager {
     return role.permissions.includes(permission);
   }
 
-  getPermissions(username) {
+  getPermissions(username: string): string[] {
     const user = this.users.get(username);
     if (!user || !user.enabled) return [];
     const role = ROLES[user.role];
@@ -148,7 +189,7 @@ class AuthManager {
   // ===========================================================================
   // Web Panel Authentication (JWT)
   // ===========================================================================
-  validateWebLogin(username, password) {
+  validateWebLogin(username: string, password: string): boolean {
     const webAuth = this.config.auth.web;
     if (!webAuth.enabled) return true;
     const user = this.users.get(username);
@@ -156,7 +197,7 @@ class AuthManager {
     return user.password === password;
   }
 
-  generateWebToken(username) {
+  generateWebToken(username: string): string {
     const user = this.users.get(username);
     const role = user ? user.role : 'viewer';
     const payload = {
@@ -168,57 +209,83 @@ class AuthManager {
     return jwt.sign(payload, this.jwtSecret);
   }
 
-  verifyWebToken(token) {
+  verifyWebToken(token: string): WebAuthResult {
     try {
       const payload = jwt.verify(token, this.jwtSecret);
-      return { valid: true, username: payload.sub, role: payload.role };
+      if (typeof payload === 'string') {
+        return { valid: false, error: 'unexpected string payload' };
+      }
+      const role = typeof payload.role === 'string' ? payload.role : undefined;
+      const username = typeof payload.sub === 'string' ? payload.sub : undefined;
+      return { valid: true, username, role };
     } catch (err) {
-      return { valid: false, error: err.message };
+      const message = err instanceof Error ? err.message : String(err);
+      return { valid: false, error: message };
     }
   }
 
   // Express middleware with optional permission check
-  webAuthMiddleware(requiredPermission = null) {
+  webAuthMiddleware(requiredPermission: string | null = null): AuthMiddleware {
     const webAuth = this.config.auth.web;
     if (!webAuth.enabled) {
       // Auth disabled: set user to the admin user from config
       const adminUser = webAuth?.username || 'admin';
-      return (req, res, next) => { req.user = adminUser; req.role = 'admin'; next(); };
+      return (req, res, next) => {
+        req.user = adminUser;
+        req.role = 'admin';
+        next();
+      };
     }
 
-    return (req, res, next) => {
-      let token = null;
-      const authHeader = req.headers.authorization;
+    return (req: AuthWebRequest, res: Response, next: NextFunction) => {
+      let token: string | null = null;
+      const rawAuth = req.headers.authorization;
+      const authHeader = typeof rawAuth === 'string' ? rawAuth : null;
       if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.slice(7);
       if (!token && req.cookies && req.cookies.token) token = req.cookies.token;
 
       if (!token) {
         // Public endpoints that don't require auth
-        if (req.path === '/metrics' || req.path.startsWith('/public/') || req.path === '/api/swagger.json' || req.path === '/api/docs') {
+        if (
+          req.path === '/metrics' ||
+          req.path.startsWith('/public/') ||
+          req.path === '/api/swagger.json' ||
+          req.path === '/api/docs'
+        ) {
           return next();
         }
         if (req.path.startsWith('/api/')) {
-          return res.status(401).json({ error: 'Unauthorized', message: 'Token required' });
+          res.status(401).json({ error: 'Unauthorized', message: 'Token required' });
+          return;
         }
-        if (req.path !== '/login' && !req.path.startsWith('/public/')) return res.redirect('/login');
+        if (req.path !== '/login' && !req.path.startsWith('/public/')) {
+          res.redirect('/login');
+          return;
+        }
         return next();
       }
 
       const result = this.verifyWebToken(token);
       if (!result.valid) {
-        if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized', message: 'Invalid token' });
-        return res.redirect('/login');
+        if (req.path.startsWith('/api/')) {
+          res.status(401).json({ error: 'Unauthorized', message: 'Invalid token' });
+        } else {
+          res.redirect('/login');
+        }
+        return;
       }
 
       req.user = result.username;
       req.role = result.role;
 
       // Check permission if required
-      if (requiredPermission && !this.hasPermission(result.username, requiredPermission)) {
+      if (requiredPermission && !this.hasPermission(result.username || '', requiredPermission)) {
         if (req.path.startsWith('/api/')) {
-          return res.status(403).json({ error: 'Forbidden', message: `Permission denied: ${requiredPermission}` });
+          res.status(403).json({ error: 'Forbidden', message: `Permission denied: ${requiredPermission}` });
+        } else {
+          res.status(403).send('Forbidden');
         }
-        return res.status(403).send('Forbidden');
+        return;
       }
 
       next();
@@ -228,14 +295,14 @@ class AuthManager {
   // ===========================================================================
   // Legacy: Client Node Authentication
   // ===========================================================================
-  validateClientToken(token) {
+  validateClientToken(token: string): boolean {
     return token === this.config.auth.token;
   }
 
   // ===========================================================================
   // Legacy: HTTP Proxy Auth
   // ===========================================================================
-  validateProxyAuth(authHeader) {
+  validateProxyAuth(authHeader: string | null | undefined): boolean {
     const proxyAuth = this.config.auth.proxy;
     if (!proxyAuth.enabled) return true;
     if (!authHeader) return false;
@@ -253,18 +320,16 @@ class AuthManager {
     }
   }
 
-  generateProxyAuthHeader() {
+  generateProxyAuthHeader(): string | null {
     const proxyAuth = this.config.auth.proxy;
     if (!proxyAuth.enabled) return null;
     const encoded = Buffer.from(`${proxyAuth.username}:${proxyAuth.password}`).toString('base64');
     return `Basic ${encoded}`;
   }
 
-  validateSocks5Auth(username, password) {
+  validateSocks5Auth(username: string, password: string): boolean {
     const proxyAuth = this.config.auth.proxy;
     if (!proxyAuth.enabled) return true;
     return username === proxyAuth.username && password === proxyAuth.password;
   }
 }
-
-module.exports = { AuthManager, ROLES };

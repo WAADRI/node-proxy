@@ -1,12 +1,38 @@
 // =============================================================================
 // Metrics - Prometheus metrics exporter
+// Migrated to TypeScript (issue #42, Phase 2). ESM syntax; Node 24 type
+// stripping runs it via require('./lib/metrics.ts').
 // =============================================================================
-'use strict';
 
-const promClient = require('prom-client');
+import promClient from 'prom-client';
+import type { Response } from 'express';
+import type { ServerConfig } from './config.ts';
+import type { AppLogger } from './logger.ts';
+import type { ClientManager } from './client-manager.ts';
 
-class MetricsManager {
-  constructor(config, logger) {
+const CIRCUIT_STATE_MAP: Record<string, number> = { closed: 0, open: 1, half_open: 2 };
+
+export class MetricsManager {
+  config: ServerConfig;
+  log: AppLogger;
+  enabled: boolean;
+
+  // Metric collectors (only initialized when enabled)
+  private requestsTotal!: promClient.Counter<string>;
+  private bytesTotal!: promClient.Counter<string>;
+  private tunnelTotal!: promClient.Counter<string>;
+  private errorsTotal!: promClient.Counter<string>;
+  activeClients!: promClient.Gauge<string>;
+  private activeRequests!: promClient.Gauge<string>;
+  private activeTunnels!: promClient.Gauge<string>;
+  private clientLoad!: promClient.Gauge<string>;
+  private clientBandwidth!: promClient.Gauge<string>;
+  private circuitBreakerState!: promClient.Gauge<string>;
+  private requestDuration!: promClient.Histogram<string>;
+  private tunnelDuration!: promClient.Histogram<string>;
+  private responseSize!: promClient.Summary<string>;
+
+  constructor(config: ServerConfig, logger: AppLogger) {
     this.config = config;
     this.log = logger;
     this.enabled = config.metrics?.enabled !== false;
@@ -118,24 +144,24 @@ class MetricsManager {
   // ===========================================================================
   // Record methods
   // ===========================================================================
-  recordRequest(type, status, durationMs) {
+  recordRequest(type: string, status: number, durationMs: number) {
     if (!this.enabled) return;
     this.requestsTotal.inc({ type, status: String(status) });
     this.requestDuration.observe({ type }, durationMs);
   }
 
-  recordBytes(direction, clientId, bytes) {
+  recordBytes(direction: string, clientId: string | null | undefined, bytes: number) {
     if (!this.enabled) return;
     this.bytesTotal.inc({ direction, client_id: clientId || 'unknown' }, bytes);
     this.responseSize.observe({ type: direction }, bytes);
   }
 
-  recordTunnel(status) {
+  recordTunnel(status: string) {
     if (!this.enabled) return;
     this.tunnelTotal.inc({ status });
   }
 
-  recordError(type, clientId) {
+  recordError(type: string, clientId?: string | null) {
     if (!this.enabled) return;
     this.errorsTotal.inc({ type, client_id: clientId || 'unknown' });
   }
@@ -143,7 +169,7 @@ class MetricsManager {
   // ===========================================================================
   // Update gauges (called periodically)
   // ===========================================================================
-  updateGauges(clientManager) {
+  updateGauges(clientManager: ClientManager) {
     if (!this.enabled) return;
 
     const stats = clientManager.getStats();
@@ -153,38 +179,43 @@ class MetricsManager {
 
     // Per-client metrics
     for (const c of stats.clients) {
-      this.clientLoad.set({
-        client_id: c.id.substring(0, 8),
-        hostname: c.info?.hostname || 'unknown',
-      }, c.pendingRequestsCount + c.pendingTunnelsCount);
+      this.clientLoad.set(
+        {
+          client_id: c.id.substring(0, 8),
+          hostname: c.info?.hostname || 'unknown',
+        },
+        c.pendingRequestsCount + c.pendingTunnelsCount
+      );
     }
   }
 
-  updateCircuitBreakerGauge(clientId, state) {
+  updateCircuitBreakerGauge(clientId: string, state: string) {
     if (!this.enabled) return;
-    const stateMap = { closed: 0, open: 1, half_open: 2 };
-    this.circuitBreakerState.set({
-      client_id: clientId.substring(0, 8),
-    }, stateMap[state] || 0);
+    this.circuitBreakerState.set(
+      {
+        client_id: clientId.substring(0, 8),
+      },
+      CIRCUIT_STATE_MAP[state] || 0
+    );
   }
 
   // ===========================================================================
   // Express middleware for /metrics endpoint
   // ===========================================================================
-  metricsMiddleware() {
-    return async (req, res) => {
+  metricsMiddleware(): (req: unknown, res: Response) => Promise<void> {
+    return async (_req: unknown, res: Response) => {
       if (!this.enabled) {
-        return res.status(404).send('Metrics disabled');
+        res.status(404).send('Metrics disabled');
+        return;
       }
       try {
         res.set('Content-Type', promClient.register.contentType);
         const metrics = await promClient.register.metrics();
         res.send(metrics);
       } catch (err) {
-        res.status(500).send(`Error collecting metrics: ${err.message}`);
+        const message = err instanceof Error ? err.message : String(err);
+        res.status(500).send(`Error collecting metrics: ${message}`);
       }
     };
   }
 }
-
-module.exports = { MetricsManager };
