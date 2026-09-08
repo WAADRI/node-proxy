@@ -1,0 +1,92 @@
+# Node-Proxy Server REST API - OpenAPI 3.0 骨架
+#
+# Issue #42 (Phase 0)：先建立契约结构与 CI 校验链路；
+# Phase 1 将按实现逐端点补全/校准（responses 目前为宽松 schema，additionalProperties
+# 允许，避免骨架期与实现漂移产生误报）。
+# 校验：swagger-cli validate（见根 package.json openapi:validate）
+openapi: 3.0.3
+info:
+  title: Node-Proxy Server API
+  version: 2.1.0
+  description: 管理面板 REST API（/api 前缀）。鉴权见 securitySchemes.bearerAuth。
+tags:
+  - name: auth
+    description: 登录与会话
+  - name: system
+    description: 状态与统计
+  - name: network-test
+    description: 网络测试工具箱（节点执行）
+servers:
+  - url: /api
+paths:
+  /login:
+    post:
+      tags: [auth]
+      summary: Web 管理员登录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  example: admin
+                password:
+                  type: string
+                  example: admin123
+      responses:
+        '200':
+          description: 登录成功，返回 token
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, token, role, redirect]
+                properties:
+                  success:
+                    type: boolean
+                    enum: [true]
+                  token:
+                    type: string
+                    description: 'JWT，后续请求放入 Authorization: Bearer <token>'
+                  role:
+                    type: string
+                    enum: [admin, operator, viewer]
+                  redirect:
+                    type: string
+        '401':
+          description: 用户名或密码错误
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum: [false]
+                  message:
+                    type: string
+  /status:
+    get:
+      tags: [system]
+      summary: 服务端聚合状态（含在线节点、吞吐、路由统计）
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 状态对象
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                description: 结构以 server/lib/client-manager.js getStats() 为准（Phase 1 精确化）
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
