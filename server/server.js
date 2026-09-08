@@ -28,7 +28,7 @@ logger.info('Node-Proxy Server v3.0 starting...');
 
 // Initialize modules
 const { AuthManager } = require('./lib/auth');
-const { ClientManager } = require('./lib/client-manager');
+const { ClientManager } = require('./lib/client-manager.ts');
 const { CircuitBreaker } = require('./lib/circuit-breaker');
 const { Router } = require('./lib/router');
 const { BandwidthLimiter } = require('./lib/bandwidth');
