@@ -42,6 +42,7 @@ interface CircuitBreakerLike {
 
 interface BandwidthLimiterLike {
   enabled: boolean;
+  check(clientId: string, bytes: number): boolean;
   setLimit(id: string, rate: number): void;
   getUtilization(id: string): number | undefined;
   getStats(): unknown;
@@ -72,11 +73,24 @@ export interface ClientInfo {
 }
 
 export interface PendingRecord {
-  timeout: NodeJS.Timeout;
+  timeout: NodeJS.Timeout | null;
   reject(err: Error): void;
   res?: ServerResponse;
   socket?: Socket;
   type?: string;
+  // Tunnel/request bookkeeping filled by the proxy modules:
+  startTime?: number;
+  ip?: string;
+  host?: string;
+  port?: number;
+  head?: Buffer;
+  client?: ClientNode | null;
+  clientId?: string | null;
+  ready?: boolean;
+  _onResponse?: (headers: Record<string, unknown>, body?: Buffer) => void;
+  _audit?: Record<string, unknown>;
+  _touchIdle?: (() => void) | null;
+  _idleTimer?: ReturnType<typeof setTimeout> | null;
 }
 
 export interface ClientStatsEntry {
@@ -105,6 +119,10 @@ export interface ClientNode {
   alias?: string | null;
   notes?: string | null;
   region?: string | null;
+  // Attached by the WebSocket layer (mux per protocol capability, RTT from
+  // StreamMux ping): untyped here to stay decoupled from stream-mux.
+  mux?: unknown;
+  rtt?: number;
 }
 
 interface ManagerStats {
@@ -133,6 +151,14 @@ export class ClientManager {
   bandwidthLimiter: BandwidthLimiterLike | null = null;
   storage: StorageLike | null = null;
   metrics: MetricsLike | null = null;
+  // Optional cross-cutting modules attached by server.js / proxy handlers:
+  audit?: { logRequest(entry: Record<string, unknown>): void };
+  netTest?: {
+    onClientProgress(clientId: string | null, msg: Record<string, unknown>): void;
+    onClientDone(clientId: string | null, msg: Record<string, unknown>): void;
+  };
+  onUdpData?: (msg: Record<string, unknown>) => void;
+  requestLog?: { record(entry: Record<string, unknown>): void };
 
   // Stats
   stats: ManagerStats = {
@@ -247,7 +273,7 @@ export class ClientManager {
     for (const reqId of client.pendingRequests) {
       const p = this.pendingRequests.get(reqId);
       if (p) {
-        clearTimeout(p.timeout);
+        if (p.timeout) clearTimeout(p.timeout);
         p.reject(new Error('Client disconnected'));
         if (p.res && !p.res.headersSent) {
           try {
@@ -267,7 +293,7 @@ export class ClientManager {
     for (const tunId of client.pendingTunnels) {
       const p = this.pendingTunnels.get(tunId);
       if (p) {
-        clearTimeout(p.timeout);
+        if (p.timeout) clearTimeout(p.timeout);
         if (p.socket && !p.socket.destroyed) {
           try {
             if (p.type === 'socks5') p.socket.write(encodeSocks5Reply(0x03));

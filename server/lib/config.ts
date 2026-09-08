@@ -131,6 +131,11 @@ export interface PluginsSection {
   dir?: string;
 }
 
+export interface MuxSection {
+  initial_window?: number;
+  connection_window?: number;
+}
+
 export interface ServerConfig {
   server: ServerSection;
   tls: TlsSection;
@@ -151,7 +156,7 @@ export interface ServerConfig {
   acl?: unknown;
   audit?: unknown;
   update?: unknown;
-  mux?: unknown;
+  mux?: MuxSection;
 }
 
 export const DEFAULTS: ServerConfig = {
