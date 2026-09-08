@@ -1,16 +1,44 @@
 // =============================================================================
 // CircuitBreaker - Auto-isolates failing clients
+// Migrated to TypeScript (issue #42, Phase 2). ESM syntax; Node 24 type
+// stripping runs it via require('./lib/circuit-breaker.ts').
 // =============================================================================
-'use strict';
 
-const STATE = { CLOSED: 0, OPEN: 1, HALF_OPEN: 2 };
+import type { ServerConfig } from './config.ts';
+import type { AppLogger } from './logger.ts';
 
-class CircuitBreaker {
-  constructor(config, logger) {
+export const STATE = { CLOSED: 0, OPEN: 1, HALF_OPEN: 2 } as const;
+export type CircuitStateValue = (typeof STATE)[keyof typeof STATE];
+
+interface CircuitEntry {
+  state: CircuitStateValue;
+  failures: number;
+  lastFailure: number;
+  successes: number;
+  halfOpenAttempts: number;
+  openedAt: number;
+  windowStart: number;
+}
+
+interface CircuitBreakerDefaults {
+  error_threshold: number;
+  window_ms: number;
+  recovery_timeout_ms: number;
+  half_open_max_attempts: number;
+}
+
+const STATE_NAMES = ['closed', 'open', 'half_open'] as const;
+
+export class CircuitBreaker {
+  config: ServerConfig;
+  log: AppLogger;
+  // clientId -> state entry
+  private states: Map<string, CircuitEntry> = new Map();
+  private _defaults: CircuitBreakerDefaults;
+
+  constructor(config: ServerConfig, logger: AppLogger) {
     this.config = config;
     this.log = logger;
-    // clientId -> { state, failures, lastFailure, halfOpenAttempts, openedAt }
-    this.states = new Map();
     this._defaults = {
       error_threshold: config.circuit_breaker?.error_threshold || 5,
       window_ms: config.circuit_breaker?.window_ms || 60000,
@@ -19,9 +47,10 @@ class CircuitBreaker {
     };
   }
 
-  _get(clientId) {
-    if (!this.states.has(clientId)) {
-      this.states.set(clientId, {
+  private _get(clientId: string): CircuitEntry {
+    let cb = this.states.get(clientId);
+    if (!cb) {
+      cb = {
         state: STATE.CLOSED,
         failures: 0,
         lastFailure: 0,
@@ -29,13 +58,14 @@ class CircuitBreaker {
         halfOpenAttempts: 0,
         openedAt: 0,
         windowStart: Date.now(),
-      });
+      };
+      this.states.set(clientId, cb);
     }
-    return this.states.get(clientId);
+    return cb;
   }
 
   // Called when a request succeeds
-  onSuccess(clientId) {
+  onSuccess(clientId: string) {
     const cb = this._get(clientId);
     if (cb.state === STATE.HALF_OPEN) {
       cb.successes++;
@@ -55,7 +85,7 @@ class CircuitBreaker {
   }
 
   // Called when a request fails (timeout, error, etc.)
-  onFailure(clientId) {
+  onFailure(clientId: string) {
     const cb = this._get(clientId);
     const now = Date.now();
 
@@ -70,11 +100,14 @@ class CircuitBreaker {
       cb.lastFailure = now;
 
       if (cb.failures >= this._defaults.error_threshold) {
-        this.log.warn({
-          clientId,
-          failures: cb.failures,
-          window: this._defaults.window_ms,
-        }, 'Circuit breaker: client OPENED');
+        this.log.warn(
+          {
+            clientId,
+            failures: cb.failures,
+            window: this._defaults.window_ms,
+          },
+          'Circuit breaker: client OPENED'
+        );
         cb.state = STATE.OPEN;
         cb.openedAt = now;
       }
@@ -88,7 +121,7 @@ class CircuitBreaker {
   }
 
   // Check if a client is allowed to receive requests
-  isAllowed(clientId) {
+  isAllowed(clientId: string): boolean {
     const cb = this._get(clientId);
     const now = Date.now();
 
@@ -108,26 +141,20 @@ class CircuitBreaker {
     }
 
     // HALF_OPEN - allow requests (but they'll be tracked)
-    if (cb.state === STATE.HALF_OPEN) {
-      return true;
-    }
-
     return true;
   }
 
-  getState(clientId) {
+  getState(clientId: string): string {
     const cb = this.states.get(clientId);
     if (!cb) return 'closed';
-    const stateNames = ['closed', 'open', 'half_open'];
-    return stateNames[cb.state] || 'unknown';
+    return STATE_NAMES[cb.state] || 'unknown';
   }
 
-  getStatus(clientId) {
+  getStatus(clientId: string): Record<string, unknown> {
     const cb = this.states.get(clientId);
     if (!cb) return { state: 'closed', failures: 0 };
-    const stateNames = ['closed', 'open', 'half_open'];
     return {
-      state: stateNames[cb.state],
+      state: STATE_NAMES[cb.state],
       failures: cb.failures,
       lastFailure: cb.lastFailure,
       openedAt: cb.openedAt,
@@ -135,22 +162,22 @@ class CircuitBreaker {
     };
   }
 
-  getAllStatuses() {
-    const result = {};
-    for (const [id] of this.states) {
+  getAllStatuses(): Record<string, Record<string, unknown>> {
+    const result: Record<string, Record<string, unknown>> = {};
+    for (const id of this.states.keys()) {
       result[id] = this.getStatus(id);
     }
     return result;
   }
 
   // Manually reset a client's circuit breaker
-  reset(clientId) {
+  reset(clientId: string) {
     this.states.delete(clientId);
     this.log.info({ clientId }, 'Circuit breaker: manually reset');
   }
 
   // Hot-update threshold parameters (used by the web settings panel)
-  updateConfig(partial = {}) {
+  updateConfig(partial: Partial<CircuitBreakerDefaults> = {}): CircuitBreakerDefaults {
     const merged = { ...this._defaults, ...partial };
     this._defaults = {
       error_threshold: merged.error_threshold,
@@ -166,19 +193,17 @@ class CircuitBreaker {
     return { ...this._defaults };
   }
 
-  getEffectiveConfig() {
+  getEffectiveConfig(): CircuitBreakerDefaults {
     return { ...this._defaults };
   }
 
   // Cleanup stale entries
-  cleanup(activeClientIds) {
+  cleanup(activeClientIds: Iterable<string>) {
     const activeSet = new Set(activeClientIds);
-    for (const [id] of this.states) {
+    for (const id of this.states.keys()) {
       if (!activeSet.has(id)) {
         this.states.delete(id);
       }
     }
   }
 }
-
-module.exports = { CircuitBreaker, STATE };

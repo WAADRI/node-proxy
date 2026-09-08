@@ -1,35 +1,54 @@
 // =============================================================================
 // Router - Multiple routing strategies for client selection
+// Migrated to TypeScript (issue #42, Phase 2). ESM syntax; Node 24 type
+// stripping runs it via require('./lib/router.ts').
 // =============================================================================
-'use strict';
 
-class Router {
-  constructor(config, logger) {
+import type { ServerConfig } from './config.ts';
+import type { AppLogger } from './logger.ts';
+import type { ClientNode } from './client-manager.ts';
+
+export type RoutingStrategy = 'random' | 'least-loaded' | 'fastest-response' | 'weighted';
+
+const STRATEGIES: RoutingStrategy[] = ['random', 'least-loaded', 'fastest-response', 'weighted'];
+
+// Minimal circuit-breaker contract used at selection time.
+interface RouterCircuitBreakerLike {
+  isAllowed(clientId: string): boolean;
+}
+
+export class Router {
+  config: ServerConfig;
+  log: AppLogger;
+  strategy: RoutingStrategy;
+  private responseTimes: Map<string, number> = new Map(); // clientId -> moving average
+  private weights: Map<string, number> = new Map(); // clientId -> weight
+
+  constructor(config: ServerConfig, logger: AppLogger) {
     this.config = config;
     this.log = logger;
-    this.strategy = config.routing?.strategy || 'random';
-    this.responseTimes = new Map(); // clientId -> [moving average]
-    this.weights = new Map(); // clientId -> weight
+    const initial = config.routing?.strategy;
+    this.strategy = STRATEGIES.includes(initial as RoutingStrategy) ? (initial as RoutingStrategy) : 'random';
   }
 
-  setStrategy(strategy) {
-    if (['random', 'least-loaded', 'fastest-response', 'weighted'].includes(strategy)) {
-      this.strategy = strategy;
+  setStrategy(strategy: string): boolean {
+    if (STRATEGIES.includes(strategy as RoutingStrategy)) {
+      this.strategy = strategy as RoutingStrategy;
       return true;
     }
     return false;
   }
 
-  getStrategy() {
+  getStrategy(): RoutingStrategy {
     return this.strategy;
   }
 
   // Select a client from available clients using the configured strategy
-  select(clients, circuitBreaker, tag) {
+  select(clients: ClientNode[], circuitBreaker: RouterCircuitBreakerLike | null, tag?: string | null): ClientNode | null {
     if (!clients || clients.length === 0) return null;
 
     // Filter by circuit breaker
-    let candidates = clients.filter(c => {
+    let candidates = clients.filter((c) => {
       // Skip clients that are OPEN in circuit breaker
       if (circuitBreaker) {
         return circuitBreaker.isAllowed(c.id);
@@ -42,9 +61,9 @@ class Router {
     // Filter by tag if specified
     if (tag) {
       const tagLower = tag.toLowerCase();
-      candidates = candidates.filter(c => {
+      candidates = candidates.filter((c) => {
         const tags = c.info?.tags || [];
-        return tags.some(t => t.toLowerCase() === tagLower);
+        return tags.some((t) => t.toLowerCase() === tagLower);
       });
       if (candidates.length === 0) return null;
     }
@@ -62,11 +81,11 @@ class Router {
     }
   }
 
-  _random(candidates) {
+  private _random(candidates: ClientNode[]): ClientNode {
     return candidates[Math.floor(Math.random() * candidates.length)];
   }
 
-  _leastLoaded(candidates) {
+  private _leastLoaded(candidates: ClientNode[]): ClientNode {
     let best = candidates[0];
     let minLoad = Infinity;
     for (const c of candidates) {
@@ -79,7 +98,7 @@ class Router {
     return best;
   }
 
-  _fastestResponse(candidates) {
+  private _fastestResponse(candidates: ClientNode[]): ClientNode {
     let best = candidates[0];
     let bestTime = Infinity;
     for (const c of candidates) {
@@ -92,7 +111,7 @@ class Router {
     return best;
   }
 
-  _weighted(candidates) {
+  private _weighted(candidates: ClientNode[]): ClientNode {
     const totalWeight = candidates.reduce((sum, c) => {
       return sum + (this.weights.get(c.id) || 1);
     }, 0);
@@ -106,7 +125,8 @@ class Router {
   }
 
   // Record response time for a client (exponential moving average)
-  recordResponseTime(clientId, durationMs) {
+  recordResponseTime(clientId: string | null | undefined, durationMs: number) {
+    if (!clientId) return;
     const alpha = 0.3; // smoothing factor
     const current = this.responseTimes.get(clientId);
     if (current === undefined) {
@@ -117,20 +137,20 @@ class Router {
   }
 
   // Set weight for a client (used by weighted strategy)
-  setWeight(clientId, weight) {
+  setWeight(clientId: string, weight: number) {
     this.weights.set(clientId, Math.max(1, weight));
   }
 
-  getWeight(clientId) {
+  getWeight(clientId: string): number {
     return this.weights.get(clientId) || 1;
   }
 
-  getResponseTime(clientId) {
+  getResponseTime(clientId: string): number {
     return this.responseTimes.get(clientId) || 0;
   }
 
-  getAllResponseTimes() {
-    const result = {};
+  getAllResponseTimes(): Record<string, number> {
+    const result: Record<string, number> = {};
     for (const [id, time] of this.responseTimes) {
       result[id] = Math.round(time);
     }
@@ -138,15 +158,13 @@ class Router {
   }
 
   // Cleanup stale entries
-  cleanup(activeClientIds) {
+  cleanup(activeClientIds: Iterable<string>) {
     const activeSet = new Set(activeClientIds);
-    for (const [id] of this.responseTimes) {
+    for (const id of this.responseTimes.keys()) {
       if (!activeSet.has(id)) this.responseTimes.delete(id);
     }
-    for (const [id] of this.weights) {
+    for (const id of this.weights.keys()) {
       if (!activeSet.has(id)) this.weights.delete(id);
     }
   }
 }
-
-module.exports = { Router };
