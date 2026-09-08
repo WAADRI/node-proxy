@@ -1,41 +1,72 @@
 // =============================================================================
 // SOCKS5 Proxy v3.0 - Full SOCKS5 with UDP ASSOCIATE + IPv6
+// Migrated to TypeScript (issue #42, Phase 2). ESM syntax; loaded by
+// require('./lib/proxy-socks5.ts') under Node >= 24 type stripping.
 // =============================================================================
-'use strict';
 
-const net = require('net');
-const dgram = require('dgram');
-const { v4: uuidv4 } = require('uuid');
+import net from 'net';
+import type { Socket as NetSocket } from 'net';
+import dgram from 'dgram';
+import type { RemoteInfo } from 'dgram';
+import { v4 as uuidv4 } from 'uuid';
+import type { ClientManager, ClientNode } from './client-manager.ts';
+import type { ServerConfig } from './config.ts';
+import type { AppLogger } from './logger.ts';
 
-function createSocks5Proxy(clientManager, authManager, config, logger, pluginManager) {
+interface AuthManagerLike {
+  config: { auth: { proxy: { enabled: boolean } } };
+  validateSocks5Auth(username: string, password: string): boolean;
+}
+
+interface CleanupState {
+  tunnelId: string | null;
+  currentClient: ClientNode | null;
+  currentTimeout: ReturnType<typeof setTimeout> | null;
+  udpSocket: dgram.Socket | null;
+}
+
+type CleanupFn = () => void;
+
+export function createSocks5Proxy(
+  clientManager: ClientManager,
+  authManager: AuthManagerLike,
+  config: ServerConfig,
+  logger: AppLogger,
+  _pluginManager: { executeHook(hook: string, context: Record<string, unknown>): unknown } | null
+) {
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
-    let state = 'greeting';
-    let bufs = [];
+    let state: 'greeting' | 'auth_sub' | 'request' | 'tunnel' | 'udp' = 'greeting';
+    let bufs: Buffer[] = [];
     let bufLen = 0;
-    let tunnelId = null;
-    let currentClient = null;
-    let currentTimeout = null;
-    let socksUsername = '';
-    let startTime = 0;
-    let udpSocket = null; // For UDP ASSOCIATE
-    let udpAssocId = null;
+    const cleanupState: CleanupState = {
+      tunnelId: null,
+      currentClient: null,
+      currentTimeout: null,
+      udpSocket: null,
+    };
 
     function cleanup() {
-      if (currentTimeout) clearTimeout(currentTimeout);
-      if (tunnelId && currentClient) {
-        currentClient.pendingTunnels.delete(tunnelId);
-        clientManager.pendingTunnels.delete(tunnelId);
+      if (cleanupState.currentTimeout) clearTimeout(cleanupState.currentTimeout);
+      if (cleanupState.tunnelId && cleanupState.currentClient) {
+        cleanupState.currentClient.pendingTunnels.delete(cleanupState.tunnelId);
+        clientManager.pendingTunnels.delete(cleanupState.tunnelId);
         try {
-          currentClient.ws.send(JSON.stringify({ type: 'tunnel_close', id: tunnelId }));
-        } catch (_) {}
+          cleanupState.currentClient.ws.send(JSON.stringify({ type: 'tunnel_close', id: cleanupState.tunnelId }));
+        } catch (_) {
+          // ignore
+        }
       }
-      if (udpSocket) {
-        try { udpSocket.close(); } catch (_) {}
-        udpSocket = null;
+      if (cleanupState.udpSocket) {
+        try {
+          cleanupState.udpSocket.close();
+        } catch (_) {
+          // ignore
+        }
+        cleanupState.udpSocket = null;
       }
     }
 
-    socket.on('data', (data) => {
+    socket.on('data', (data: Buffer) => {
       // Handshake complete: this parser is done. Tunnel/UDP traffic is
       // forwarded by ws-server listeners; never buffer or re-parse it here,
       // otherwise every chunk would be appended to `bufs` and re-concatenated
@@ -52,25 +83,30 @@ function createSocks5Proxy(clientManager, authManager, config, logger, pluginMan
           const ver = buf[0];
           const nmethods = buf[1];
           if (bufLen < 2 + nmethods) return;
-          if (ver !== 0x05) { socket.end(); return; }
+          if (ver !== 0x05) {
+            socket.end();
+            return;
+          }
 
           const proxyAuth = authManager.config.auth.proxy;
-          let methods = [];
+          const methods: number[] = [];
           for (let i = 0; i < nmethods; i++) methods.push(buf[2 + i]);
 
           if (proxyAuth.enabled) {
             if (methods.includes(0x02)) {
               socket.write(Buffer.from([0x05, 0x02]));
               state = 'auth_sub';
-              bufs = []; bufLen = 0;
+              bufs = [];
+              bufLen = 0;
             } else {
-              socket.write(Buffer.from([0x05, 0xFF]));
+              socket.write(Buffer.from([0x05, 0xff]));
               socket.end();
             }
           } else {
             socket.write(Buffer.from([0x05, 0x00]));
             state = 'request';
-            bufs = [buf.slice(2 + nmethods)]; bufLen = bufs[0].length;
+            bufs = [buf.slice(2 + nmethods)];
+            bufLen = bufs[0].length;
           }
           return;
         }
@@ -85,10 +121,10 @@ function createSocks5Proxy(clientManager, authManager, config, logger, pluginMan
           const password = buf.slice(2 + uLen + 1, 2 + uLen + 1 + pLen).toString();
 
           if (authManager.validateSocks5Auth(username, password)) {
-            socksUsername = username;
             socket.write(Buffer.from([0x01, 0x00]));
             state = 'request';
-            bufs = [buf.slice(2 + uLen + 1 + pLen)]; bufLen = bufs[0].length;
+            bufs = [buf.slice(2 + uLen + 1 + pLen)];
+            bufLen = bufs[0].length;
           } else {
             socket.write(Buffer.from([0x01, 0x01]));
             socket.end();
@@ -100,15 +136,25 @@ function createSocks5Proxy(clientManager, authManager, config, logger, pluginMan
         if (state === 'request') {
           const b = Buffer.concat(bufs, bufLen);
           if (b.length < 5) return;
-          const ver = b[0]; const cmd = b[1]; const atyp = b[3];
-          if (ver !== 0x05) { socket.end(); return; }
+          const ver = b[0];
+          const cmd = b[1];
+          const atyp = b[3];
+          if (ver !== 0x05) {
+            socket.end();
+            return;
+          }
 
           // Parse address
-          let addrLen = 0, host = '';
+          let addrLen = 0;
+          let host = '';
           if (atyp === 0x01) addrLen = 4;
           else if (atyp === 0x03) addrLen = 1 + b[4];
           else if (atyp === 0x04) addrLen = 16;
-          else { socket.write(encodeReply(0x08)); socket.end(); return; }
+          else {
+            socket.write(encodeReply(0x08));
+            socket.end();
+            return;
+          }
 
           const headerLen = 4 + addrLen + 2;
           if (b.length < headerLen) return;
@@ -118,7 +164,9 @@ function createSocks5Proxy(clientManager, authManager, config, logger, pluginMan
           } else if (atyp === 0x03) {
             host = b.slice(5, 5 + b[4]).toString();
           } else {
-            host = Array.from(b.slice(4, 20)).map(n => n.toString(16)).join(':');
+            host = Array.from(b.slice(4, 20))
+              .map((n) => n.toString(16))
+              .join(':');
           }
           const port = b[headerLen - 2] * 256 + b[headerLen - 1];
 
@@ -126,26 +174,36 @@ function createSocks5Proxy(clientManager, authManager, config, logger, pluginMan
             // ---- UDP ASSOCIATE ----
             handleUDPAssociate(socket, b, atyp, host, port, clientManager, config, logger, cleanup);
             state = 'udp';
-            bufs = []; bufLen = 0;
+            bufs = [];
+            bufLen = 0;
             return;
           }
 
           if (cmd !== 0x01) {
-            socket.write(encodeReply(0x07)); socket.end(); return;
+            socket.write(encodeReply(0x07));
+            socket.end();
+            return;
           }
 
           // ---- CONNECT ----
           handleTCPConnect(socket, host, port, clientManager, config, logger);
-          state = 'tunnel'; bufs = []; bufLen = 0;
+          state = 'tunnel';
+          bufs = [];
+          bufLen = 0;
         }
       } catch (err) {
-        logger.error({ error: err.message }, 'SOCKS5 protocol error');
-        try { socket.end(); } catch (_) {}
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error({ error: message }, 'SOCKS5 protocol error');
+        try {
+          socket.end();
+        } catch (_) {
+          // ignore
+        }
         cleanup();
       }
     });
 
-    socket.on('error', (err) => {
+    socket.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code !== 'ECONNRESET') logger.error({ error: err.message }, 'SOCKS5 socket error');
       cleanup();
     });
@@ -158,55 +216,80 @@ function createSocks5Proxy(clientManager, authManager, config, logger, pluginMan
 // =============================================================================
 // TCP CONNECT (cmd = 0x01)
 // =============================================================================
-function handleTCPConnect(socket, host, port, clientManager, config, logger) {
+function handleTCPConnect(
+  socket: NetSocket,
+  host: string,
+  port: number,
+  clientManager: ClientManager,
+  config: ServerConfig,
+  logger: AppLogger
+) {
   let tunnelId = uuidv4();
-  let currentClient = null;
-  let currentTimeout = null;
+  let currentTimeout: ReturnType<typeof setTimeout> | null = null;
 
   // ACL check for TCP CONNECT
   if (clientManager.acl && !clientManager.acl.check(null, host, 'socks5', port, socket.remoteAddress || '')) {
     logger.warn({ targetHost: host, targetPort: port, ip: socket.remoteAddress }, 'ACL denied SOCKS5 CONNECT');
-    socket.write(encodeReply(0x02)); socket.end(); return;
+    socket.write(encodeReply(0x02));
+    socket.end();
+    return;
   }
 
   // Plugin hook: onTunnel
   if (clientManager.pluginManager && typeof clientManager.pluginManager.executeHook === 'function') {
-    Promise.resolve(clientManager.pluginManager.executeHook('onTunnel', {
-      socket, host, port,
-      clientManager,
-      ip: socket.remoteAddress || '',
-      timestamp: Date.now(),
-    })).catch(() => {});
+    Promise.resolve(
+      clientManager.pluginManager.executeHook('onTunnel', {
+        socket,
+        host,
+        port,
+        clientManager,
+        ip: socket.remoteAddress || '',
+        timestamp: Date.now(),
+      })
+    ).catch(() => {});
   }
 
   const client = clientManager.selectClient();
   if (!client) {
-    socket.write(encodeReply(0x01)); socket.end(); return;
+    socket.write(encodeReply(0x01));
+    socket.end();
+    return;
   }
 
   if (client.pendingTunnels.size >= (config.client?.max_concurrent || 100)) {
-    socket.write(encodeReply(0x01)); socket.end(); return;
+    socket.write(encodeReply(0x01));
+    socket.end();
+    return;
   }
-
-  currentClient = client;
 
   // Use StreamMux for tunnel if available
   if (client.mux) {
     const stream = client.mux.openTunnel(host, port, 128);
     if (!stream) {
-      socket.write(encodeReply(0x01)); socket.end(); return;
+      socket.write(encodeReply(0x01));
+      socket.end();
+      return;
     }
 
     tunnelId = stream.id;
     client.pendingTunnels.add(tunnelId);
 
     currentTimeout = setTimeout(() => {
-      try { socket.write(encodeReply(0x03)); socket.end(); } catch (_) {}
+      try {
+        socket.write(encodeReply(0x03));
+        socket.end();
+      } catch (_) {
+        // ignore
+      }
       clientManager.trackError(client.id, 'tunnel_timeout');
     }, config.client.tunnel_timeout);
 
     clientManager.pendingTunnels.set(tunnelId, {
-      type: 'socks5', socket, client, timeout: currentTimeout, startTime: Date.now(),
+      type: 'socks5',
+      socket,
+      client,
+      timeout: currentTimeout,
+      startTime: Date.now(),
       stream,
       ip: String(socket.remoteAddress || '').replace(/^::ffff:/i, ''),
       host,
@@ -215,22 +298,35 @@ function handleTCPConnect(socket, host, port, clientManager, config, logger) {
 
     clientManager.trackTunnel(client.id);
 
-    // Tunnel lifecycle (ready/data/close/error) is handled centrally in ws-server.js
+    // Tunnel lifecycle (ready/data/close/error) is handled centrally in ws-server
     // via mux.onStream -> handleTunnelReady/handleTunnelData/handleTunnelClose/handleTunnelError
   } else {
     // Legacy JSON fallback
     const msg = { type: 'tunnel_open', id: tunnelId, host, port };
     client.ws.send(JSON.stringify(msg), (err) => {
-      if (err) { socket.write(encodeReply(0x01)); socket.end(); return; }
+      if (err) {
+        socket.write(encodeReply(0x01));
+        socket.end();
+        return;
+      }
     });
 
     currentTimeout = setTimeout(() => {
-      try { socket.write(encodeReply(0x03)); socket.end(); } catch (_) {}
+      try {
+        socket.write(encodeReply(0x03));
+        socket.end();
+      } catch (_) {
+        // ignore
+      }
       clientManager.trackError(client.id, 'tunnel_timeout');
     }, config.client.tunnel_timeout);
 
     clientManager.pendingTunnels.set(tunnelId, {
-      type: 'socks5', socket, client, timeout: currentTimeout, startTime: Date.now(),
+      type: 'socks5',
+      socket,
+      client,
+      timeout: currentTimeout,
+      startTime: Date.now(),
       ip: String(socket.remoteAddress || '').replace(/^::ffff:/i, ''),
       host,
       port,
@@ -243,21 +339,28 @@ function handleTCPConnect(socket, host, port, clientManager, config, logger) {
 // =============================================================================
 // UDP ASSOCIATE (cmd = 0x03) - RFC 1928 Section 7
 // =============================================================================
-function handleUDPAssociate(socket, requestBuf, atyp, clientHost, clientPort, clientManager, config, logger, cleanup) {
+function handleUDPAssociate(
+  socket: NetSocket,
+  requestBuf: Buffer,
+  atyp: number,
+  clientHost: string,
+  clientPort: number,
+  clientManager: ClientManager,
+  config: ServerConfig,
+  logger: AppLogger,
+  _cleanup: CleanupFn
+) {
+  void requestBuf;
+  void atyp;
   // Bind a UDP port for the relay
   const udpServer = dgram.createSocket({ type: 'udp4', reuseAddr: true });
 
   // Store UDP relay info
   const assocId = uuidv4();
-  const udpClients = new Map(); // key -> { socket, client }
+  const udpClients = new Map<string, { rinfo: RemoteInfo; client: ClientNode }>();
 
-  udpServer.on('message', (msg, rinfo) => {
+  udpServer.on('message', (msg: Buffer, rinfo: RemoteInfo) => {
     // Parse SOCKS5 UDP datagram header (RFC 1928 Section 7)
-    // +----+------+------+----------+----------+----------+
-    // |RSV | FRAG | ATYP | DST.ADDR | DST.PORT |   DATA   |
-    // +----+------+------+----------+----------+----------+
-    // |  2 |   1  |   1  | Variable |    2     | Variable |
-    // +----+------+------+----------+----------+----------+
     if (msg.length < 4) return;
 
     const frag = msg[2];
@@ -266,24 +369,31 @@ function handleUDPAssociate(socket, requestBuf, atyp, clientHost, clientPort, cl
       return;
     }
 
-    const atyp = msg[3];
-    let host = '', port = 0, addrLen = 0, dataStart = 0;
+    const msgAtyp = msg[3];
+    let host = '';
+    let port = 0;
+    let dataStart = 0;
 
-    if (atyp === 0x01) { // IPv4
+    if (msgAtyp === 0x01) {
+      // IPv4
       if (msg.length < 10) return;
       host = `${msg[4]}.${msg[5]}.${msg[6]}.${msg[7]}`;
       port = msg[8] * 256 + msg[9];
       dataStart = 10;
-    } else if (atyp === 0x03) { // Domain name
+    } else if (msgAtyp === 0x03) {
+      // Domain name
       if (msg.length < 7) return;
       const nameLen = msg[4];
       if (msg.length < 7 + nameLen) return;
       host = msg.slice(5, 5 + nameLen).toString();
       port = msg[5 + nameLen] * 256 + msg[5 + nameLen + 1];
       dataStart = 7 + nameLen;
-    } else if (atyp === 0x04) { // IPv6
+    } else if (msgAtyp === 0x04) {
+      // IPv6
       if (msg.length < 22) return;
-      host = Array.from(msg.slice(4, 20)).map(n => n.toString(16).padStart(2, '0')).join(':');
+      host = Array.from(msg.slice(4, 20))
+        .map((n) => n.toString(16).padStart(2, '0'))
+        .join(':');
       port = msg[20] * 256 + msg[21];
       dataStart = 22;
     } else {
@@ -296,12 +406,14 @@ function handleUDPAssociate(socket, requestBuf, atyp, clientHost, clientPort, cl
     const client = clientManager.selectClient();
     if (!client) return;
 
-    // Check ACL
-    if (clientManager.acl && !clientManager.acl.check(client, host, 'udp')) return;
+    // Check ACL (legacy first arg is the client object, not an id)
+    if (clientManager.acl && !clientManager.acl.check(client, host, 'udp')) {
+      return;
+    }
 
     // Forward via WebSocket
     const udpId = uuidv4();
-    const forwardMsg = {
+    const forwardMsg: Record<string, unknown> = {
       type: 'udp_data',
       id: udpId,
       assocId,
@@ -324,28 +436,37 @@ function handleUDPAssociate(socket, requestBuf, atyp, clientHost, clientPort, cl
   });
 
   // Handle UDP responses from the client (via WebSocket tunnel)
-  clientManager.onUdpData = (msg) => {
+  clientManager.onUdpData = (msg: Record<string, unknown>) => {
     try {
-      const data = Buffer.from(msg.data || '', 'base64');
+      const data = Buffer.from(typeof msg.data === 'string' ? msg.data : '', 'base64');
       if (data.length === 0) return;
 
       // Find the association this response belongs to
-      const assoc = clientManager.udpAssociations.get(msg.assocId);
+      const assoc = clientManager.udpAssociations?.get(String(msg.assocId || ''));
       if (!assoc) return;
-      const { udpServer, udpClients } = assoc;
+      const assocUdp = assoc.udpServer as dgram.Socket;
+      const assocClients = assoc.udpClients as Map<string, { rinfo: RemoteInfo; client: ClientNode }>;
 
       // Response must go back to the original SOCKS5 UDP client source address
-      const rinfo = msg.src || msg.rinfo || { address: clientHost, port: clientPort };
+      const srcObj = msg.src && typeof msg.src === 'object' ? (msg.src as Record<string, unknown>) : null;
+      const rinfo: { address: string; port: number } = {
+        address: srcObj && typeof srcObj.address === 'string' ? srcObj.address : clientHost,
+        port: srcObj && typeof srcObj.port === 'number' ? srcObj.port : clientPort,
+      };
+      void assocClients;
 
       // Wrap in SOCKS5 UDP response header
-      let respHeader;
+      let respHeader: Buffer;
       if (net.isIPv4(rinfo.address)) {
         const ip = rinfo.address.split('.').map(Number);
         respHeader = Buffer.alloc(10);
         respHeader[3] = 0x01;
-        respHeader[4] = ip[0]; respHeader[5] = ip[1]; respHeader[6] = ip[2]; respHeader[7] = ip[3];
-        respHeader[8] = (rinfo.port >> 8) & 0xFF;
-        respHeader[9] = rinfo.port & 0xFF;
+        respHeader[4] = ip[0];
+        respHeader[5] = ip[1];
+        respHeader[6] = ip[2];
+        respHeader[7] = ip[3];
+        respHeader[8] = (rinfo.port >> 8) & 0xff;
+        respHeader[9] = rinfo.port & 0xff;
       } else {
         respHeader = Buffer.alloc(22);
         respHeader[3] = 0x04;
@@ -354,18 +475,20 @@ function handleUDPAssociate(socket, requestBuf, atyp, clientHost, clientPort, cl
           respHeader[4 + i * 2] = parseInt(parts[i].substring(0, 2), 16) || 0;
           respHeader[4 + i * 2 + 1] = parseInt(parts[i].substring(2, 4), 16) || 0;
         }
-        respHeader[20] = (rinfo.port >> 8) & 0xFF;
-        respHeader[21] = rinfo.port & 0xFF;
+        respHeader[20] = (rinfo.port >> 8) & 0xff;
+        respHeader[21] = rinfo.port & 0xff;
       }
 
       const resp = Buffer.concat([Buffer.from([0x00, 0x00, 0x00]), respHeader, data]);
-      udpServer.send(resp, rinfo.port, rinfo.address, (err) => {
+      assocUdp.send(resp, rinfo.port, rinfo.address, (err) => {
         if (err) logger.error({ error: err.message }, 'UDP response send error');
       });
-    } catch (_) {}
+    } catch (_) {
+      // ignore
+    }
   };
 
-  udpServer.on('error', (err) => {
+  udpServer.on('error', (err: NodeJS.ErrnoException) => {
     logger.error({ error: err.message }, 'UDP ASSOCIATE error');
   });
 
@@ -377,9 +500,12 @@ function handleUDPAssociate(socket, requestBuf, atyp, clientHost, clientPort, cl
     // Send reply with the UDP relay address
     // BND.ADDR = 0.0.0.0, BND.PORT = udpPort
     const reply = Buffer.alloc(10);
-    reply[0] = 0x05; reply[1] = 0x00; reply[2] = 0x00; reply[3] = 0x01;
-    reply[8] = (udpPort >> 8) & 0xFF;
-    reply[9] = udpPort & 0xFF;
+    reply[0] = 0x05;
+    reply[1] = 0x00;
+    reply[2] = 0x00;
+    reply[3] = 0x01;
+    reply[8] = (udpPort >> 8) & 0xff;
+    reply[9] = udpPort & 0xff;
     socket.write(reply);
   });
 
@@ -388,11 +514,12 @@ function handleUDPAssociate(socket, requestBuf, atyp, clientHost, clientPort, cl
   clientManager.udpAssociations.set(assocId, { udpServer, udpClients, socket });
 }
 
-function encodeReply(replyCode) {
+function encodeReply(replyCode: number): Buffer {
   const buf = Buffer.alloc(10);
-  buf[0] = 0x05; buf[1] = replyCode; buf[2] = 0x00; buf[3] = 0x01;
+  buf[0] = 0x05;
+  buf[1] = replyCode;
+  buf[2] = 0x00;
+  buf[3] = 0x01;
   for (let i = 4; i < 10; i++) buf[i] = 0x00;
   return buf;
 }
-
-module.exports = { createSocks5Proxy };
