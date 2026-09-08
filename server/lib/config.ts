@@ -107,6 +107,13 @@ export interface CacheSection {
   enabled?: boolean;
   default_ttl?: number;
   max_size?: number;
+  max_body_size?: number;
+}
+
+export interface DomainRuleEntry {
+  pattern: string;
+  tag: string;
+  priority?: number;
 }
 
 export interface AcmeSection {
@@ -135,7 +142,7 @@ export interface ServerConfig {
   cache?: CacheSection;
   acme?: AcmeSection;
   storage?: StorageSection;
-  domain_rules?: unknown;
+  domain_rules?: DomainRuleEntry[];
   plugins?: unknown;
   acl?: unknown;
   audit?: unknown;

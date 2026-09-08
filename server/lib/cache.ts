@@ -1,19 +1,71 @@
 // =============================================================================
 // Cache - Request cache with deduplication and TTL
+// Migrated to TypeScript (issue #42, Phase 2). ESM syntax; Node 24 type
+// stripping runs it via require('./lib/cache.ts').
 // =============================================================================
-'use strict';
 
-class RequestCache {
-  constructor(config, logger) {
+import type { ServerConfig } from './config.ts';
+import type { AppLogger } from './logger.ts';
+
+export type HeadersLike = Record<string, string | string[] | undefined>;
+
+export interface CacheEntryData {
+  data?: string | Buffer;
+  statusCode?: number;
+  headers?: HeadersLike;
+  ttl?: number;
+}
+
+interface StoredCacheEntry {
+  data: string | Buffer;
+  statusCode: number;
+  headers: HeadersLike;
+  createdAt: number;
+  ttl: number;
+  hits: number;
+}
+
+interface CacheHit {
+  hit: true;
+  data: string | Buffer;
+  statusCode: number;
+  headers: HeadersLike;
+  age: number;
+}
+
+interface PendingWaiter {
+  resolve(value: CacheEntryData): void;
+  reject(err: unknown): void;
+}
+
+function sanitizeCacheHeaders(headers: HeadersLike | undefined): HeadersLike {
+  if (!headers) return {};
+  const safe: HeadersLike = {};
+  const allowed = ['content-type', 'content-encoding', 'content-language', 'cache-control', 'etag', 'last-modified'];
+  for (const [k, v] of Object.entries(headers)) {
+    if (allowed.includes(k.toLowerCase())) safe[k] = v;
+  }
+  return safe;
+}
+
+export class RequestCache {
+  config: ServerConfig;
+  log: AppLogger;
+  private cache: Map<string, StoredCacheEntry> = new Map(); // key -> entry
+  private pending: Map<string, PendingWaiter[]> = new Map(); // key -> waiters (dedup)
+  enabled: boolean;
+  defaultTTL: number;
+  maxSize: number;
+  private maxBodySize: number;
+  private _cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(config: ServerConfig, logger: AppLogger) {
     this.config = config;
     this.log = logger;
-    this.cache = new Map(); // key -> { data, statusCode, headers, createdAt, ttl, hits }
-    this.pending = new Map(); // key -> [{ resolve, reject }] - dedup concurrent requests
     this.enabled = config.cache?.enabled !== false;
     this.defaultTTL = config.cache?.default_ttl || 5000; // 5 seconds
     this.maxSize = config.cache?.max_size || 5000;
     this.maxBodySize = config.cache?.max_body_size || 1024 * 1024; // 1MB max cached body
-    this._cleanupTimer = null;
 
     if (this.enabled) {
       this._cleanupTimer = setInterval(() => this._cleanup(), 30000);
@@ -22,14 +74,14 @@ class RequestCache {
   }
 
   // Generate a cache key from request parameters
-  makeKey(method, url, headers, body) {
+  makeKey(method: string, url: string, headers?: HeadersLike, _body?: string | Buffer | null): string | null {
     // Only cache GET requests by default
     if (method !== 'GET') return null;
     // Never use the shared cache for credentialed requests: the response may
     // be personalized (Cookie / Authorization) and must not be served to or
     // polluted by other users.
     const h = headers || {};
-    const hasHeader = (name) => {
+    const hasHeader = (name: string): boolean => {
       if (h[name] !== undefined) return true;
       for (const k of Object.keys(h)) {
         if (k.toLowerCase() === name) return true;
@@ -48,7 +100,7 @@ class RequestCache {
   }
 
   // Try to get from cache. Returns { hit, data, statusCode, headers } or null.
-  get(key) {
+  get(key: string): CacheHit | null {
     if (!this.enabled || !key) return null;
     const entry = this.cache.get(key);
     if (!entry) return null;
@@ -63,7 +115,7 @@ class RequestCache {
   }
 
   // Set cache entry
-  set(key, data, statusCode, headers, ttl) {
+  set(key: string, data: string | Buffer, statusCode: number, headers?: HeadersLike, ttl?: number) {
     if (!this.enabled || !key) return;
     // Don't cache error responses
     if (statusCode >= 400) return;
@@ -89,9 +141,9 @@ class RequestCache {
   // Private responses (Set-Cookie, private/no-store/no-cache) and responses
   // varying on request headers other than Accept are rejected, otherwise a
   // response meant for one user could be served to another.
-  _isCacheableResponse(headers) {
+  private _isCacheableResponse(headers: HeadersLike | undefined): boolean {
     if (!headers) return true;
-    const get = (name) => {
+    const get = (name: string): string | string[] | undefined => {
       const v = headers[name];
       if (v !== undefined) return v;
       for (const k of Object.keys(headers)) {
@@ -123,11 +175,11 @@ class RequestCache {
   }
 
   // Invalidate cache entries matching a pattern
-  invalidate(pattern) {
+  invalidate(pattern: string | RegExp): number {
     if (!this.enabled) return 0;
     let count = 0;
     const regex = pattern instanceof RegExp ? pattern : new RegExp(pattern, 'i');
-    for (const [key] of this.cache) {
+    for (const key of this.cache.keys()) {
       if (regex.test(key)) {
         this.cache.delete(key);
         count++;
@@ -141,11 +193,11 @@ class RequestCache {
     this.pending.clear();
   }
 
-  stats() {
+  stats(): Record<string, unknown> {
     let totalHits = 0;
     let expired = 0;
     const now = Date.now();
-    for (const [, entry] of this.cache) {
+    for (const entry of this.cache.values()) {
       totalHits += entry.hits;
       if (now - entry.createdAt > entry.ttl) expired++;
     }
@@ -165,7 +217,7 @@ class RequestCache {
   // ===========================================================================
   // Returns a promise that resolves when the request is done.
   // If the same key is already in flight, waits for the existing request.
-  dedup(key, fetcher) {
+  dedup(key: string, fetcher: () => Promise<CacheEntryData>): Promise<CacheEntryData> {
     if (!this.enabled || !key) return fetcher();
 
     // Check cache first
@@ -175,32 +227,34 @@ class RequestCache {
     // Check if already pending
     const pending = this.pending.get(key);
     if (pending) {
-      return new Promise((resolve, reject) => {
+      return new Promise<CacheEntryData>((resolve, reject) => {
         pending.push({ resolve, reject });
       });
     }
 
     // Start new request
-    const queue = [];
+    const queue: PendingWaiter[] = [];
     this.pending.set(key, queue);
 
-    return fetcher().then((result) => {
-      // Cache the result
-      if (result && result.data) {
-        this.set(key, result.data, result.statusCode, result.headers, result.ttl);
-      }
-      // Resolve all waiters
-      this.pending.delete(key);
-      for (const w of queue) w.resolve(result);
-      return result;
-    }).catch((err) => {
-      this.pending.delete(key);
-      for (const w of queue) w.reject(err);
-      throw err;
-    });
+    return fetcher()
+      .then((result) => {
+        // Cache the result
+        if (result && result.data) {
+          this.set(key, result.data, result.statusCode || 200, result.headers, result.ttl);
+        }
+        // Resolve all waiters
+        this.pending.delete(key);
+        for (const w of queue) w.resolve(result);
+        return result;
+      })
+      .catch((err: unknown) => {
+        this.pending.delete(key);
+        for (const w of queue) w.reject(err);
+        throw err;
+      });
   }
 
-  _cleanup() {
+  private _cleanup() {
     const now = Date.now();
     for (const [key, entry] of this.cache) {
       if (now - entry.createdAt > entry.ttl) {
@@ -209,10 +263,10 @@ class RequestCache {
     }
   }
 
-  _evictOne() {
+  private _evictOne() {
     // Evict oldest entry or least accessed
-    let oldest = null;
-    let oldestKey = null;
+    let oldest: StoredCacheEntry | null = null;
+    let oldestKey: string | null = null;
     for (const [key, entry] of this.cache) {
       if (!oldest || entry.createdAt < oldest.createdAt) {
         oldest = entry;
@@ -228,15 +282,3 @@ class RequestCache {
     this.pending.clear();
   }
 }
-
-function sanitizeCacheHeaders(headers) {
-  if (!headers) return {};
-  const safe = {};
-  const allowed = ['content-type', 'content-encoding', 'content-language', 'cache-control', 'etag', 'last-modified'];
-  for (const [k, v] of Object.entries(headers)) {
-    if (allowed.includes(k.toLowerCase())) safe[k] = v;
-  }
-  return safe;
-}
-
-module.exports = { RequestCache };
