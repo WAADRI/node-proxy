@@ -15,7 +15,7 @@ const { loadConfig } = require('./lib/config.ts');
 const config = loadConfig();
 
 // Initialize logger
-const { createLogger } = require('./lib/logger');
+const { createLogger } = require('./lib/logger.ts');
 const logger = createLogger({
   level: config.logging.level,
   logFile: config.logging.file || undefined,
