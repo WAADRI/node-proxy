@@ -20,7 +20,7 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..', '..');
 const SOURCES = process.argv.slice(2).length
   ? process.argv.slice(2)
-  : ['server/lib/web-server.js'];
+  : ['server/lib/web-server.ts'];
 
 // (method, path) pairs that are pages/static/meta, not JSON API surface.
 const EXCLUDE = [
