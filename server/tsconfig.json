@@ -3,7 +3,7 @@
   "compilerOptions": {
     "noImplicitAny": true
   },
-  "include": ["**/*.js", "**/*.ts"],
+  "include": ["**/*.ts"],
   "exclude": [
     "node_modules",
     "web/node_modules",
