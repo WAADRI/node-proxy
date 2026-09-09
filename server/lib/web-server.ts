@@ -10,12 +10,14 @@
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 
+import type { Request as ExpressRequestT } from 'express';
+
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const cookieParser = require('cookie-parser');
 
-type HttpRequest = import('express').Request;
+type HttpRequest = ExpressRequestT;
 type HttpResponse = import('express').Response;
 type WebRequest = HttpRequest & { user?: string; role?: string };
 type ClientManager = import('./client-manager.ts').ClientManager;

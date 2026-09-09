@@ -4,23 +4,56 @@
 // Node-Proxy Client v2.0
 // Connects to the proxy server and forwards traffic (HTTP proxy + TCP tunnel)
 // =============================================================================
+// Migrated to TypeScript (issue #42, Phase 2). CJS-style TS on purpose: Node
+// type stripping loads this file as CommonJS and runs it exactly like the old
+// client-legacy.js; this file has no module.exports (single-entry assembly
+// script), and require('./lib/stream-mux.ts') resolves at runtime unchanged.
+// =============================================================================
+'use strict';
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+
+// Type-only imports below are erased by Node's type stripping (no ESM at
+// runtime) but keep this file a TypeScript module so its top-level names do
+// not collide with the global-script scope of still-require-only sibling files.
+import type { IncomingMessage } from 'http';
+import type { Socket as DgramSocket } from 'dgram';
+import type { Socket as NetSocket } from 'net';
 
 const WebSocket = require('ws');
 const http = require('http');
 const https = require('https');
 const net = require('net');
 const dgram = require('dgram');
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const url = require('url');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const crypto = require('crypto');
-const { StreamMux } = require('./lib/stream-mux');
+const { StreamMux } = require('./lib/stream-mux.ts');
 
 // =============================================================================
 // Configuration
 // =============================================================================
-const DEFAULTS = {
+type ClientConfig = {
+  server_url: string;
+  auth_token: string;
+  reconnect_delay: number;
+  max_reconnect_delay: number;
+  reconnect_jitter: number;
+  heartbeat_interval: number;
+  request_timeout: number;
+  tunnel_timeout: number;
+  max_concurrent_requests: number;
+  region: string;
+  tags: string;
+  tls_reject_unauthorized: boolean;
+};
+type ConfigValues = Record<string, string | number | boolean>;
+
+const DEFAULTS: ClientConfig = {
   server_url: 'ws://127.0.0.1:3000/ws',
   auth_token: 'node-proxy-default-token',
   reconnect_delay: 3000,
@@ -35,8 +68,8 @@ const DEFAULTS = {
   tls_reject_unauthorized: false,
 };
 
-function loadConfig() {
-  const config = { ...DEFAULTS };
+function loadConfig(): ClientConfig {
+  const config: ConfigValues = { ...DEFAULTS };
 
   // Try to load config file
   const configPaths = [
@@ -86,7 +119,7 @@ function loadConfig() {
 
   for (const [envKey, configKey] of Object.entries(envMap)) {
     if (process.env[envKey] !== undefined) {
-      let val = process.env[envKey];
+      let val: string | number | boolean = process.env[envKey];
       if (val === 'true') val = true;
       else if (val === 'false') val = false;
       else if (/^\d+$/.test(val)) val = parseInt(val, 10);
@@ -94,7 +127,7 @@ function loadConfig() {
     }
   }
 
-  return config;
+  return config as ClientConfig;
 }
 
 const CONFIG = loadConfig();
@@ -125,16 +158,16 @@ if (!persistentClientId) {
 // =============================================================================
 const activeRequests = new Map();
 const activeTunnels = new Map();
-let ws = null;
+let ws: WsClient;
 let reconnectAttempt = 0;
-let heartbeatTimer = null;
-let currentClientId = null;
+let heartbeatTimer: NodeJS.Timeout | null = null;
+let currentClientId: string | null | undefined = null;
 let intentionalClose = false;
 
 // =============================================================================
 // Logging
 // =============================================================================
-function log(level, message, data) {
+function log(level: string, message: string, data?: unknown) {
   const ts = new Date().toISOString();
   const prefix = `[${ts}] [${level.toUpperCase()}]`;
   if (data) {
@@ -183,6 +216,125 @@ function getSystemInfo() {
 }
 
 // =============================================================================
+// Protocol types (structural, kept minimal for the #42 migration)
+// =============================================================================
+type HeaderMap = Record<string, string | string[] | undefined>;
+
+interface HttpRequestOptions {
+  method: string;
+  hostname: string;
+  port: string | number;
+  path: string;
+  headers: HeaderMap;
+  rejectUnauthorized: boolean;
+  timeout: number;
+}
+
+// Multiplexed stream as received from StreamMux (the ws client side)
+interface MuxStream {
+  id: string;
+  headers?: MuxStreamHeaders;
+  state?: string;
+  sendHeaders(init: Record<string, unknown>): void;
+  sendData(data: Buffer, end?: boolean): void;
+  close(): void;
+  _onData?: (chunk: Buffer) => void;
+  _onEnd?: () => void;
+  _onError?: () => void;
+}
+
+interface MuxStreamHeaders {
+  type?: string;
+  id?: string;
+  method?: string;
+  url?: string;
+  host: string;
+  port: number;
+  requestHeaders?: HeaderMap;
+  headers?: HeaderMap;
+}
+
+interface MuxHost {
+  onStream(listener: (stream: MuxStream) => void): void;
+}
+
+// Minimal structural view of the ws WebSocket used here (ws is plain JS via require)
+interface WsClient {
+  readyState: number;
+  mux: MuxHost;
+  send(data: string, cb?: (err?: Error) => void): void;
+  on(event: 'open', listener: () => void): void;
+  on(event: 'message', listener: (raw: Buffer | string, isBinary: boolean) => void): void;
+  on(event: 'close', listener: (code: number, reason: Buffer | string) => void): void;
+  on(event: 'error', listener: (err: Error) => void): void;
+  close(code?: number, reason?: string): void;
+}
+
+// JSON text messages sent by the server over the WebSocket
+interface AuthOkMessage {
+  type: 'auth_ok';
+}
+interface AuthErrorMessage {
+  type: 'auth_error';
+  message?: string;
+}
+interface InfoOkMessage {
+  type: 'info_ok';
+  clientId?: string;
+}
+interface RequestMessage {
+  type: 'request';
+  id: string;
+  method?: string;
+  url: string;
+  headers?: HeaderMap;
+  body?: string;
+}
+interface TunnelOpenMessage {
+  type: 'tunnel_open';
+  id: string;
+  host: string;
+  port: number;
+}
+interface TunnelDataMessage {
+  type: 'tunnel_data';
+  id: string;
+  data: string;
+}
+interface TunnelCloseMessage {
+  type: 'tunnel_close';
+  id: string;
+}
+interface UdpDataMessage {
+  type: 'udp_data';
+  id: string;
+  assocId: string;
+  host: string;
+  port: number;
+  data: string;
+  src?: unknown;
+}
+interface BroadcastMessage {
+  type: 'broadcast';
+  message?: string;
+}
+interface ErrorMessage {
+  type: 'error';
+  message?: string;
+}
+type ServerMessage =
+  | AuthOkMessage
+  | AuthErrorMessage
+  | InfoOkMessage
+  | RequestMessage
+  | TunnelOpenMessage
+  | TunnelDataMessage
+  | TunnelCloseMessage
+  | UdpDataMessage
+  | BroadcastMessage
+  | ErrorMessage;
+
+// =============================================================================
 // WebSocket Connection
 // =============================================================================
 function connect() {
@@ -224,7 +376,7 @@ function connect() {
       const msg = JSON.parse(raw.toString());
       handleMessage(msg);
     } catch (err) {
-      log('error', 'Invalid message: ' + err.message);
+      log('error', 'Invalid message: ' + (err as Error).message);
     }
   });
 
@@ -281,7 +433,7 @@ function stopHeartbeat() {
 // =============================================================================
 // Message Handler
 // =============================================================================
-function handleMessage(msg) {
+function handleMessage(msg: ServerMessage) {
   switch (msg.type) {
     case 'auth_ok':
       log('info', 'Authentication successful');
@@ -330,15 +482,15 @@ function handleMessage(msg) {
       break;
 
     default:
-      log('debug', 'Unknown message type: ' + msg.type);
+      log('debug', 'Unknown message type: ' + (msg as { type: string }).type);
   }
 }
 
 // =============================================================================
 // StreamMux Stream Handler (binary protocol)
 // =============================================================================
-function handleMuxStream(stream) {
-  const headers = stream.headers || {};
+function handleMuxStream(stream: MuxStream) {
+  const headers = stream.headers || ({} as MuxStreamHeaders);
 
   // HTTP request stream
   if (headers.type === 'request' || headers.method) {
@@ -356,7 +508,7 @@ function handleMuxStream(stream) {
   stream.close();
 }
 
-function handleMuxRequest(stream, headers) {
+function handleMuxRequest(stream: MuxStream, headers: MuxStreamHeaders) {
   const requestId = headers.id || stream.id;
 
   if (activeRequests.size >= CONFIG.max_concurrent_requests) {
@@ -366,7 +518,7 @@ function handleMuxRequest(stream, headers) {
   }
 
   // Collect body from DATA frames
-  const bodyChunks = [];
+  const bodyChunks: Buffer[] = [];
   stream._onData = (chunk) => {
     bodyChunks.push(chunk);
   };
@@ -382,13 +534,13 @@ function handleMuxRequest(stream, headers) {
   }
 }
 
-function executeMuxRequest(stream, headers, body) {
+function executeMuxRequest(stream: MuxStream, headers: MuxStreamHeaders, body: string) {
   const requestId = headers.id || stream.id;
   const { method, url: targetUrl, requestHeaders } = headers;
 
   try {
-    const parsedUrl = new URL(targetUrl);
-    const options = {
+    const parsedUrl = new URL(targetUrl!);
+    const options: HttpRequestOptions = {
       method: method || 'GET',
       hostname: parsedUrl.hostname,
       port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
@@ -403,8 +555,8 @@ function executeMuxRequest(stream, headers, body) {
     delete options.headers['transfer-encoding'];
 
     const transport = parsedUrl.protocol === 'https:' ? https : http;
-    const req = transport.request(options, (res) => {
-      const chunks = [];
+    const req = transport.request(options, (res: IncomingMessage) => {
+      const chunks: Buffer[] = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => {
         const responseBody = Buffer.concat(chunks);
@@ -420,7 +572,7 @@ function executeMuxRequest(stream, headers, body) {
       });
     });
 
-    req.on('error', (err) => {
+    req.on('error', (err: Error) => {
       // May fire after 'timeout' already destroyed the request and sent 504.
       if (!activeRequests.has(requestId)) return;
       log('error', `Request ${requestId} failed: ${err.message}`);
@@ -445,11 +597,11 @@ function executeMuxRequest(stream, headers, body) {
     activeRequests.set(requestId, { req });
   } catch (err) {
     stream.sendHeaders({ type: 'response', id: requestId, statusCode: 400, statusMessage: 'Bad Request', headers: { 'content-type': 'text/plain' } });
-    stream.sendData(Buffer.from('Invalid request: ' + err.message), true);
+    stream.sendData(Buffer.from('Invalid request: ' + (err as Error).message), true);
   }
 }
 
-function handleMuxTunnel(stream, headers) {
+function handleMuxTunnel(stream: MuxStream, headers: MuxStreamHeaders) {
   const tunnelId = headers.id || stream.id;
   const { host, port } = headers;
 
@@ -461,7 +613,7 @@ function handleMuxTunnel(stream, headers) {
 
   log('info', `Opening tunnel ${tunnelId} to ${host}:${port}`);
 
-  const socket = new net.Socket();
+  const socket: NetSocket = new net.Socket();
 
   const timeout = setTimeout(() => {
     log('warn', `Tunnel ${tunnelId} timeout to ${host}:${port}`);
@@ -516,7 +668,7 @@ function handleMuxTunnel(stream, headers) {
 // =============================================================================
 // HTTP Request Handler
 // =============================================================================
-function handleRequest(msg) {
+function handleRequest(msg: RequestMessage) {
   const { id, method, url: targetUrl, headers, body } = msg;
 
   if (activeRequests.size >= CONFIG.max_concurrent_requests) {
@@ -526,7 +678,7 @@ function handleRequest(msg) {
 
   try {
     const parsedUrl = new URL(targetUrl);
-    const options = {
+    const options: HttpRequestOptions = {
       method: method || 'GET',
       hostname: parsedUrl.hostname,
       port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
@@ -541,8 +693,8 @@ function handleRequest(msg) {
     delete options.headers['transfer-encoding'];
 
     const transport = parsedUrl.protocol === 'https:' ? https : http;
-    const req = transport.request(options, (res) => {
-      const chunks = [];
+    const req = transport.request(options, (res: IncomingMessage) => {
+      const chunks: Buffer[] = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => {
         const responseBody = Buffer.concat(chunks); // raw Buffer
@@ -551,7 +703,7 @@ function handleRequest(msg) {
       });
     });
 
-    req.on('error', (err) => {
+    req.on('error', (err: Error) => {
       // May fire after 'timeout' already destroyed the request and sent 504.
       if (!activeRequests.has(id)) return;
       log('error', `Request ${id} failed: ${err.message}`);
@@ -571,11 +723,11 @@ function handleRequest(msg) {
 
     activeRequests.set(id, { req });
   } catch (err) {
-    sendResponse(id, 400, 'Bad Request', { 'content-type': 'text/plain' }, 'Invalid request: ' + err.message);
+    sendResponse(id, 400, 'Bad Request', { 'content-type': 'text/plain' }, 'Invalid request: ' + (err as Error).message);
   }
 }
 
-function sendResponse(id, statusCode, statusMessage, headers, body) {
+function sendResponse(id: string, statusCode: number | undefined, statusMessage: string, headers: HeaderMap | undefined, body: string | Buffer | null | undefined) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const msg = {
     type: 'response',
@@ -594,7 +746,7 @@ function sendResponse(id, statusCode, statusMessage, headers, body) {
 // =============================================================================
 // Tunnel Handler
 // =============================================================================
-function handleTunnelOpen(msg) {
+function handleTunnelOpen(msg: TunnelOpenMessage) {
   const { id, host, port } = msg;
 
   if (activeTunnels.size >= CONFIG.max_concurrent_requests) {
@@ -604,7 +756,7 @@ function handleTunnelOpen(msg) {
 
   log('info', `Opening tunnel ${id} to ${host}:${port}`);
 
-  const socket = new net.Socket();
+  const socket: NetSocket = new net.Socket();
 
   const timeout = setTimeout(() => {
     log('warn', `Tunnel ${id} timeout to ${host}:${port}`);
@@ -643,14 +795,14 @@ function handleTunnelOpen(msg) {
   activeTunnels.set(id, { socket, timeout });
 }
 
-function handleTunnelData(msg) {
+function handleTunnelData(msg: TunnelDataMessage) {
   const tunnel = activeTunnels.get(msg.id);
   if (!tunnel || tunnel.socket.destroyed) return;
   const data = Buffer.from(msg.data, 'base64');
   tunnel.socket.write(data);
 }
 
-function handleTunnelClose(msg) {
+function handleTunnelClose(msg: TunnelCloseMessage) {
   const tunnel = activeTunnels.get(msg.id);
   if (tunnel) {
     clearTimeout(tunnel.timeout);
@@ -668,7 +820,7 @@ function handleTunnelClose(msg) {
 // udpClients: assocId -> { socket: dgram.Socket, pending: Map<requestId, rinfo> }
 const udpClients = new Map();
 
-function handleUdpData(msg) {
+function handleUdpData(msg: UdpDataMessage) {
   const { id, assocId, host, port, data, src } = msg;
   if (!assocId || !host || !port) return;
   if (!data) return;
@@ -679,13 +831,13 @@ function handleUdpData(msg) {
     // Get or create the UDP socket for this association
     let udp = udpClients.get(assocId);
     if (!udp) {
-      const socket = dgram.createSocket('udp4');
+      const socket: DgramSocket = dgram.createSocket('udp4');
       udp = { socket, pending: new Map() };
       udpClients.set(assocId, udp);
 
       socket.on('message', (respBuf, rinfo) => {
         // Find the pending request that matches this response (by source port)
-        let matchedId = null;
+        let matchedId: string | null = null;
         for (const [reqId, reqInfo] of udp.pending) {
           if (reqInfo.rinfo && reqInfo.rinfo.port === rinfo.port) {
             matchedId = reqId;
@@ -738,7 +890,7 @@ function handleUdpData(msg) {
     udp.pending.set(id, { rinfo: { port: 0, address: '' }, time: Date.now() });
 
     // Send datagram (host may be a domain name - dgram handles DNS)
-    udp.socket.send(payload, port, host, (err) => {
+    udp.socket.send(payload, port, host, (err: Error | null) => {
       if (err) {
         log('error', `UDP send error to ${host}:${port}: ${err.message}`);
         udp.pending.delete(id);
@@ -761,7 +913,7 @@ function handleUdpData(msg) {
       udp.pending.delete(oldest);
     }
   } catch (err) {
-    log('error', `UDP data error: ${err.message}`);
+    log('error', `UDP data error: ${(err as Error).message}`);
   }
 }
 
@@ -772,18 +924,18 @@ function cleanupAll() {
   stopHeartbeat();
   currentClientId = null;
 
-  for (const [id, tunnel] of activeTunnels) {
+  for (const [, tunnel] of activeTunnels) {
     clearTimeout(tunnel.timeout);
     if (!tunnel.socket.destroyed) tunnel.socket.destroy();
   }
   activeTunnels.clear();
 
-  for (const [id, req] of activeRequests) {
+  for (const [, req] of activeRequests) {
     if (req.req) req.req.destroy();
   }
   activeRequests.clear();
 
-  for (const [assocId, udp] of udpClients) {
+  for (const [, udp] of udpClients) {
     clearTimeout(udp.closeTimer);
     try { udp.socket.close(); } catch (_) {}
   }

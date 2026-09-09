@@ -1,6 +1,12 @@
 // =============================================================================
 // StreamMux - HTTP/2-style stream multiplexing over WebSocket
 // Phase 4: WebSocket 连接复用
+// Migrated to TypeScript (issue #42, Phase 2). CJS-style module: keeps the
+// original trailing `module.exports = { ... }`, uses no value-level
+// import/export and no runtime require() (the ws instance is injected by the
+// caller and Buffer comes from the Node globals), so type stripping leaves a
+// plain CommonJS file that require('./lib/stream-mux.ts') loads unchanged on
+// Node >= 24. Runtime behaviour is identical to the previous stream-mux.js.
 // =============================================================================
 // Frame format (binary):
 //   [4 bytes: length] [1 byte: type] [4 bytes: stream_id] [4 bytes: flags] [payload]
@@ -60,10 +66,76 @@ const MAX_FRAME_SIZE = 16384; // 16KB max frame payload
 const DEFAULT_PRIORITY = 128;
 
 // =============================================================================
+// Local structural types (the ws instance / logger are injected by callers;
+// no value-level imports keep the file CJS-loadable after type stripping)
+// =============================================================================
+
+interface StreamMuxOptions {
+  logger?: LoggerLike;
+  initialWindow?: number;
+  connectionWindow?: number;
+}
+
+interface LoggerLike {
+  debug(obj: object, msg?: string): void;
+  error(obj: object, msg?: string): void;
+}
+
+type MuxMessageData = Buffer | ArrayBuffer | Buffer[] | string;
+
+interface WebSocketLike {
+  on(event: 'message', listener: (data: MuxMessageData, isBinary: boolean) => void): unknown;
+  on(event: 'close', listener: () => void): unknown;
+  send(data: Buffer, options: { binary: boolean }, callback: (err?: Error) => void): unknown;
+}
+
+interface Frame {
+  type: number;
+  streamId: number;
+  flags: number;
+  payload: Buffer;
+}
+
+interface StreamStats {
+  id: number;
+  state: string;
+  priority: number;
+  sendWindow: number;
+  recvWindow: number;
+  bufferedSize: number;
+  totalBytesSent: number;
+  totalBytesReceived: number;
+  age: number;
+  idle: number;
+  headers: string[] | null;
+}
+
+// =============================================================================
 // Stream class - represents a single multiplexed stream
 // =============================================================================
 class Stream {
-  constructor(id, mux) {
+  id: number;
+  mux: StreamMux;
+  state: string;
+  priority: number;
+  sendWindow: number;
+  recvWindow: number;
+  bufferedData: Buffer[]; // Buffered outgoing data (waiting for window)
+  bufferedSize: number;
+  _onHeaders: ((headers: Record<string, unknown>, endStream: number) => void) | null;
+  _onData: ((data: Buffer) => void) | null;
+  _onEnd: (() => void) | null;
+  _onError: ((reason: string | number) => void) | null;
+  _onWindowUpdate: ((increment: number) => void) | null;
+  headers: Record<string, unknown> | null;
+  createdAt: number;
+  lastActivity: number;
+  totalBytesSent: number;
+  totalBytesReceived: number;
+  remoteAddress: string;
+  localAddress: string;
+
+  constructor(id: number, mux: StreamMux) {
     this.id = id;
     this.mux = mux;
     this.state = STREAM_STATE.IDLE;
@@ -87,14 +159,14 @@ class Stream {
   }
 
   // Set the stream priority (0 = highest, 255 = lowest)
-  setPriority(priority) {
+  setPriority(priority: number): void {
     this.priority = Math.max(0, Math.min(255, priority));
     this.lastActivity = Date.now();
     this.mux._reschedule();
   }
 
   // Send headers to the remote end
-  sendHeaders(headers, endStream = false) {
+  sendHeaders(headers: Record<string, unknown>, endStream = false): void {
     if (this.state === STREAM_STATE.CLOSED) return;
     this.state = endStream ? STREAM_STATE.HALF_CLOSED_LOCAL : STREAM_STATE.OPEN;
     this.headers = headers;
@@ -103,7 +175,7 @@ class Stream {
   }
 
   // Send data on this stream
-  sendData(data, endStream = false) {
+  sendData(data: Buffer | string, endStream = false): boolean {
     if (this.state === STREAM_STATE.CLOSED || this.state === STREAM_STATE.HALF_CLOSED_LOCAL) return false;
 
     const dataBuf = Buffer.isBuffer(data) ? data : Buffer.from(data, 'base64');
@@ -145,7 +217,7 @@ class Stream {
   }
 
   // Reset the stream
-  reset(reason = 0) {
+  reset(reason: string | number = 0): void {
     if (this.state === STREAM_STATE.CLOSED) return;
     this.state = STREAM_STATE.CLOSED;
     this.lastActivity = Date.now();
@@ -155,7 +227,7 @@ class Stream {
   }
 
   // Close the stream gracefully
-  close() {
+  close(): void {
     if (this.state === STREAM_STATE.CLOSED) return;
     if (this.state === STREAM_STATE.OPEN) {
       this.state = STREAM_STATE.HALF_CLOSED_LOCAL;
@@ -168,30 +240,31 @@ class Stream {
   }
 
   // Handle incoming frame
-  _handleFrame(type, payload, flags) {
+  _handleFrame(type: number, payload: unknown, flags: number): void {
     this.lastActivity = Date.now();
 
     if (type === FRAME_TYPE.HEADERS || type === FRAME_TYPE.HEADERS_END) {
-      this.headers = payload;
+      this.headers = payload as Record<string, unknown>;
       if (flags & FLAG.END_STREAM) {
         this.state = STREAM_STATE.HALF_CLOSED_REMOTE;
       } else {
         this.state = STREAM_STATE.OPEN;
       }
-      if (this._onHeaders) this._onHeaders(payload, flags & FLAG.END_STREAM);
+      if (this._onHeaders) this._onHeaders(this.headers, flags & FLAG.END_STREAM);
       return;
     }
 
     if (type === FRAME_TYPE.DATA) {
-      this.recvWindow -= payload.length;
-      this.totalBytesReceived += payload.length;
+      const data = payload as Buffer;
+      this.recvWindow -= data.length;
+      this.totalBytesReceived += data.length;
       if (this.recvWindow < DEFAULT_INITIAL_WINDOW / 2) {
         // Send window update
         const increment = DEFAULT_INITIAL_WINDOW - this.recvWindow;
         this.recvWindow += increment;
         this.mux._sendFrame(this.id, FRAME_TYPE.WINDOW_UPDATE, { increment });
       }
-      if (this._onData) this._onData(payload);
+      if (this._onData) this._onData(data);
       if (flags & FLAG.END_STREAM) {
         this.state = STREAM_STATE.HALF_CLOSED_REMOTE;
         if (this._onEnd) this._onEnd();
@@ -200,7 +273,8 @@ class Stream {
     }
 
     if (type === FRAME_TYPE.PRIORITY) {
-      this.priority = payload.priority || DEFAULT_PRIORITY;
+      const p = payload as { priority?: number };
+      this.priority = p.priority || DEFAULT_PRIORITY;
       this.mux._reschedule();
       return;
     }
@@ -208,12 +282,14 @@ class Stream {
     if (type === FRAME_TYPE.RST_STREAM) {
       this.state = STREAM_STATE.CLOSED;
       this.mux._removeStream(this.id);
-      if (this._onError) this._onError(payload.reason || 0);
+      const p = payload as { reason?: string | number };
+      if (this._onError) this._onError(p.reason || 0);
       return;
     }
 
     if (type === FRAME_TYPE.WINDOW_UPDATE) {
-      this.sendWindow += payload.increment || 0;
+      const p = payload as { increment?: number };
+      this.sendWindow += p.increment || 0;
       // Flush buffered data
       this._flushBuffered();
       return;
@@ -221,7 +297,7 @@ class Stream {
   }
 
   // Flush buffered data when window opens up
-  _flushBuffered() {
+  _flushBuffered(): void {
     while (this.bufferedData.length > 0 && this.sendWindow > 0) {
       const chunk = this.bufferedData[0];
       const sendSize = Math.min(chunk.length, this.sendWindow, MAX_FRAME_SIZE);
@@ -240,7 +316,7 @@ class Stream {
     }
   }
 
-  get stats() {
+  get stats(): StreamStats {
     return {
       id: this.id,
       state: this.state,
@@ -261,7 +337,34 @@ class Stream {
 // StreamMux class - manages multiple streams over a single WebSocket
 // =============================================================================
 class StreamMux {
-  constructor(ws, options = {}) {
+  ws: WebSocketLike;
+  logger: LoggerLike | null;
+  _nextId: number;
+  streams: Map<number, Stream>;
+  _pendingFrames: Frame[];
+  _sendBuffer: Buffer[];
+  _sending: boolean;
+  _closed: boolean;
+  _lastPing: number;
+  _rtt: number;
+  _onStream: ((stream: Stream) => void) | null;
+  _onGoaway: ((lastStreamId: number) => void) | null;
+  _onError: ((err: unknown) => void) | null;
+
+  // Flow control
+  connectionSendWindow: number;
+  connectionRecvWindow: number;
+  initialWindow: number;
+
+  // Priority scheduling
+  _priorityQueue: number[];
+  _schedulingTimer: ReturnType<typeof setTimeout> | null;
+
+  _windowCheckInterval: ReturnType<typeof setInterval>;
+  _pingCallback: ((rtt: number) => void) | null;
+  _buffer: Buffer;
+
+  constructor(ws: WebSocketLike, options: StreamMuxOptions = {}) {
     this.ws = ws;
     this.logger = options.logger || null;
     this._nextId = 1;
@@ -291,6 +394,7 @@ class StreamMux {
     }, 1000);
 
     // Start reading from WebSocket
+    this._pingCallback = null;
     this._buffer = Buffer.alloc(0);
     this._setupRead();
   }
@@ -304,7 +408,7 @@ class StreamMux {
    * @param {number} priority - Stream priority (0-255, lower = higher)
    * @returns {Stream}
    */
-  createStream(priority = DEFAULT_PRIORITY) {
+  createStream(priority: number = DEFAULT_PRIORITY): Stream | null {
     if (this._closed) return null;
     const id = this._nextId;
     this._nextId += 2; // Client-initiated streams use odd IDs
@@ -329,7 +433,7 @@ class StreamMux {
    * @param {number} priority - Stream priority
    * @returns {Stream}
    */
-  openTunnel(host, port, priority = DEFAULT_PRIORITY) {
+  openTunnel(host: string, port: number, priority: number = DEFAULT_PRIORITY): Stream | null {
     const stream = this.createStream(priority);
     if (!stream) return null;
 
@@ -348,7 +452,7 @@ class StreamMux {
   /**
    * Send tunnel data
    */
-  sendTunnelData(streamId, data) {
+  sendTunnelData(streamId: number, data: Buffer | string): boolean {
     const stream = this.streams.get(streamId);
     if (!stream) return false;
     return stream.sendData(data);
@@ -357,7 +461,7 @@ class StreamMux {
   /**
    * Close a tunnel
    */
-  closeTunnel(streamId, reason = 0) {
+  closeTunnel(streamId: number, reason: string | number = 0): void {
     const stream = this.streams.get(streamId);
     if (!stream) return;
     this._sendFrame(streamId, FRAME_TYPE.TUNNEL_CLOSE, { reason }, 0);
@@ -368,7 +472,7 @@ class StreamMux {
   /**
    * Send a PING to measure RTT
    */
-  ping(callback) {
+  ping(callback: (rtt: number) => void): void {
     if (this._closed) return;
     this._lastPing = Date.now();
     this._pingCallback = callback;
@@ -378,9 +482,17 @@ class StreamMux {
   /**
    * Get stream statistics
    */
-  getStats() {
-    const streamStats = [];
-    for (const [id, stream] of this.streams) {
+  getStats(): {
+    activeStreams: number;
+    totalStreams: number;
+    connectionSendWindow: number;
+    connectionRecvWindow: number;
+    rtt: number;
+    bufferedFrames: number;
+    streams: StreamStats[];
+  } {
+    const streamStats: StreamStats[] = [];
+    for (const stream of this.streams.values()) {
       streamStats.push(stream.stats);
     }
 
@@ -398,11 +510,11 @@ class StreamMux {
   /**
    * Graceful shutdown
    */
-  goaway(lastStreamId = 0) {
+  goaway(lastStreamId = 0): void {
     this._sendFrame(0, FRAME_TYPE.GOAWAY, { lastStreamId }, 0);
     this._closed = true;
     // Close all streams
-    for (const [id, stream] of this.streams) {
+    for (const stream of this.streams.values()) {
       stream.state = STREAM_STATE.CLOSED;
       if (stream._onError) stream._onError('goaway');
     }
@@ -418,9 +530,9 @@ class StreamMux {
   /**
    * Force close everything
    */
-  destroy() {
+  destroy(): void {
     this._closed = true;
-    for (const [id, stream] of this.streams) {
+    for (const stream of this.streams.values()) {
       stream.state = STREAM_STATE.CLOSED;
     }
     this.streams.clear();
@@ -438,15 +550,15 @@ class StreamMux {
   // Event handlers
   // ===========================================================================
 
-  onStream(callback) {
+  onStream(callback: (stream: Stream) => void): void {
     this._onStream = callback;
   }
 
-  onGoaway(callback) {
+  onGoaway(callback: (lastStreamId: number) => void): void {
     this._onGoaway = callback;
   }
 
-  onError(callback) {
+  onError(callback: (err: unknown) => void): void {
     this._onError = callback;
   }
 
@@ -454,10 +566,10 @@ class StreamMux {
   // Internal: Frame encoding/decoding
   // ===========================================================================
 
-  _sendFrame(streamId, type, payload, flags = 0) {
+  _sendFrame(streamId: number, type: number, payload: Buffer | object, flags = 0): void {
     if (this._closed) return;
 
-    let payloadBuf;
+    let payloadBuf: Buffer;
     if (Buffer.isBuffer(payload)) {
       payloadBuf = payload;
     } else if (typeof payload === 'object') {
@@ -482,21 +594,21 @@ class StreamMux {
     }
   }
 
-  _flushSendBuffer() {
+  _flushSendBuffer(): void {
     if (this._sendBuffer.length === 0) {
       this._sending = false;
       return;
     }
 
     // Batch multiple small frames together
-    let batch = [];
+    const batch: Buffer[] = [];
     let totalSize = 0;
     const maxBatchSize = 65536; // 64KB max per batch
 
     while (this._sendBuffer.length > 0) {
       const frame = this._sendBuffer[0];
       if (totalSize + frame.length > maxBatchSize && batch.length > 0) break;
-      batch.push(this._sendBuffer.shift());
+      batch.push(this._sendBuffer.shift() as Buffer);
       totalSize += frame.length;
     }
 
@@ -512,7 +624,7 @@ class StreamMux {
         return;
       }
 
-      this.ws.send(sendData, { binary: true }, (err) => {
+      this.ws.send(sendData, { binary: true }, (err?: Error) => {
         if (err) {
           this.logger?.error({ error: err.message }, 'StreamMux send error');
           if (this._onError) this._onError(err);
@@ -521,21 +633,22 @@ class StreamMux {
         setImmediate(() => this._flushSendBuffer());
       });
     } catch (err) {
-      this.logger?.error({ error: err.message }, 'StreamMux send exception');
+      const e = err instanceof Error ? err : new Error(String(err));
+      this.logger?.error({ error: e.message }, 'StreamMux send exception');
       this._sending = false;
       this._sendBuffer.unshift(...batch);
     }
   }
 
-  _encodeBatch(frames) {
+  _encodeBatch(frames: Buffer[]): Buffer {
     const count = frames.length;
     const countBuf = Buffer.alloc(2);
     countBuf.writeUInt16BE(count, 0);
     return Buffer.concat([countBuf, ...frames]);
   }
 
-  _decodeBatch(buf) {
-    const frames = [];
+  _decodeBatch(buf: Buffer): Frame[] {
+    const frames: Frame[] = [];
     let offset = 2; // Skip 2-byte count field
     while (offset < buf.length) {
       if (offset + 13 > buf.length) break;
@@ -555,21 +668,23 @@ class StreamMux {
   // Internal: WebSocket read handler
   // ===========================================================================
 
-  _setupRead() {
-    this.ws.on('message', (data, isBinary) => {
+  _setupRead(): void {
+    this.ws.on('message', (data: MuxMessageData, isBinary: boolean) => {
       if (this._closed) return;
 
       // Legacy JSON support (backward compatibility)
       // NOTE: ws 8.x passes text frames as Buffer with isBinary=false
       if (isBinary === false || typeof data === 'string') {
         try {
-          const msg = JSON.parse(data.toString());
+          const msg = JSON.parse(data.toString()) as Record<string, unknown>;
           this._handleLegacyMessage(msg);
-        } catch (_) {}
+        } catch (_) {
+          // ignore malformed legacy message
+        }
         return;
       }
 
-      let buf;
+      let buf: Buffer;
       if (Buffer.isBuffer(data)) {
         buf = data;
       } else if (data instanceof ArrayBuffer) {
@@ -604,7 +719,7 @@ class StreamMux {
 
     this.ws.on('close', () => {
       this._closed = true;
-      for (const [id, stream] of this.streams) {
+      for (const stream of this.streams.values()) {
         stream.state = STREAM_STATE.CLOSED;
         if (stream._onError) stream._onError('connection_closed');
       }
@@ -612,7 +727,7 @@ class StreamMux {
     });
   }
 
-  _handleFrame(frame) {
+  _handleFrame(frame: Frame): void {
     const { type, streamId, flags, payload } = frame;
 
     // Connection-level frames (streamId = 0)
@@ -643,7 +758,7 @@ class StreamMux {
     if (type === FRAME_TYPE.TUNNEL_OPEN) {
       // New tunnel
       if (!stream) {
-        const payloadObj = this._parsePayload(type, payload);
+        const payloadObj = this._parsePayload(type, payload) as Record<string, unknown>;
         stream = new Stream(streamId, this);
         stream.headers = payloadObj;
         stream.state = STREAM_STATE.OPEN;
@@ -661,8 +776,8 @@ class StreamMux {
     stream._handleFrame(type, this._parsePayload(type, payload), flags);
   }
 
-  _handleConnectionFrame(type, payload) {
-    const p = JSON.parse(payload.toString('utf8'));
+  _handleConnectionFrame(type: number, payload: Buffer): void {
+    const p = JSON.parse(payload.toString('utf8')) as { time?: number; lastStreamId?: number; increment?: number };
 
     if (type === FRAME_TYPE.PING) {
       // Respond with PONG
@@ -691,7 +806,7 @@ class StreamMux {
     }
   }
 
-  _parsePayload(type, buf) {
+  _parsePayload(type: number, buf: Buffer): unknown {
     switch (type) {
       case FRAME_TYPE.DATA:
       case FRAME_TYPE.TUNNEL_DATA:
@@ -705,7 +820,7 @@ class StreamMux {
     }
   }
 
-  _handleLegacyMessage(msg) {
+  _handleLegacyMessage(msg: Record<string, unknown>): void {
     // Handle legacy JSON messages for backward compatibility
     if (msg.type === 'ping') {
       this._sendFrame(0, FRAME_TYPE.PONG, { time: Date.now() }, 0);
@@ -716,7 +831,7 @@ class StreamMux {
   // Internal: Flow control
   // ===========================================================================
 
-  _checkConnectionWindow() {
+  _checkConnectionWindow(): void {
     if (this.connectionRecvWindow < DEFAULT_CONNECTION_WINDOW / 2) {
       const increment = DEFAULT_CONNECTION_WINDOW - this.connectionRecvWindow;
       this.connectionRecvWindow += increment;
@@ -724,7 +839,7 @@ class StreamMux {
     }
   }
 
-  _updateStreamPriority(streamId, priority) {
+  _updateStreamPriority(streamId: number, priority: number): void {
     const stream = this.streams.get(streamId);
     if (stream) {
       stream.priority = Math.max(0, Math.min(255, priority));
@@ -732,7 +847,7 @@ class StreamMux {
     }
   }
 
-  _reschedule() {
+  _reschedule(): void {
     // Sort priority queue by priority (lower = higher priority)
     this._priorityQueue.sort((a, b) => {
       const sa = this.streams.get(a);
@@ -744,7 +859,7 @@ class StreamMux {
     });
   }
 
-  _removeStream(streamId) {
+  _removeStream(streamId: number): void {
     this.streams.delete(streamId);
     const idx = this._priorityQueue.indexOf(streamId);
     if (idx >= 0) this._priorityQueue.splice(idx, 1);
