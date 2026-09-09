@@ -12,10 +12,12 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ClientManager, ClientNode } from './client-manager.ts';
 import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
+import type { ProxyRoute } from './auth.ts';
 
 interface AuthManagerLike {
   config: { auth: { proxy: { enabled: boolean } } };
-  validateSocks5Auth(username: string, password: string): boolean;
+  // Returns the per-password routing directive alongside the auth verdict.
+  resolveSocks5Auth(username: string, password: string): { ok: boolean; route?: ProxyRoute };
 }
 
 interface CleanupState {
@@ -50,6 +52,9 @@ export function createSocks5Proxy(
     let state: 'greeting' | 'auth_sub' | 'request' | 'tunnel' | 'udp' = 'greeting';
     let bufs: Buffer[] = [];
     let bufLen = 0;
+    // Routing directive resolved at auth time (issue #53): empty object = the
+    // default pool with the global routing strategy.
+    let route: ProxyRoute = {};
     const cleanupState: CleanupState = {
       tunnelId: null,
       currentClient: null,
@@ -132,8 +137,10 @@ export function createSocks5Proxy(
           const username = buf.slice(2, 2 + uLen).toString();
           const password = buf.slice(2 + uLen + 1, 2 + uLen + 1 + pLen).toString();
 
-          if (authManager.validateSocks5Auth(username, password)) {
+          const authResult = authManager.resolveSocks5Auth(username, password);
+          if (authResult.ok) {
             socket.write(Buffer.from([0x01, 0x00]));
+            route = authResult.route || {};
             state = 'request';
             bufs = [buf.slice(2 + uLen + 1 + pLen)];
             bufLen = bufs[0].length;
@@ -191,7 +198,7 @@ export function createSocks5Proxy(
 
           if (cmd === 0x03) {
             // ---- UDP ASSOCIATE ----
-            handleUDPAssociate(socket, b, atyp, host, port, clientManager, config, logger, cleanup);
+            handleUDPAssociate(socket, b, atyp, host, port, clientManager, config, logger, cleanup, route);
             state = 'udp';
             bufs = [];
             bufLen = 0;
@@ -205,7 +212,7 @@ export function createSocks5Proxy(
           }
 
           // ---- CONNECT ----
-          handleTCPConnect(socket, host, port, clientManager, config, logger);
+          handleTCPConnect(socket, host, port, clientManager, config, logger, route);
           state = 'tunnel';
           bufs = [];
           bufLen = 0;
@@ -241,7 +248,8 @@ function handleTCPConnect(
   port: number,
   clientManager: ClientManager,
   config: ServerConfig,
-  logger: AppLogger
+  logger: AppLogger,
+  route: ProxyRoute
 ) {
   let tunnelId: string | number = uuidv4();
   let currentTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -268,7 +276,10 @@ function handleTCPConnect(
     ).catch(() => {});
   }
 
-  const client = clientManager.selectClient();
+  const client = clientManager.selectClient(route.tag || null, {
+    clientId: route.clientId || null,
+    strategy: route.strategy || null,
+  });
   if (!client) {
     logger.warn(
       { targetHost: host, targetPort: port, ip: socket.remoteAddress || '' },
@@ -388,7 +399,8 @@ function handleUDPAssociate(
   clientManager: ClientManager,
   config: ServerConfig,
   logger: AppLogger,
-  _cleanup: CleanupFn
+  _cleanup: CleanupFn,
+  route: ProxyRoute
 ) {
   void requestBuf;
   void atyp;
@@ -442,8 +454,12 @@ function handleUDPAssociate(
 
     const data = msg.slice(dataStart);
 
-    // Select a client to relay this UDP datagram
-    const client = clientManager.selectClient();
+    // Select a client to relay this UDP datagram (honoring the authenticated
+    // route's tag / forced node / strategy, issue #53)
+    const client = clientManager.selectClient(route.tag || null, {
+      clientId: route.clientId || null,
+      strategy: route.strategy || null,
+    });
     if (!client) return;
 
     // Check ACL (legacy first arg is the client object, not an id)

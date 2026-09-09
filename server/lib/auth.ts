@@ -9,6 +9,8 @@ import { randomBytes } from 'crypto';
 import type { Response, NextFunction } from 'express';
 import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
+import type { ProxyPasswordEntry } from './proxy-passwords.ts';
+import type { RoutingStrategy } from './router.ts';
 
 export type RoleName = 'admin' | 'operator' | 'viewer';
 
@@ -25,7 +27,7 @@ export const ROLES: Record<RoleName, { permissions: string[] }> = {
     permissions: [
       'client:list', 'client:kick', 'client:tag', 'client:weight',
       'client:bandwidth', 'client:events', 'client:alias', 'client:notes', 'client:region', 'client:group',
-      'proxy:config', 'proxy:stats',
+      'proxy:config', 'proxy:stats', 'proxy:passwords',
       'routing:config', 'routing:strategy',
       'circuit:reset', 'circuit:view',
       'system:config', 'system:logs',
@@ -42,7 +44,7 @@ export const ROLES: Record<RoleName, { permissions: string[] }> = {
     permissions: [
       'client:list', 'client:kick', 'client:tag', 'client:weight',
       'client:bandwidth', 'client:events', 'client:alias', 'client:notes', 'client:region', 'client:group',
-      'proxy:stats',
+      'proxy:stats', 'proxy:passwords',
       'routing:strategy',
       'circuit:reset', 'circuit:view',
       'domain:list', 'domain:create', 'domain:delete', 'domain:modify',
@@ -89,11 +91,36 @@ export type WebAuthResult =
 
 export type AuthMiddleware = (req: AuthWebRequest, res: Response, next: NextFunction) => void;
 
+// Routing directive resolved from a proxy credential (issue #53): empty route
+// = default pool with the global routing strategy; tag = filter to nodes whose
+// tags/groups include it (used with a per-password strategy); clientId = force
+// that node. strategy overrides the global strategy for this request.
+export interface ProxyRoute {
+  tag?: string | null;
+  clientId?: string | null;
+  strategy?: RoutingStrategy | null;
+}
+
 export class AuthManager {
   config: ServerConfig;
   log: AppLogger;
   private jwtSecret: string;
   private users: Map<string, AuthUserValue> = new Map(); // username -> entry
+  // Injected providers for multi-password proxy auth (issue #53). Kept as
+  // setters to avoid an import cycle: server.ts wires the storage-backed
+  // password manager and the live client registry after construction.
+  private proxyPasswordProvider: (() => ProxyPasswordEntry[]) | null = null;
+  private clientIdResolver: ((password: string) => string | null) | null = null;
+
+  // Node selected by a resolved proxy route...
+  setProxyPasswordProvider(provider: () => ProxyPasswordEntry[]) {
+    this.proxyPasswordProvider = provider;
+  }
+
+  // Returns the id of a connected node whose UUID equals `password`, else null.
+  setClientIdResolver(resolver: (password: string) => string | null) {
+    this.clientIdResolver = resolver;
+  }
 
   constructor(config: ServerConfig, logger: AppLogger) {
     this.config = config;
@@ -300,24 +327,65 @@ export class AuthManager {
   }
 
   // ===========================================================================
-  // Legacy: HTTP Proxy Auth
+  // Legacy: HTTP Proxy Auth + multi-password routing (issue #53)
   // ===========================================================================
-  validateProxyAuth(authHeader: string | null | undefined): boolean {
+  // A proxy credential either matches the legacy config pair (username AND
+  // password, default pool with the global routing strategy), a panel-managed
+  // extra password (any username; carries an optional tag/group filter, a
+  // forced node UUID and a per-password strategy), or a connected node's UUID
+  // used directly as the password (forced single node).
+  resolveProxyAuth(
+    authHeader: string | string[] | null | undefined
+  ): { ok: boolean; route?: ProxyRoute } {
     const proxyAuth = this.config.auth.proxy;
-    if (!proxyAuth.enabled) return true;
-    if (!authHeader) return false;
+    if (!proxyAuth.enabled) return { ok: true, route: {} };
+    const header = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+    if (!header) return { ok: false };
     try {
-      const parts = authHeader.split(' ');
-      if (parts.length !== 2 || parts[0].toLowerCase() !== 'basic') return false;
+      const parts = header.split(' ');
+      if (parts.length !== 2 || parts[0].toLowerCase() !== 'basic') return { ok: false };
       const decoded = Buffer.from(parts[1], 'base64').toString('utf8');
       const colonIdx = decoded.indexOf(':');
-      if (colonIdx === -1) return false;
+      if (colonIdx === -1) return { ok: false };
       const username = decoded.substring(0, colonIdx);
       const password = decoded.substring(colonIdx + 1);
-      return username === proxyAuth.username && password === proxyAuth.password;
+      return this._matchProxyCredentials(username, password);
     } catch (_) {
-      return false;
+      return { ok: false };
     }
+  }
+
+  validateProxyAuth(authHeader: string | string[] | null | undefined): boolean {
+    return this.resolveProxyAuth(authHeader).ok;
+  }
+
+  private _matchProxyCredentials(username: string, password: string): { ok: boolean; route?: ProxyRoute } {
+    const proxyAuth = this.config.auth.proxy;
+    // Legacy configured pair (strict username + password) -> default pool.
+    if (username === proxyAuth.username && password === proxyAuth.password) {
+      return { ok: true, route: {} };
+    }
+    // Panel-managed extra passwords: only the password matters.
+    if (this.proxyPasswordProvider) {
+      for (const entry of this.proxyPasswordProvider()) {
+        if (entry.enabled && entry.password === password) {
+          return {
+            ok: true,
+            route: {
+              tag: entry.tag || null,
+              clientId: entry.clientId || null,
+              strategy: entry.strategy || null,
+            },
+          };
+        }
+      }
+    }
+    // A connected node UUID used directly as the password -> force that node.
+    if (this.clientIdResolver) {
+      const forcedId = this.clientIdResolver(password);
+      if (forcedId) return { ok: true, route: { clientId: forcedId, strategy: null } };
+    }
+    return { ok: false };
   }
 
   generateProxyAuthHeader(): string | null {
@@ -327,9 +395,15 @@ export class AuthManager {
     return `Basic ${encoded}`;
   }
 
-  validateSocks5Auth(username: string, password: string): boolean {
+  // SOCKS5 username/password auth (RFC 1929): returns the matched route so the
+  // tunnel can honor per-password tag/strategy/UUID routing.
+  resolveSocks5Auth(username: string, password: string): { ok: boolean; route?: ProxyRoute } {
     const proxyAuth = this.config.auth.proxy;
-    if (!proxyAuth.enabled) return true;
-    return username === proxyAuth.username && password === proxyAuth.password;
+    if (!proxyAuth.enabled) return { ok: true, route: {} };
+    return this._matchProxyCredentials(username, password);
+  }
+
+  validateSocks5Auth(username: string, password: string): boolean {
+    return this.resolveSocks5Auth(username, password).ok;
   }
 }

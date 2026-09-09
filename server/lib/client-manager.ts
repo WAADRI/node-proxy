@@ -12,6 +12,7 @@ import type { WebSocket } from 'ws';
 import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
 import type { StreamMux, MuxStreamLike } from './stream-mux.ts';
+import type { RoutingStrategy } from './router.ts';
 
 // --- External modules injected by server.js (duck-typed minimal contracts) ---
 
@@ -27,7 +28,7 @@ export interface ClientMeta {
 
 interface RouterLike {
   strategy?: string;
-  select(clients: ClientNode[], cb: unknown, tag?: string | null): ClientNode | null;
+  select(clients: ClientNode[], cb: unknown, tag?: string | null, strategy?: RoutingStrategy | null): ClientNode | null;
   setStrategy(strategy: string): boolean;
   setWeight(id: string, weight: number): void;
   recordResponseTime(id: string | null | undefined, ms: number): void;
@@ -445,12 +446,25 @@ export class ClientManager {
   // ===========================================================================
   // Client Selection (delegates to Router)
   // ===========================================================================
-  selectClient(tag?: string | null): ClientNode | null {
+  // opts.clientId forces a specific node (UUID password routing, issue #53):
+  // returns null when that node is offline or circuit-broken. opts.strategy
+  // overrides the global routing strategy for this request.
+  selectClient(
+    tag?: string | null,
+    opts?: { clientId?: string | null; strategy?: RoutingStrategy | null }
+  ): ClientNode | null {
     const clients = Array.from(this.clients.values());
     if (clients.length === 0) return null;
 
+    if (opts?.clientId) {
+      const forced = this.clients.get(opts.clientId);
+      if (!forced) return null;
+      if (this.circuitBreaker && !this.circuitBreaker.isAllowed(forced.id)) return null;
+      return forced;
+    }
+
     if (this.router) {
-      return this.router.select(clients, this.circuitBreaker, tag);
+      return this.router.select(clients, this.circuitBreaker, tag, opts?.strategy || null);
     }
 
     // Fallback to random with circuit breaker check

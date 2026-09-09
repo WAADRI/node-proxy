@@ -128,8 +128,17 @@ if (storage.ready) {
   settingsManager.applyPersisted();
 }
 
+// Multi proxy passwords (issue #53): panel-managed credentials that route to
+// a node tag/group, force a node UUID, or carry their own routing strategy.
+const { ProxyPasswordManager } = require('./lib/proxy-passwords.ts');
+const passwordManager = new ProxyPasswordManager(storage);
+authManager.setProxyPasswordProvider(() => passwordManager.list());
+authManager.setClientIdResolver((password: string) => {
+  return clientManager.getById(password) ? password : null;
+});
+
 // Create web app (pass all Phase 3 modules)
-const app = createWebServer(clientManager, authManager, config, logger, metricsManager, domainRouter, cache, pluginManager, aclManager, auditLogger, autoUpdater, settingsManager);
+const app = createWebServer(clientManager, authManager, config, logger, metricsManager, domainRouter, cache, pluginManager, aclManager, auditLogger, autoUpdater, settingsManager, passwordManager);
 const httpServer = http.createServer(app);
 
 // Setup WebSocket servers

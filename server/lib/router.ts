@@ -14,7 +14,7 @@ import { clientEffectiveTags } from './client-manager.ts';
 
 export type RoutingStrategy = 'random' | 'least-loaded' | 'fastest-response' | 'weighted';
 
-const STRATEGIES: RoutingStrategy[] = ['random', 'least-loaded', 'fastest-response', 'weighted'];
+export const ROUTING_STRATEGIES: RoutingStrategy[] = ['random', 'least-loaded', 'fastest-response', 'weighted'];
 
 // Minimal circuit-breaker contract used at selection time.
 interface RouterCircuitBreakerLike {
@@ -32,11 +32,11 @@ export class Router {
     this.config = config;
     this.log = logger;
     const initial = config.routing?.strategy;
-    this.strategy = STRATEGIES.includes(initial as RoutingStrategy) ? (initial as RoutingStrategy) : 'random';
+    this.strategy = ROUTING_STRATEGIES.includes(initial as RoutingStrategy) ? (initial as RoutingStrategy) : 'random';
   }
 
   setStrategy(strategy: string): boolean {
-    if (STRATEGIES.includes(strategy as RoutingStrategy)) {
+    if (ROUTING_STRATEGIES.includes(strategy as RoutingStrategy)) {
       this.strategy = strategy as RoutingStrategy;
       return true;
     }
@@ -47,8 +47,15 @@ export class Router {
     return this.strategy;
   }
 
-  // Select a client from available clients using the configured strategy
-  select(clients: ClientNode[], circuitBreaker: RouterCircuitBreakerLike | null, tag?: string | null): ClientNode | null {
+  // Select a client from available clients using the configured strategy.
+  // A per-request strategy (e.g. from a proxy password, issue #53) overrides
+  // the global strategy when provided.
+  select(
+    clients: ClientNode[],
+    circuitBreaker: RouterCircuitBreakerLike | null,
+    tag?: string | null,
+    strategy?: RoutingStrategy | null
+  ): ClientNode | null {
     if (!clients || clients.length === 0) return null;
 
     // Filter by circuit breaker
@@ -72,7 +79,8 @@ export class Router {
       if (candidates.length === 0) return null;
     }
 
-    switch (this.strategy) {
+    const active = strategy && ROUTING_STRATEGIES.includes(strategy) ? strategy : this.strategy;
+    switch (active) {
       case 'least-loaded':
         return this._leastLoaded(candidates);
       case 'fastest-response':

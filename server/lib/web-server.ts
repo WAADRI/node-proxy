@@ -23,6 +23,7 @@ type WebRequest = HttpRequest & { user?: string; role?: string };
 type ClientManager = import('./client-manager.ts').ClientManager;
 type AuthManager = import('./auth.ts').AuthManager;
 type RoleName = import('./auth.ts').RoleName;
+type ProxyPasswordManager = import('./proxy-passwords.ts').ProxyPasswordManager;
 type ServerConfig = import('./config.ts').ServerConfig;
 type AppLogger = import('./logger.ts').AppLogger;
 type MetricsManager = import('./metrics.ts').MetricsManager;
@@ -87,7 +88,8 @@ function createWebServer(
   aclManager: AclManagerLike | null,
   auditLogger: AuditLoggerLike | null,
   autoUpdater: AutoUpdaterLike | null,
-  settingsManager: SettingsManagerLike | null
+  settingsManager: SettingsManagerLike | null,
+  passwordManager: ProxyPasswordManager | null
 ) {
   const app = express();
 
@@ -449,6 +451,112 @@ function createWebServer(
     if (clientManager.storage) clientManager.storage.setClientMetadata(client.id, { group: result.group });
     logger.info({ clientId: client.id, group: result.group, admin: req.user }, 'Client group updated');
     res.json({ success: true, group: result.group });
+  });
+
+  // --- Multi proxy passwords (issue #53) ---
+  api.get('/proxy-passwords', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'proxy:passwords')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
+    const entries = passwordManager ? passwordManager.list() : [];
+    const proxyAuth = config.auth.proxy || {};
+    res.json({
+      success: true,
+      passwords: entries,
+      defaultPool: {
+        enabled: !!proxyAuth.enabled,
+        username: proxyAuth.username || '',
+      },
+    });
+  });
+
+  api.post('/proxy-passwords', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'proxy:passwords')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
+    if (!passwordManager) {
+      res.status(500).json({ success: false, message: 'Password manager unavailable' });
+      return;
+    }
+    const body = (req.body || {}) as Record<string, unknown>;
+    const result = passwordManager.create({
+      label: typeof body.label === 'string' ? body.label : undefined,
+      password: typeof body.password === 'string' && body.password ? body.password : undefined,
+      tag: typeof body.tag === 'string' && body.tag ? body.tag : undefined,
+      clientId: typeof body.clientId === 'string' && body.clientId ? body.clientId : undefined,
+      strategy: typeof body.strategy === 'string' ? (body.strategy as 'random' | 'least-loaded' | 'fastest-response' | 'weighted') : undefined,
+      enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+    });
+    if (!result.ok) {
+      res.status(400).json({ success: false, message: result.error || 'Create failed' });
+      return;
+    }
+    logger.info({ admin: req.user, label: result.entry?.label }, 'Proxy password created');
+    res.json({ success: true, entry: result.entry });
+  });
+
+  api.post('/proxy-passwords/:id', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'proxy:passwords')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
+    if (!passwordManager) {
+      res.status(500).json({ success: false, message: 'Password manager unavailable' });
+      return;
+    }
+    const body = (req.body || {}) as Record<string, unknown>;
+    const result = passwordManager.update(pstr(req.params.id), {
+      label: body.label !== undefined ? (typeof body.label === 'string' ? body.label : '') : undefined,
+      password: body.password !== undefined && typeof body.password === 'string' && body.password ? body.password : undefined,
+      tag: body.tag !== undefined ? (typeof body.tag === 'string' && body.tag ? body.tag : null) : undefined,
+      clientId: body.clientId !== undefined ? (typeof body.clientId === 'string' && body.clientId ? body.clientId : null) : undefined,
+      strategy: body.strategy !== undefined ? (typeof body.strategy === 'string' ? (body.strategy as 'random' | 'least-loaded' | 'fastest-response' | 'weighted') : null) : undefined,
+      enabled: body.enabled !== undefined ? body.enabled !== false : undefined,
+    });
+    if (!result.ok) {
+      res.status(400).json({ success: false, message: result.error || 'Update failed' });
+      return;
+    }
+    logger.info({ admin: req.user, id: pstr(req.params.id) }, 'Proxy password updated');
+    res.json({ success: true, entry: result.entry });
+  });
+
+  api.post('/proxy-passwords/:id/regenerate', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'proxy:passwords')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
+    if (!passwordManager) {
+      res.status(500).json({ success: false, message: 'Password manager unavailable' });
+      return;
+    }
+    const result = passwordManager.regenerate(pstr(req.params.id));
+    if (!result.ok) {
+      res.status(400).json({ success: false, message: result.error || 'Regenerate failed' });
+      return;
+    }
+    logger.info({ admin: req.user, id: pstr(req.params.id) }, 'Proxy password regenerated');
+    res.json({ success: true, entry: result.entry });
+  });
+
+  api.delete('/proxy-passwords/:id', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'proxy:passwords')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
+    if (!passwordManager) {
+      res.status(500).json({ success: false, message: 'Password manager unavailable' });
+      return;
+    }
+    const result = passwordManager.remove(pstr(req.params.id));
+    if (!result.ok) {
+      res.status(404).json({ success: false, message: result.error || 'Not found' });
+      return;
+    }
+    logger.info({ admin: req.user, id: pstr(req.params.id) }, 'Proxy password deleted');
+    res.json({ success: true });
   });
 
   api.post('/client/:id/weight', (req: WebRequest, res: HttpResponse) => {

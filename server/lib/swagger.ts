@@ -201,6 +201,125 @@ const swaggerSpec = {
         },
       },
     },
+    // --- Multi proxy passwords (issue #53) ---
+    '/proxy-passwords': {
+      get: {
+        tags: ['ProxyCredentials'],
+        summary: 'List managed proxy passwords (each may route to a tag/group, force a node UUID, or carry its own strategy)',
+        security: [{ BearerAuth: [] }],
+        responses: {
+          '200': {
+            description: 'Password entries plus the default pool username',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    passwords: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          id: { type: 'string' },
+                          label: { type: 'string' },
+                          password: { type: 'string' },
+                          tag: { type: 'string', nullable: true },
+                          clientId: { type: 'string', nullable: true },
+                          strategy: { type: 'string', enum: ['random', 'least-loaded', 'fastest-response', 'weighted'], nullable: true },
+                          enabled: { type: 'boolean' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      post: {
+        tags: ['ProxyCredentials'],
+        summary: 'Create a proxy password (auto-generates a random one unless password is provided)',
+        security: [{ BearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  label: { type: 'string' },
+                  password: { type: 'string' },
+                  tag: { type: 'string', nullable: true },
+                  clientId: { type: 'string', nullable: true },
+                  strategy: { type: 'string', enum: ['random', 'least-loaded', 'fastest-response', 'weighted'], nullable: true },
+                  enabled: { type: 'boolean' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Password created' },
+          '400': { description: 'Validation error (e.g. tag and clientId are mutually exclusive)' },
+          '403': { description: 'Permission denied' },
+        },
+      },
+    },
+    '/proxy-passwords/{id}': {
+      post: {
+        tags: ['ProxyCredentials'],
+        summary: 'Update a proxy password',
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  label: { type: 'string', nullable: true },
+                  password: { type: 'string' },
+                  tag: { type: 'string', nullable: true },
+                  clientId: { type: 'string', nullable: true },
+                  strategy: { type: 'string', enum: ['random', 'least-loaded', 'fastest-response', 'weighted'], nullable: true },
+                  enabled: { type: 'boolean' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Password updated' },
+          '400': { description: 'Validation error' },
+          '403': { description: 'Permission denied' },
+        },
+      },
+      delete: {
+        tags: ['ProxyCredentials'],
+        summary: 'Delete a proxy password',
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          '200': { description: 'Password deleted' },
+          '404': { description: 'Password not found' },
+        },
+      },
+    },
+    '/proxy-passwords/{id}/regenerate': {
+      post: {
+        tags: ['ProxyCredentials'],
+        summary: 'Regenerate a proxy password with a new random value',
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          '200': { description: 'Password regenerated' },
+          '400': { description: 'Password not found' },
+        },
+      },
+    },
     '/client/{id}/weight': {
       post: {
         tags: ['Clients'],
