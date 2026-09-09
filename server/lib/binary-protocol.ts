@@ -20,6 +20,9 @@
 //   0x0C - Auth Response
 //   0x0D - Tunnel Open Response
 // =============================================================================
+// Migrated to TypeScript (issue #42, Phase 2). CJS-style module.exports;
+// the module uses no require()/import, so no eslint-disable is required.
+// =============================================================================
 'use strict';
 
 const MSG_TYPE = {
@@ -38,9 +41,43 @@ const MSG_TYPE = {
   TUNNEL_OPEN_RESPONSE: 0x0D,
 };
 
-function encodeMessage(type, payload) {
+type HeadersObject = Record<string, unknown>;
+
+interface DecodedMessage {
+  type: number;
+  payload: Buffer;
+  raw: Buffer;
+}
+
+interface DecodedRequest {
+  id: string;
+  method: string;
+  url: string;
+  headers: HeadersObject;
+  body: string;
+}
+
+interface DecodedResponse {
+  id: string;
+  statusCode: number;
+  headers: HeadersObject;
+  body: string;
+}
+
+interface DecodedTunnelOpen {
+  id: string;
+  host: string;
+  port: number;
+}
+
+interface DecodedTunnelData {
+  id: string;
+  data: string;
+}
+
+function encodeMessage(type: number, payload: Buffer | string | object): Buffer {
   // payload is either a Buffer or a plain object (will be JSON-encoded)
-  let payloadBuf;
+  let payloadBuf: Buffer;
   if (Buffer.isBuffer(payload)) {
     payloadBuf = payload;
   } else if (typeof payload === 'object') {
@@ -58,13 +95,16 @@ function encodeMessage(type, payload) {
   return Buffer.concat([header, payloadBuf]);
 }
 
-function decodeMessage(buf) {
+function decodeMessage(buf: Buffer): DecodedMessage | null {
   if (buf.length < 5) return null;
   const length = buf.readUInt32BE(0);
-  if (buf.length < 5 + length) return null;
+  // length counts the type byte + payload (see encodeMessage: payloadBuf.length + 1),
+  // so a complete frame is 4 + length bytes (legacy .js compared against 5 + length,
+  // an off-by-one that made every well-formed frame decode as null).
+  if (buf.length < 4 + length) return null;
   const type = buf[4];
-  const payload = buf.slice(5, 5 + length);
-  return { type, payload, raw: buf.slice(0, 5 + length) };
+  const payload = buf.slice(5, 4 + length);
+  return { type, payload, raw: buf.slice(0, 4 + length) };
 }
 
 // =============================================================================
@@ -72,7 +112,7 @@ function decodeMessage(buf) {
 // =============================================================================
 
 // Request: type + id(16) + method(1) + url_len(2) + url + headers(JSON) + body
-function encodeRequest(id, method, url, headers, body) {
+function encodeRequest(id: string, method: string, url: string, headers: HeadersObject, body: string): Buffer {
   const idBuf = Buffer.alloc(16);
   if (typeof id === 'string') {
     Buffer.from(id.replace(/-/g, ''), 'hex').copy(idBuf);
@@ -99,7 +139,7 @@ function encodeRequest(id, method, url, headers, body) {
   return encodeMessage(MSG_TYPE.REQUEST, payload);
 }
 
-function decodeRequest(buf) {
+function decodeRequest(buf: Buffer): DecodedRequest | null {
   const msg = decodeMessage(buf);
   if (!msg || msg.type !== MSG_TYPE.REQUEST) return null;
 
@@ -120,7 +160,7 @@ function decodeRequest(buf) {
 
   const headersLen = p.readUInt16BE(offset);
   offset += 2;
-  const headers = JSON.parse(p.slice(offset, offset + headersLen).toString('utf8'));
+  const headers: HeadersObject = JSON.parse(p.slice(offset, offset + headersLen).toString('utf8'));
   offset += headersLen;
 
   const bodyLen = p.readUInt32BE(offset);
@@ -131,7 +171,7 @@ function decodeRequest(buf) {
 }
 
 // Response: id(16) + status(2) + headers(JSON) + body
-function encodeResponse(id, statusCode, headers, body) {
+function encodeResponse(id: string, statusCode: number, headers: HeadersObject, body: string | Buffer): Buffer {
   const idBuf = Buffer.alloc(16);
   if (typeof id === 'string') {
     Buffer.from(id.replace(/-/g, ''), 'hex').copy(idBuf);
@@ -154,7 +194,7 @@ function encodeResponse(id, statusCode, headers, body) {
   return encodeMessage(MSG_TYPE.RESPONSE, payload);
 }
 
-function decodeResponse(buf) {
+function decodeResponse(buf: Buffer): DecodedResponse | null {
   const msg = decodeMessage(buf);
   if (!msg || msg.type !== MSG_TYPE.RESPONSE) return null;
 
@@ -169,7 +209,7 @@ function decodeResponse(buf) {
 
   const headersLen = p.readUInt16BE(offset);
   offset += 2;
-  const headers = JSON.parse(p.slice(offset, offset + headersLen).toString('utf8'));
+  const headers: HeadersObject = JSON.parse(p.slice(offset, offset + headersLen).toString('utf8'));
   offset += headersLen;
 
   const bodyLen = p.readUInt32BE(offset);
@@ -180,7 +220,7 @@ function decodeResponse(buf) {
 }
 
 // Tunnel Open: id(16) + host_len(1) + host + port(2)
-function encodeTunnelOpen(id, host, port) {
+function encodeTunnelOpen(id: string, host: string, port: number): Buffer {
   const idBuf = Buffer.alloc(16);
   if (typeof id === 'string') {
     Buffer.from(id.replace(/-/g, ''), 'hex').copy(idBuf);
@@ -192,7 +232,7 @@ function encodeTunnelOpen(id, host, port) {
   return encodeMessage(MSG_TYPE.TUNNEL_OPEN, payload);
 }
 
-function decodeTunnelOpen(buf) {
+function decodeTunnelOpen(buf: Buffer): DecodedTunnelOpen | null {
   const msg = decodeMessage(buf);
   if (!msg || msg.type !== MSG_TYPE.TUNNEL_OPEN) return null;
   const p = msg.payload;
@@ -204,7 +244,7 @@ function decodeTunnelOpen(buf) {
 }
 
 // Tunnel Data: id(16) + data
-function encodeTunnelData(id, data) {
+function encodeTunnelData(id: string, data: string | Buffer): Buffer {
   const idBuf = Buffer.alloc(16);
   if (typeof id === 'string') {
     Buffer.from(id.replace(/-/g, ''), 'hex').copy(idBuf);
@@ -214,7 +254,7 @@ function encodeTunnelData(id, data) {
   return encodeMessage(MSG_TYPE.TUNNEL_DATA, payload);
 }
 
-function decodeTunnelData(buf) {
+function decodeTunnelData(buf: Buffer): DecodedTunnelData | null {
   const msg = decodeMessage(buf);
   if (!msg || msg.type !== MSG_TYPE.TUNNEL_DATA) return null;
   const id = msg.payload.slice(0, 16).toString('hex').replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
@@ -223,7 +263,7 @@ function decodeTunnelData(buf) {
 }
 
 // Tunnel Close: id(16) + reason(1)
-function encodeTunnelClose(id, reason = 0) {
+function encodeTunnelClose(id: string, reason = 0): Buffer {
   const idBuf = Buffer.alloc(16);
   if (typeof id === 'string') Buffer.from(id.replace(/-/g, ''), 'hex').copy(idBuf);
   const payload = Buffer.concat([idBuf, Buffer.from([reason])]);
@@ -231,13 +271,13 @@ function encodeTunnelClose(id, reason = 0) {
 }
 
 // Auth: token
-function encodeAuth(token) {
+function encodeAuth(token: string): Buffer {
   const tokenBuf = Buffer.from(token, 'utf8');
   return encodeMessage(MSG_TYPE.AUTH, tokenBuf);
 }
 
 // UDP Data: assocId(16) + host_len(1) + host + port(2) + data
-function encodeUdpData(assocId, host, port, data) {
+function encodeUdpData(assocId: string, host: string, port: number, data: string | Buffer): Buffer {
   const idBuf = Buffer.alloc(16);
   if (typeof assocId === 'string') Buffer.from(assocId.replace(/-/g, ''), 'hex').copy(idBuf);
   const hostBuf = Buffer.from(host, 'utf8');
@@ -253,7 +293,7 @@ function encodeUdpData(assocId, host, port, data) {
 // =============================================================================
 // Batch: merge multiple messages into one frame for efficiency
 // =============================================================================
-function encodeBatch(messages) {
+function encodeBatch(messages: Buffer[]): Buffer {
   // messages is an array of encoded Buffers
   const count = messages.length;
   const countBuf = Buffer.alloc(2);
@@ -261,10 +301,10 @@ function encodeBatch(messages) {
   return Buffer.concat([countBuf, ...messages]);
 }
 
-function decodeBatch(buf) {
+function decodeBatch(buf: Buffer): DecodedMessage[] | null {
   if (buf.length < 2) return null;
   const count = buf.readUInt16BE(0);
-  const messages = [];
+  const messages: DecodedMessage[] = [];
   let offset = 2;
   for (let i = 0; i < count; i++) {
     const msg = decodeMessage(buf.slice(offset));
