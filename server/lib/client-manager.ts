@@ -34,10 +34,10 @@ interface RouterLike {
 
 interface CircuitBreakerLike {
   isAllowed(id: string): boolean;
-  getStatus(id: string): { state?: string } | null;
+  getStatus(id: string): { state?: string; failures?: number; lastFailureType?: string; failureTypes?: Record<string, number> } | null;
   getState(id: string): string;
   getAllStatuses(): Record<string, Record<string, unknown>>;
-  onFailure(id: string): void;
+  onFailure(id: string, type?: string): void;
   onSuccess(id: string): void;
   reset(id: string): void;
   cleanup(ids: Iterable<string>): void;
@@ -590,9 +590,9 @@ export class ClientManager {
     if (client) client.stats.errors++;
     this.metrics?.recordError(type, clientId);
 
-    // Circuit breaker: record failure
+    // Circuit breaker: record failure (classified by type for observability)
     if (this.circuitBreaker && clientId) {
-      this.circuitBreaker.onFailure(clientId);
+      this.circuitBreaker.onFailure(clientId, type);
       if (this.metrics) {
         this.metrics.updateCircuitBreakerGauge(clientId, this.circuitBreaker.getState(clientId));
       }

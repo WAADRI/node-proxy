@@ -18,6 +18,10 @@ interface CircuitEntry {
   halfOpenAttempts: number;
   openedAt: number;
   windowStart: number;
+  // Failure classification (observability): type -> count since last close,
+  // plus the most recent failure kind. Fed from trackError(clientId, type).
+  failureTypes: Record<string, number>;
+  lastFailureType: string;
 }
 
 interface CircuitBreakerDefaults {
@@ -58,6 +62,8 @@ export class CircuitBreaker {
         halfOpenAttempts: 0,
         openedAt: 0,
         windowStart: Date.now(),
+        failureTypes: {},
+        lastFailureType: 'unknown',
       };
       this.states.set(clientId, cb);
     }
@@ -80,6 +86,8 @@ export class CircuitBreaker {
         cb.failures = 0;
         cb.successes = 0;
         cb.halfOpenAttempts = 0;
+        cb.failureTypes = {};
+        cb.lastFailureType = 'unknown';
       }
     } else if (cb.state === STATE.CLOSED) {
       // Reset failure count on success (sliding window)
@@ -88,10 +96,16 @@ export class CircuitBreaker {
     }
   }
 
-  // Called when a request fails (timeout, error, etc.)
-  onFailure(clientId: string) {
+  // Called when a request fails (timeout, error, etc.). `type` classifies the
+  // failure (e.g. timeout / tunnel_error / stream_error / upstream_5xx /
+  // bandwidth) so operators can tell transport problems apart from upstream
+  // or policy failures without grepping request logs.
+  onFailure(clientId: string, type = 'unknown') {
     const cb = this._get(clientId);
     const now = Date.now();
+
+    cb.failureTypes[type] = (cb.failureTypes[type] || 0) + 1;
+    cb.lastFailureType = type;
 
     if (cb.state === STATE.CLOSED) {
       // Check if window has expired; if so, reset
@@ -109,6 +123,8 @@ export class CircuitBreaker {
             clientId,
             failures: cb.failures,
             window: this._defaults.window_ms,
+            lastFailureType: cb.lastFailureType,
+            failureTypes: cb.failureTypes,
           },
           'Circuit breaker: client OPENED'
         );
@@ -117,7 +133,10 @@ export class CircuitBreaker {
       }
     } else if (cb.state === STATE.HALF_OPEN) {
       // Failed during half-open test, back to OPEN
-      this.log.warn({ clientId }, 'Circuit breaker: half-open test failed, back to OPEN');
+      this.log.warn(
+        { clientId, lastFailureType: cb.lastFailureType, failureTypes: cb.failureTypes },
+        'Circuit breaker: half-open test failed, back to OPEN'
+      );
       cb.state = STATE.OPEN;
       cb.openedAt = now;
       cb.successes = 0;
@@ -163,6 +182,8 @@ export class CircuitBreaker {
       lastFailure: cb.lastFailure,
       openedAt: cb.openedAt,
       halfOpenAttempts: cb.halfOpenAttempts,
+      lastFailureType: cb.lastFailureType,
+      failureTypes: cb.failureTypes,
     };
   }
 
