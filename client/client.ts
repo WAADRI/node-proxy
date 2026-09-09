@@ -182,8 +182,8 @@ function getSystemInfo() {
     cpuCount: os.cpus().length,
     totalMemory: os.totalmem(),
     freeMemory: os.freemem(),
-    region: CONFIG.region,
-    tags: CONFIG.tags ? String(CONFIG.tags).split(',').map((t: string) => t.trim()).filter(Boolean) : [],
+    // Region / tags are intentionally not reported (issue #53): node identity
+    // is managed from the server panel (client metadata + groups).
     nodeVersion: process.version,
     pid: process.pid,
     uptime: os.uptime(),
@@ -964,7 +964,6 @@ log('info', '========================================');
 log('info', `  Server: ${CONFIG.server_url}`);
 log('info', `  Hostname: ${os.hostname()}`);
 log('info', `  Platform: ${os.platform()} ${os.arch()}`);
-log('info', `  Region: ${CONFIG.region}`);
 log('info', `  Concurrency: ${CONFIG.max_concurrent_requests}`);
 log('info', '========================================');
 

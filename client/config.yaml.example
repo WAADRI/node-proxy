@@ -1,7 +1,10 @@
 # =============================================================================
 # Node-Proxy Client - config.yaml.example
-# 本文件由 client/lib/config-schema.js 自动生成，请勿手改。
-# 部署用法：复制为 config.yaml 后按需修改；环境变量会覆盖同名项。
+# 本文件与 client/lib/config-schema.ts 同步，请勿手改（schema 驱动）。
+# 部署用法：复制为 config.yaml 后按需修改。
+# issue #53：仅 server_url / auth_token 支持环境变量覆盖（SERVER_URL /
+# AUTH_TOKEN）；节点 UUID 走 CLIENT_ID 或 CLIENT_ID_FILE，不填自动生成并
+# 持久化。区域与标签改为在服务端面板管理，客户端不再配置。
 # =============================================================================
 
 # 代理服务器 WebSocket 地址
@@ -16,50 +19,32 @@ auth_token: my-secret-token
 
 # 断线重连初始延迟（毫秒）
 # 默认: 3000
-# 环境变量: RECONNECT_DELAY
 reconnect_delay: 3000
 
 # 断线重连最大延迟（毫秒）
 # 默认: 30000
-# 环境变量: MAX_RECONNECT_DELAY
 max_reconnect_delay: 30000
 
 # 重连延迟随机抖动（毫秒）
 # 默认: 1000
-# 环境变量: RECONNECT_JITTER
 reconnect_jitter: 1000
 
 # 心跳间隔（毫秒）
 # 默认: 15000
-# 环境变量: HEARTBEAT_INTERVAL
 heartbeat_interval: 15000
 
 # HTTP 请求超时（毫秒）
 # 默认: 30000
-# 环境变量: REQUEST_TIMEOUT
 request_timeout: 30000
 
 # TCP 隧道建连超时（毫秒）
 # 默认: 30000
-# 环境变量: TUNNEL_TIMEOUT
 tunnel_timeout: 30000
 
 # 最大并发请求数
 # 默认: 100
-# 环境变量: MAX_CONCURRENT_REQUESTS
 max_concurrent_requests: 100
-
-# 节点区域标识
-# 默认: "unknown"
-# 环境变量: REGION / NODE_REGION
-region: cn
-
-# 节点标签，逗号分隔
-# 默认: ""
-# 环境变量: TAGS
-tags: region:cn,isp:unicom
 
 # 是否校验证书（自签证书场景设 false）
 # 默认: false
-# 环境变量: TLS_REJECT_UNAUTHORIZED
 tls_reject_unauthorized: false

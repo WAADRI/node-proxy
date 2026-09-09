@@ -4,16 +4,18 @@
 # 用法（在内网节点机器上执行）：
 #   docker compose -f docker-compose.client.yml up -d
 #
+# issue #53：客户端只保留 端点 / 鉴权令牌 / 节点 UUID 三个配置入口，
+# 其余参数（重连、心跳、超时、证书校验等）请在 config.yaml 中配置
+# （模板见 config.yaml.example）。区域与标签改由服务端面板管理。
+#
 # 常用环境变量覆盖：
 #   SERVER_URL=ws://你的服务器IP:3000/ws   （必改）
-#   AUTH_TOKEN=my-secret-token            （必改，需与服务端一致）
-#   CLIENT_ID=np-node-beijing-01          （可选：固定节点 ID，便于面板识别；
-#                                          不设置则由客户端自动生成并持久化）
-#   TAGS=region:cn,isp:unicom             （节点标签，逗号分隔）
-#   REGION=cn                             （区域标识）
+#   AUTH_TOKEN=my-secret-token             （必改，需与服务端一致）
+#   CLIENT_ID=np-node-beijing-01           （可选：固定节点 ID，便于面板识别；
+#                                           不设置则由客户端自动生成 UUID 并持久化）
 #
 # 示例：
-#   SERVER_URL=ws://1.2.3.4:3000/ws AUTH_TOKEN=secret CLIENT_ID=np-node-01 TAGS=region:cn \
+#   SERVER_URL=ws://1.2.3.4:3000/ws AUTH_TOKEN=secret CLIENT_ID=np-node-01 \
 #     docker compose -f docker-compose.client.yml up -d
 # =============================================================================
 
@@ -26,21 +28,11 @@ services:
     container_name: node-proxy-client
     restart: unless-stopped
     environment:
-      # 必填：服务端地址与认证令牌
+      # 必填：服务端地址与认证令牌；可选：固定节点 UUID
       - SERVER_URL=${SERVER_URL:-ws://127.0.0.1:3000/ws}
       - AUTH_TOKEN=${AUTH_TOKEN:-node-proxy-default-token}
-      # 可选：节点信息
+      # 可选：固定节点 UUID（不设则客户端自动生成并持久化到 ~/.node-proxy-client-id）
       - CLIENT_ID=${CLIENT_ID:-}
-      - REGION=${REGION:-unknown}
-      - TAGS=${TAGS:-}
-      # 可选：连接参数
-      - RECONNECT_DELAY=${RECONNECT_DELAY:-3000}
-      - MAX_RECONNECT_DELAY=${MAX_RECONNECT_DELAY:-30000}
-      - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-15000}
-      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-30000}
-      - TUNNEL_TIMEOUT=${TUNNEL_TIMEOUT:-30000}
-      - MAX_CONCURRENT_REQUESTS=${MAX_CONCURRENT_REQUESTS:-100}
-      - TLS_REJECT_UNAUTHORIZED=${TLS_REJECT_UNAUTHORIZED:-false}
     # 可选：挂载客户端配置文件（config.yaml，模板见同目录 config.yaml.example）
     volumes:
       - ./config.yaml:/app/config.yaml:ro
