@@ -441,18 +441,13 @@ export class StreamMux {
     stream.state = STREAM_STATE.OPEN;
     stream.headers = { host, port };
 
-    // Forward incoming HEADERS frames (tunnel_ready, tunnel_error) to the
-    // application-level onStream callback so the mux.onStream dispatcher in
-    // ws-server.ts can route them to handleTunnelReady / handleTunnelError.
-    // Without this, the stream already exists in this.streams (created above)
-    // and StreamMux._handleFrame only calls _onHeaders (which is null by
-    // default) instead of _onStream, silently dropping the response. The
-    // handler is an arrow function, so `this` here lexically is the mux.
-    stream._onHeaders = (_headers: Record<string, unknown>, _endStream: boolean) => {
-      if (this._onStream) {
-        this._onStream(stream);
-      }
-    };
+    // NOTE: no _onHeaders forwarder here. Incoming HEADERS frames on this
+    // stream (tunnel_ready / tunnel_error) are dispatched exactly once by the
+    // generic HEADERS branch of _handleFrame (it calls mux._onStream for every
+    // HEADERS frame, new stream or existing), which routes them to the
+    // ws-server onStream dispatcher. Adding an _onHeaders forwarder here would
+    // dispatch twice and duplicate the SOCKS5 success reply into the tunnel
+    // data stream.
 
     if (this.logger) {
       this.logger.debug({ streamId: stream.id, host, port }, 'Tunnel opened');
