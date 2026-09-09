@@ -80,3 +80,14 @@ export const startNetworkTest = (type, targets, options, clients) => {
 };
 export const getNetworkTestTask = (taskId) =>
   apiFetch('/api/v1/network-test/' + encodeURIComponent(taskId));
+
+// --- Multi proxy passwords (issue #53) -----------------------------------
+export const fetchProxyPasswords = () => apiFetch('/api/v1/proxy-passwords');
+export const createProxyPassword = (body) =>
+  apiFetch('/api/v1/proxy-passwords', { method: 'POST', body });
+export const updateProxyPassword = (id, body) =>
+  apiFetch('/api/v1/proxy-passwords/' + encodeURIComponent(id), { method: 'POST', body });
+export const deleteProxyPassword = (id) =>
+  apiFetch('/api/v1/proxy-passwords/' + encodeURIComponent(id), { method: 'DELETE' });
+export const regenerateProxyPassword = (id) =>
+  apiFetch('/api/v1/proxy-passwords/' + encodeURIComponent(id) + '/regenerate', { method: 'POST' });
