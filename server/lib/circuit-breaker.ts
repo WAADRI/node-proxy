@@ -69,9 +69,13 @@ export class CircuitBreaker {
     const cb = this._get(clientId);
     if (cb.state === STATE.HALF_OPEN) {
       cb.successes++;
-      if (cb.successes >= cb.halfOpenAttempts) {
+      // Recovery requires a fixed number of consecutive successes
+      // (half_open_max_attempts). Comparing against the running open counter
+      // snowballs: each failed half-open round raises the bar (attempts 3, 4,
+      // 5, ...) so a recovering node could stay stuck in open/half_open.
+      if (cb.successes >= this._defaults.half_open_max_attempts) {
         // Recovered
-        this.log.info({ clientId }, 'Circuit breaker: client recovered');
+        this.log.info({ clientId, attempts: cb.halfOpenAttempts }, 'Circuit breaker: client recovered');
         cb.state = STATE.CLOSED;
         cb.failures = 0;
         cb.successes = 0;
