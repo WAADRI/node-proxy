@@ -404,9 +404,9 @@ function createWebServer(
     }
   });
 
-  // --- Tags ---
+  // --- Tags / Groups (issue #53) ---
   api.get('/tags', (_req: WebRequest, res: HttpResponse) => {
-    res.json({ tags: clientManager.getAllTags() });
+    res.json({ tags: clientManager.getAllTags(), groups: clientManager.getAllGroups() });
   });
 
   api.post('/client/:id/tags', (req: WebRequest, res: HttpResponse) => {
@@ -415,22 +415,40 @@ function createWebServer(
       return;
     }
     const body = (req.body || {}) as Record<string, unknown>;
-    const tags = body.tags;
     const client = clientManager.getById(pstr(req.params.id));
     if (!client) {
       res.status(404).json({ success: false, message: 'Client not found' });
       return;
     }
-    if (!Array.isArray(tags)) {
-      res.status(400).json({ success: false, message: 'Tags must be an array' });
+    const result = clientManager.setTags(client.id, body.tags);
+    if (!result.ok) {
+      res.status(400).json({ success: false, message: result.error || 'Invalid tags' });
       return;
     }
-    const stringTags = tags as string[];
-    client.tags = stringTags;
-    if (clientManager.storage) clientManager.storage.setClientMetadata(client.id, { tags: stringTags });
-    clientManager._notify();
-    logger.info({ clientId: client.id, tags: stringTags, admin: req.user }, 'Client tags updated');
-    res.json({ success: true, tags: stringTags });
+    if (clientManager.storage) clientManager.storage.setClientMetadata(client.id, { tags: result.tags });
+    logger.info({ clientId: client.id, tags: result.tags, admin: req.user }, 'Client tags updated');
+    res.json({ success: true, tags: result.tags });
+  });
+
+  api.post('/client/:id/group', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'client:group')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
+    const body = (req.body || {}) as Record<string, unknown>;
+    const client = clientManager.getById(pstr(req.params.id));
+    if (!client) {
+      res.status(404).json({ success: false, message: 'Client not found' });
+      return;
+    }
+    const result = clientManager.setGroup(client.id, body.group);
+    if (!result.ok) {
+      res.status(400).json({ success: false, message: result.error || 'Invalid group' });
+      return;
+    }
+    if (clientManager.storage) clientManager.storage.setClientMetadata(client.id, { group: result.group });
+    logger.info({ clientId: client.id, group: result.group, admin: req.user }, 'Client group updated');
+    res.json({ success: true, group: result.group });
   });
 
   api.post('/client/:id/weight', (req: WebRequest, res: HttpResponse) => {

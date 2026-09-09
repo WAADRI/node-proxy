@@ -7,6 +7,10 @@
 import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
 import type { ClientNode } from './client-manager.ts';
+// Value import: client-manager does not import Router at runtime, so there is
+// no import cycle. clientEffectiveTags keeps tag matching in sync with group
+// membership (issue #53: group name = implicit tag).
+import { clientEffectiveTags } from './client-manager.ts';
 
 export type RoutingStrategy = 'random' | 'least-loaded' | 'fastest-response' | 'weighted';
 
@@ -58,12 +62,12 @@ export class Router {
 
     if (candidates.length === 0) return null;
 
-    // Filter by tag if specified
+    // Filter by tag if specified (matches effective tags: explicit tags plus
+    // the implicit group tag, issue #53)
     if (tag) {
       const tagLower = tag.toLowerCase();
       candidates = candidates.filter((c) => {
-        const tags = c.info?.tags || [];
-        return tags.some((t) => t.toLowerCase() === tagLower);
+        return clientEffectiveTags(c).some((t) => t.toLowerCase() === tagLower);
       });
       if (candidates.length === 0) return null;
     }

@@ -22,6 +22,7 @@ export interface ClientMeta {
   alias?: string | null;
   notes?: string | null;
   region?: string | null;
+  group?: string | null;
 }
 
 interface RouterLike {
@@ -123,6 +124,9 @@ export interface ClientNode {
   ws: WebSocket;
   info: ClientInfo;
   tags: string[];
+  // Node group (issue #53): one group per node; the group name doubles as an
+  // implicit tag for routing. Server-managed, stored in client_metadata.
+  group?: string | null;
   connectedAt: number;
   lastSeen: number;
   lastPing: number;
@@ -152,6 +156,19 @@ interface ManagerStats {
 }
 
 type ChangeListener = () => void;
+
+// Effective routing identity of a node (issue #53): explicit tags plus the
+// group name, which always doubles as an implicit tag. Used for tag-based
+// routing, tag lookups and the /tags endpoint so group membership and tags
+// behave uniformly at selection time.
+export function clientEffectiveTags(client: { tags?: string[]; group?: string | null }): string[] {
+  const out = new Set<string>();
+  for (const t of client.tags || []) {
+    if (t) out.add(t);
+  }
+  if (client.group) out.add(client.group);
+  return Array.from(out);
+}
 
 interface UdpAssociation {
   udpServer: import('dgram').Socket;
@@ -275,10 +292,16 @@ export class ClientManager {
     // Persist connection event
     if (this.storage) {
       this.storage.logClientEvent(id, 'connected', { hostname: info?.hostname, tags: client.tags });
-      // Load persisted metadata (tags, weight, bandwidth, alias, notes, region)
+      // Load persisted metadata (tags, weight, bandwidth, alias, notes, region, group)
       const meta = this.storage.getClientMetadata(id);
       if (meta) {
-        if (meta.tags && meta.tags.length > 0) client.tags = [...new Set([...client.tags, ...meta.tags])];
+        // Server-managed tags are authoritative once a non-empty set has been
+        // persisted (issue #53): do not re-merge client-reported tags, so
+        // operator changes survive client reconnects.
+        if (meta.tags && meta.tags.length > 0) {
+          client.tags = [...new Set(meta.tags)];
+        }
+        if (meta.group != null) client.group = meta.group || null;
         if (meta.weight) this.router?.setWeight(id, meta.weight);
         if (meta.bandwidth_limit) this.bandwidthLimiter?.setLimit(id, meta.bandwidth_limit);
         if (meta.alias) client.alias = meta.alias;
@@ -373,6 +396,53 @@ export class ClientManager {
   }
 
   // ===========================================================================
+  // Group / Tags (issue #53)
+  // Group name doubles as an implicit routing tag, so a node must never carry
+  // a tag equal to its own group name (would make routing ambiguous). Both
+  // setters validate that constraint and return a result object instead of
+  // throwing, so HTTP handlers can map failures to 400s.
+  // ===========================================================================
+  setGroup(id: string, groupRaw: unknown): { ok: boolean; error?: string; group?: string | null } {
+    const client = this.clients.get(id);
+    if (!client) return { ok: false, error: 'Client not found' };
+    const trimmed = typeof groupRaw === 'string' ? groupRaw.trim() : '';
+    const group = trimmed === '' ? null : trimmed;
+    if (group) {
+      const lower = group.toLowerCase();
+      const clash = (client.tags || []).some((t) => t.toLowerCase() === lower);
+      if (clash) {
+        return { ok: false, error: `Group name "${group}" clashes with an existing tag on this node` };
+      }
+    }
+    client.group = group;
+    this._notify();
+    return { ok: true, group };
+  }
+
+  setTags(id: string, tagsRaw: unknown): { ok: boolean; error?: string; tags?: string[] } {
+    const client = this.clients.get(id);
+    if (!client) return { ok: false, error: 'Client not found' };
+    if (!Array.isArray(tagsRaw)) return { ok: false, error: 'Tags must be an array' };
+    const seen = new Set<string>();
+    const tags: string[] = [];
+    for (const item of tagsRaw) {
+      const t = String(item).trim();
+      if (!t || seen.has(t)) continue;
+      seen.add(t);
+      tags.push(t);
+    }
+    if (client.group) {
+      const lower = client.group.toLowerCase();
+      if (tags.some((t) => t.toLowerCase() === lower)) {
+        return { ok: false, error: `Tag "${client.group}" clashes with this node's group name` };
+      }
+    }
+    client.tags = tags;
+    this._notify();
+    return { ok: true, tags };
+  }
+
+  // ===========================================================================
   // Client Selection (delegates to Router)
   // ===========================================================================
   selectClient(tag?: string | null): ClientNode | null {
@@ -389,7 +459,8 @@ export class ClientManager {
     });
     if (candidates.length === 0) return null;
     if (tag) {
-      const tagged = candidates.filter((c) => (c.tags || []).includes(tag));
+      const tagLower = tag.toLowerCase();
+      const tagged = candidates.filter((c) => clientEffectiveTags(c).some((t) => t.toLowerCase() === tagLower));
       if (tagged.length > 0) return tagged[Math.floor(Math.random() * tagged.length)];
     }
     return candidates[Math.floor(Math.random() * candidates.length)];
@@ -408,15 +479,24 @@ export class ClientManager {
   }
 
   getByTag(tag: string): ClientNode[] {
-    return this.getAll().filter((c) => (c.tags || []).includes(tag));
+    const tagLower = tag.toLowerCase();
+    return this.getAll().filter((c) => clientEffectiveTags(c).some((t) => t.toLowerCase() === tagLower));
   }
 
   getAllTags(): string[] {
     const tags = new Set<string>();
     for (const c of this.clients.values()) {
-      for (const t of c.tags || []) tags.add(t);
+      for (const t of clientEffectiveTags(c)) tags.add(t);
     }
     return Array.from(tags).sort();
+  }
+
+  getAllGroups(): string[] {
+    const groups = new Set<string>();
+    for (const c of this.clients.values()) {
+      if (c.group) groups.add(c.group);
+    }
+    return Array.from(groups).sort();
   }
 
   // ===========================================================================
@@ -430,6 +510,7 @@ export class ClientManager {
         id: c.id,
         info: c.info,
         tags: c.tags,
+        group: c.group || null,
         alias: c.alias || null,
         notes: c.notes || null,
         region: c.region || c.info?.region || null,
@@ -462,6 +543,7 @@ export class ClientManager {
         availableStrategies: ['random', 'least-loaded', 'fastest-response', 'weighted'],
       },
       tags: this.getAllTags(),
+      groups: this.getAllGroups(),
       circuitBreaker: {
         enabled: !!this.circuitBreaker,
         config: this.config.circuit_breaker || {},

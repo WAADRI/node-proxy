@@ -155,9 +155,24 @@ const swaggerSpec = {
     '/tags': {
       get: {
         tags: ['Clients'],
-        summary: 'List all client tags',
+        summary: 'List all client tags and groups (group names double as implicit tags)',
         security: [{ BearerAuth: [] }],
-        responses: { '200': { description: 'Tags list' } },
+        responses: {
+          '200': {
+            description: 'Tag / group lists',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    tags: { type: 'array', items: { type: 'string' } },
+                    groups: { type: 'array', items: { type: 'string' } },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     },
     '/client/{id}/tags': {
@@ -167,7 +182,23 @@ const swaggerSpec = {
         security: [{ BearerAuth: [] }],
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { tags: { type: 'array', items: { type: 'string' } } } } } } },
-        responses: { '200': { description: 'Tags updated' } },
+        responses: {
+          '200': { description: 'Tags updated' },
+          '400': { description: 'Invalid tags or a tag clashes with this node group name' },
+        },
+      },
+    },
+    '/client/{id}/group': {
+      post: {
+        tags: ['Clients'],
+        summary: 'Set client group (group name doubles as an implicit routing tag)',
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { group: { type: 'string', nullable: true } } } } } },
+        responses: {
+          '200': { description: 'Group updated' },
+          '400': { description: 'Group name clashes with an existing tag on this node' },
+        },
       },
     },
     '/client/{id}/weight': {

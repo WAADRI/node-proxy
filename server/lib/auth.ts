@@ -24,7 +24,7 @@ export const ROLES: Record<RoleName, { permissions: string[] }> = {
   admin: {
     permissions: [
       'client:list', 'client:kick', 'client:tag', 'client:weight',
-      'client:bandwidth', 'client:events', 'client:alias', 'client:notes', 'client:region',
+      'client:bandwidth', 'client:events', 'client:alias', 'client:notes', 'client:region', 'client:group',
       'proxy:config', 'proxy:stats',
       'routing:config', 'routing:strategy',
       'circuit:reset', 'circuit:view',
@@ -41,7 +41,7 @@ export const ROLES: Record<RoleName, { permissions: string[] }> = {
   operator: {
     permissions: [
       'client:list', 'client:kick', 'client:tag', 'client:weight',
-      'client:bandwidth', 'client:events', 'client:alias', 'client:notes', 'client:region',
+      'client:bandwidth', 'client:events', 'client:alias', 'client:notes', 'client:region', 'client:group',
       'proxy:stats',
       'routing:strategy',
       'circuit:reset', 'circuit:view',
