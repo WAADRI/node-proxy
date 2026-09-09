@@ -176,9 +176,16 @@ export function createSocks5Proxy(
           } else if (atyp === 0x03) {
             host = b.slice(5, 5 + b[4]).toString();
           } else {
-            host = Array.from(b.slice(4, 20))
-              .map((n) => n.toString(16))
-              .join(':');
+            // atyp 0x04: 16 raw IPv6 bytes at b[4..19]. Format as 8 x 16-bit
+            // words — a per-byte expansion (24:8:87:1a:...) is not a valid
+            // textual IPv6 address, so Node on the client node would treat it
+            // as a hostname and fail DNS (getaddrinfo ENOTFOUND).
+            const ipv6 = b.slice(4, 20);
+            const groups: string[] = [];
+            for (let i = 0; i < 16; i += 2) {
+              groups.push(ipv6.readUInt16BE(i).toString(16));
+            }
+            host = groups.join(':');
           }
           const port = b[headerLen - 2] * 256 + b[headerLen - 1];
 
