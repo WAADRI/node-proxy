@@ -27,6 +27,18 @@ interface CleanupState {
 
 type CleanupFn = () => void;
 
+// Write only while the proxied socket is still open; a tunnel timeout racing
+// a client disconnect would otherwise emit 'write after end'.
+function safeWrite(socket: NetSocket, data: Buffer): boolean {
+  if (socket.destroyed || socket.writableEnded) return false;
+  try {
+    socket.write(data);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 export function createSocks5Proxy(
   clientManager: ClientManager,
   authManager: AuthManagerLike,
@@ -275,8 +287,8 @@ function handleTCPConnect(
     client.pendingTunnels.add(tunnelId);
 
     currentTimeout = setTimeout(() => {
+      safeWrite(socket, encodeReply(0x03));
       try {
-        socket.write(encodeReply(0x03));
         socket.end();
       } catch (_) {
         // ignore
@@ -305,15 +317,19 @@ function handleTCPConnect(
     const msg = { type: 'tunnel_open', id: tunnelId, host, port };
     client.ws.send(JSON.stringify(msg), (err) => {
       if (err) {
-        socket.write(encodeReply(0x01));
-        socket.end();
+        safeWrite(socket, encodeReply(0x01));
+        try {
+          socket.end();
+        } catch (_) {
+          // ignore
+        }
         return;
       }
     });
 
     currentTimeout = setTimeout(() => {
+      safeWrite(socket, encodeReply(0x03));
       try {
-        socket.write(encodeReply(0x03));
         socket.end();
       } catch (_) {
         // ignore
@@ -506,7 +522,7 @@ function handleUDPAssociate(
     reply[3] = 0x01;
     reply[8] = (udpPort >> 8) & 0xff;
     reply[9] = udpPort & 0xff;
-    socket.write(reply);
+    safeWrite(socket, reply);
   });
 
   // Store for cleanup
