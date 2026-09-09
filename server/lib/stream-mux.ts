@@ -446,11 +446,11 @@ export class StreamMux {
     // ws-server.ts can route them to handleTunnelReady / handleTunnelError.
     // Without this, the stream already exists in this.streams (created above)
     // and StreamMux._handleFrame only calls _onHeaders (which is null by
-    // default) instead of _onStream, silently dropping the response.
-    const mux = this;
+    // default) instead of _onStream, silently dropping the response. The
+    // handler is an arrow function, so `this` here lexically is the mux.
     stream._onHeaders = (_headers: Record<string, unknown>, _endStream: boolean) => {
-      if (mux._onStream) {
-        mux._onStream(stream);
+      if (this._onStream) {
+        this._onStream(stream);
       }
     };
 
