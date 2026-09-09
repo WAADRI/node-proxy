@@ -538,10 +538,12 @@ function handleTunnelError(clientManager: ClientManager, stream: MuxStreamLike, 
   if (!p) return;
   if (p.timeout) clearTimeout(p.timeout);
 
-  // A tunnel that already established (p.ready) then errored is normal
-  // connection teardown (e.g. ECONNRESET mid-stream from the target), not a
-  // node health failure — never feed the circuit breaker for those. Only
-  // establishment failures (the tunnel never became ready) count.
+  // tunnel_error is NOT a node health failure: the node is alive and answered
+  // (it explicitly reported the connect failure / refused / timed out on the
+  // target, or is at capacity). Feeding the circuit breaker here makes a
+  // busy crawler that touches unreachable/refused targets open the breaker on
+  // healthy nodes, rejecting every later tunnel with reply 0x01. Node health
+  // is signaled by tunnel_timeout (the node never answered at all) instead.
   const established = !!p.ready;
 
   if (p.socket && !p.socket.destroyed) {
@@ -558,9 +560,6 @@ function handleTunnelError(clientManager: ClientManager, stream: MuxStreamLike, 
     }
   }
 
-  if (!established) {
-    clientManager.trackError(p.client?.id, 'tunnel_error');
-  }
   clientManager.pendingTunnels.delete(msgId);
   if (p.client) p.client.pendingTunnels.delete(msgId);
 }
@@ -718,8 +717,8 @@ function handleTunnelErrorLegacy(clientManager: ClientManager, msg: ClientMessag
   if (!p) return;
   if (p.timeout) clearTimeout(p.timeout);
 
-  // Only count establishment failures against the circuit breaker; an error
-  // on an already-established tunnel is normal connection teardown.
+  // tunnel_error is not a node health failure — see handleTunnelError. The
+  // node answered; only unresponsiveness (tunnel_timeout) feeds the breaker.
   const established = !!p.ready;
 
   if (p.socket && !p.socket.destroyed) {
@@ -736,9 +735,6 @@ function handleTunnelErrorLegacy(clientManager: ClientManager, msg: ClientMessag
     }
   }
 
-  if (!established) {
-    clientManager.trackError(p.client?.id, 'tunnel_error');
-  }
   clientManager.pendingTunnels.delete(id);
   if (p.client) p.client.pendingTunnels.delete(id);
 }
