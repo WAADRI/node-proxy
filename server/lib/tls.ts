@@ -1,19 +1,39 @@
 // =============================================================================
 // TLS - Certificate management with auto-generation
+// Migrated to TypeScript (issue #42, Phase 2). CJS-style TS on purpose:
+// Node type stripping loads this file as CommonJS; callers use
+// require('./lib/tls.ts').
 // =============================================================================
+
 'use strict';
+
+/* eslint-disable @typescript-eslint/no-require-imports */
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- `tls` module kept verbatim from the original JS (unused there too)
 const tls = require('tls');
+
+import type { ServerConfig } from './config.ts';
 
 const CERTS_DIR = path.join(__dirname, '..', 'certs');
 const DEFAULT_CERT = path.join(CERTS_DIR, 'cert.pem');
 const DEFAULT_KEY = path.join(CERTS_DIR, 'key.pem');
 
-function generateSelfSignedCert() {
+interface CertificatePaths {
+  cert: string;
+  key: string;
+}
+
+interface CertificateData {
+  cert: Buffer;
+  key: Buffer;
+}
+
+function generateSelfSignedCert(): CertificatePaths {
   // Generate a self-signed certificate using Node.js crypto
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- X509Certificate kept verbatim from the original JS (unused there too)
   const { X509Certificate } = require('crypto');
 
   // Generate ECDSA key pair (faster than RSA)
@@ -24,6 +44,7 @@ function generateSelfSignedCert() {
   });
 
   // Create a self-signed certificate
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- `cert` kept verbatim from the original JS (unused there too; the call throws at runtime)
   const cert = crypto.createCertificate('selfsigned', {
     subject: '/CN=Node-Proxy',
     days: 365,
@@ -35,7 +56,7 @@ function generateSelfSignedCert() {
   return generateCertWithForge(keyPair);
 }
 
-function generateCertWithForge(keyPair) {
+function generateCertWithForge(_keyPair: unknown): CertificatePaths {
   // Since we can't rely on openssl being available, and we don't want to add
   // a heavy dependency like node-forge, let me generate a simple self-signed cert
   // using the approach of writing a config file and calling openssl if available,
@@ -83,7 +104,7 @@ IP.1 = 127.0.0.1
     try { fs.unlinkSync(configPath); } catch (_) {}
 
     return { cert: certPath, key: keyPath };
-  } catch (err) {
+  } catch (_err) {
     throw new Error(
       'OpenSSL not found. Please install OpenSSL or provide TLS certificates:\n' +
       `  cert: ${certPath}\n  key: ${keyPath}\n` +
@@ -92,7 +113,7 @@ IP.1 = 127.0.0.1
   }
 }
 
-function loadTLSCredentials(config) {
+function loadTLSCredentials(config: ServerConfig): CertificateData | null {
   if (!config.tls || !config.tls.enabled) {
     return null;
   }
@@ -111,7 +132,8 @@ function loadTLSCredentials(config) {
         keyPath = result.key;
         console.log(`TLS certificate generated: ${certPath}`);
       } catch (err) {
-        console.warn(`Could not auto-generate TLS certificate: ${err.message}`);
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`Could not auto-generate TLS certificate: ${message}`);
         if (config.tls.enabled === true) {
           throw err;
         }
@@ -143,7 +165,7 @@ if (require.main === module && process.argv.includes('--generate')) {
     console.log(`Certificate: ${DEFAULT_CERT}`);
     console.log(`Key: ${DEFAULT_KEY}`);
   } catch (err) {
-    console.error(err.message);
+    console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
 }
