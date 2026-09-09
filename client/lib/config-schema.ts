@@ -3,11 +3,31 @@
 // mapping, the generated config.yaml.example and the interactive setup wizard
 // (issues #40 / #41).
 // =============================================================================
+// Migrated to TypeScript (issue #42, Phase 2). CJS-style module: keeps
+// require()/module.exports so Node type-strips it in place and the runtime
+// behavior is unchanged.
+/* eslint-disable @typescript-eslint/no-require-imports */
 'use strict';
 
-const fs = require('fs');
+import type * as NodeFs from 'fs';
 
-const SCHEMA = [
+const fs: typeof NodeFs = require('fs');
+
+type ConfigScalar = string | number | boolean;
+
+interface SchemaEntry {
+  key: string;
+  env: string[];
+  type: 'string' | 'number' | 'boolean';
+  default: ConfigScalar;
+  desc: string;
+  example?: string;
+  secret?: boolean;
+}
+
+type ConfigValues = Record<string, ConfigScalar>;
+
+const SCHEMA: SchemaEntry[] = [
   {
     key: 'server_url',
     env: ['SERVER_URL'],
@@ -99,19 +119,24 @@ const SCHEMA = [
   },
 ];
 
-function defaults() {
-  const out = {};
+function defaults(): ConfigValues {
+  const out: ConfigValues = {};
   for (const it of SCHEMA) out[it.key] = it.default;
   return out;
 }
 
-function coerce(type, raw) {
-  if (type === 'number') return parseInt(raw, 10);
+function coerce(type: SchemaEntry['type'], raw: unknown): ConfigScalar {
+  if (type === 'number') return parseInt(raw as string, 10);
   if (type === 'boolean') return raw === true || raw === 'true' || raw === 1 || raw === '1';
   return String(raw);
 }
 
-function loadClientConfig({ filePaths = [], env = process.env } = {}) {
+interface LoadClientConfigOptions {
+  filePaths?: string[];
+  env?: Record<string, string | undefined>;
+}
+
+function loadClientConfig({ filePaths = [], env = process.env }: LoadClientConfigOptions = {}): ConfigValues {
   const config = defaults();
 
   // 1) yaml config file (first existing path wins)
@@ -119,7 +144,7 @@ function loadClientConfig({ filePaths = [], env = process.env } = {}) {
   for (const cp of filePaths) {
     if (cp && fs.existsSync(cp)) {
       try {
-        const doc = yaml.load(fs.readFileSync(cp, 'utf8'));
+        const doc = yaml.load(fs.readFileSync(cp, 'utf8')) as Record<string, unknown> | null | undefined;
         if (doc && typeof doc === 'object') {
           for (const it of SCHEMA) {
             if (doc[it.key] !== undefined && doc[it.key] !== null) {
@@ -146,8 +171,8 @@ function loadClientConfig({ filePaths = [], env = process.env } = {}) {
 }
 
 // Render a documented config.yaml.example from the schema.
-function renderExampleYaml() {
-  const lines = [
+function renderExampleYaml(): string {
+  const lines: string[] = [
     '# =============================================================================',
     '# Node-Proxy Client - config.yaml.example',
     '# 本文件由 client/lib/config-schema.js 自动生成，请勿手改。',

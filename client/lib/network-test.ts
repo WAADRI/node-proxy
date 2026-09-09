@@ -3,8 +3,18 @@
 // Tools: ping / tcping / http speed test / traceroute / dns lookup
 // Mirrors the server runner so results are consistent whichever side executes.
 // Pure Node.js + npm deps only (raw-socket for ICMP/UDP when available).
+// Migrated to TypeScript (issue #42, Phase 2).
+//
+// NOTE: CJS-style TS on purpose - raw-socket is an optional dependency loaded
+// inside try/catch (tests degrade to TCP fallbacks when it is missing) and the
+// module exports its class via module.exports. Node type stripping loads this
+// file as CommonJS; callers use require('./lib/network-test.ts').
 // =============================================================================
 'use strict';
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+
+import type { Socket as NetSocket } from 'net';
 
 const dnsPromises = require('dns').promises;
 const net = require('net');
@@ -16,37 +26,130 @@ const { URL } = require('url');
 const HTTP_BODY_LIMIT = 1024 * 1024; // 1 MB
 const TRACEROUTE_MAX_HOPS = 30;
 
+// --- Structural contract for the optional raw-socket native module -----------
+interface RawSocketLike {
+  send(
+    buf: Buffer,
+    offset: number,
+    length: number,
+    port: number,
+    addr: string,
+    optsOrCb: { ttl?: number } | ((err?: Error) => void),
+    cb?: (err?: Error) => void
+  ): void;
+  on(event: 'message', cb: (buffer: Buffer, source?: unknown) => void): unknown;
+  on(event: 'error', cb: (err: Error) => void): unknown;
+  once(event: 'message', cb: (buffer: Buffer, source?: unknown) => void): unknown;
+  close(): void;
+}
+
+interface RawSocketModule {
+  Protocol: { ICMP: number; UDP: number };
+  createSocket(opts: { protocol: number }): RawSocketLike;
+}
+
 // ICMP/UDP raw sockets (optional; native module + root/CAP_NET_RAW)
-let raw = null;
-let rawError = null;
+let raw: RawSocketModule | null = null;
+let rawError: string | null = null;
 try {
   raw = require('raw-socket');
 } catch (err) {
-  rawError = err.message;
+  rawError = (err as Error).message;
+}
+
+// --- Shapes for a logger injected by the caller ------------------------------
+interface LoggerLike {
+  warn(msg: string): void;
+  info(msg: string): void;
+  error(msg: string): void;
+}
+
+// --- Task / option shapes -----------------------------------------------------
+interface NetTestOptions {
+  count?: number | string;
+  port?: number | string;
+  timeout?: number | string;
+  method?: string;
+  redirects?: number | string;
+  protocol?: string;
+  referer?: string;
+  userAgent?: string;
+  body?: string;
+  recordTypes?: string[];
+}
+
+// --- Result message shapes (per-target results reported back to the server) ---
+interface DnsRecords {
+  type: string;
+  values: string[];
+}
+
+interface TracerouteHop {
+  ttl: number;
+  ip: string;
+  ms: number;
+}
+
+// Shape of one tool result - the fields a finished (or failed) target returns.
+interface NetTestResult {
+  ok: boolean;
+  mode?: string;
+  ms?: number;
+  port?: number;
+  status?: number;
+  size?: number;
+  speedKBps?: number;
+  detail?: string;
+  note?: string;
+  extra?: DnsRecords[];
+  hops?: TracerouteHop[];
+  error?: string;
+}
+
+// Shape handed to onTarget in run(): index/target plus the tool result.
+interface NetTestReport extends NetTestResult {
+  index: number;
+  target: string;
+}
+
+interface HttpProbeOutcome {
+  size: number;
+  status: number;
+  redirect?: string;
+}
+
+interface HttpProbeOptions {
+  method: string;
+  headers: Record<string, string>;
+  body: string | undefined;
+  timeout: number;
+  protocol: string;
 }
 
 class ClientNetTest {
-  constructor(logger) {
+  log: LoggerLike;
+
+  constructor(logger?: LoggerLike) {
     this.log = logger || { warn: () => {}, info: () => {}, error: () => {} };
   }
 
   // Run one target at a time; invoke onTarget after each result.
-  async run(type, targets, options = {}, onTarget) {
+  async run(type: string, targets: string[], options: NetTestOptions = {}, onTarget?: (report: NetTestReport) => void | Promise<void>): Promise<void> {
     for (let i = 0; i < targets.length; i++) {
       const target = targets[i];
-      let res;
+      let res: NetTestResult;
       try {
         res = await this.runTarget(type, target, options);
       } catch (err) {
-        res = { ok: false, error: err.message || String(err) };
+        res = { ok: false, error: (err as Error).message || String(err) };
       }
       try {
         if (onTarget) await onTarget({ index: i, target, ...res });
-      } catch (_) {}
+      } catch (_) { /* ignore per-target callback errors */ }
     }
   }
 
-  async runTarget(type, target, options = {}) {
+  async runTarget(type: string, target: string, options: NetTestOptions = {}): Promise<NetTestResult> {
     switch (type) {
       case 'ping': return this._ping(target, options);
       case 'tcping': return this._tcping(target, options);
@@ -58,39 +161,39 @@ class ClientNetTest {
   }
 
   // --- ping ---------------------------------------------------------------
-  async _ping(target, options = {}) {
-    const count = Math.min(Math.max(parseInt(options.count, 10) || 3, 1), 10);
-    const timeout = parseInt(options.timeout, 10) || 2000;
+  async _ping(target: string, options: NetTestOptions = {}): Promise<NetTestResult> {
+    const count = Math.min(Math.max(parseInt(options.count as string, 10) || 3, 1), 10);
+    const timeout = parseInt(options.timeout as string, 10) || 2000;
     const host = this._hostOf(target);
     if (raw) {
       try {
         return await this._icmpPing(host, count, timeout);
       } catch (err) {
-        this.log.warn('ICMP ping failed, falling back to TCP: ' + err.message);
+        this.log.warn('ICMP ping failed, falling back to TCP: ' + (err as Error).message);
       }
     }
     return this._tcpPingFallback(host, count, timeout);
   }
 
-  _icmpPing(host, count, timeout) {
+  _icmpPing(host: string, count: number, timeout: number): Promise<NetTestResult> {
     return new Promise((resolve, reject) => {
-      require('dns').lookup(host, { family: 4 }, (err, addr) => {
+      require('dns').lookup(host, { family: 4 }, (err: Error | null, addr: string) => {
         if (err) return reject(new Error('解析失败: ' + host));
-        let sock;
+        let sock: RawSocketLike | null = null;
         try {
-          sock = raw.createSocket({ protocol: raw.Protocol.ICMP });
+          sock = (raw as RawSocketModule).createSocket({ protocol: raw?.Protocol.ICMP as number });
         } catch (e) {
-          return reject(new Error('无法创建 ICMP socket: ' + e.message));
+          return reject(new Error('无法创建 ICMP socket: ' + (e as Error).message));
         }
-        const times = [];
-        const sendMap = {};
+        const times: number[] = [];
+        const sendMap: Record<number, number> = {}; // seq -> startedAt
         const id = (process.pid & 0xffff);
         const seqBase = Math.floor(Math.random() * 0xffff);
         const settled = { done: false };
-        const finish = (error) => {
+        const finish = (error?: Error) => {
           if (settled.done) return;
           settled.done = true;
-          try { sock.close(); } catch (_) {}
+          try { (sock as RawSocketLike).close(); } catch (_) { /* ignore */ }
           if (error) return reject(error);
           if (!times.length) return reject(new Error('无 ICMP 应答（主机可能禁 ping 或超时）'));
           const avg = times.reduce((a, b) => a + b, 0) / times.length;
@@ -101,14 +204,15 @@ class ClientNetTest {
             detail: `min ${Math.round(Math.min(...times))}ms / avg ${Math.round(avg)}ms / max ${Math.round(Math.max(...times))}ms (${times.length}/${count} 回)`,
           });
         };
-        const sendOne = (seq) => {
+        const sendOne = (seq: number) => {
           const packet = Buffer.alloc(8 + 24);
-          packet.writeUInt8(8, 0);
-          packet.writeUInt8(0, 1);
-          packet.writeUInt16BE(0, 2);
+          packet.writeUInt8(8, 0); // type: echo request
+          packet.writeUInt8(0, 1); // code
+          packet.writeUInt16BE(0, 2); // checksum (filled below)
           packet.writeUInt16BE(id, 4);
           packet.writeUInt16BE(seq, 6);
           for (let i = 8; i < packet.length; i++) packet.writeUInt8(i & 0xff, i);
+          // checksum
           let sum = 0;
           for (let i = 0; i < packet.length; i += 2) {
             sum += (packet[i] << 8) + packet[i + 1];
@@ -116,11 +220,11 @@ class ClientNetTest {
           while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
           packet.writeUInt16BE(~sum & 0xffff, 2);
           sendMap[seq] = Date.now();
-          sock.send(packet, 0, packet.length, 0, addr, (err) => {
+          (sock as RawSocketLike).send(packet, 0, packet.length, 0, addr, (err?: Error) => {
             if (err) finish(new Error('发送失败: ' + err.message));
           });
         };
-        sock.on('message', (buffer) => {
+        (sock as RawSocketLike).on('message', (buffer: Buffer) => {
           if (buffer.length < 8) return;
           const type = buffer.readUInt8(0);
           const replyId = buffer.readUInt16BE(4);
@@ -132,11 +236,12 @@ class ClientNetTest {
           times.push(Date.now() - startedAt);
           if (times.length >= count) finish();
         });
-        sock.on('error', (e) => finish(new Error('ICMP socket error: ' + e.message)));
+        (sock as RawSocketLike).on('error', (e: Error) => finish(new Error('ICMP socket error: ' + e.message)));
         let idx = 0;
         const loop = () => {
           if (settled.done) return;
           if (idx >= count) {
+            // wait a short grace for late replies, then settle
             setTimeout(() => finish(), Math.min(timeout, 500));
             return;
           }
@@ -149,9 +254,9 @@ class ClientNetTest {
     });
   }
 
-  async _tcpPingFallback(host, count, timeout) {
-    const times = [];
-    const probe = () =>
+  async _tcpPingFallback(host: string, count: number, timeout: number): Promise<NetTestResult> {
+    const times: number[] = [];
+    const probe = (): Promise<number | null> =>
       this._tcpProbe(host, 443, timeout).catch(() => this._tcpProbe(host, 80, timeout));
     for (let i = 0; i < count; i++) {
       const t = await probe();
@@ -170,18 +275,18 @@ class ClientNetTest {
   }
 
   // --- tcping -------------------------------------------------------------
-  async _tcping(target, options = {}) {
+  async _tcping(target: string, options: NetTestOptions = {}): Promise<NetTestResult> {
     const { host, port } = this._hostPortOf(target, options.port || 80);
-    const timeout = parseInt(options.timeout, 10) || 3000;
+    const timeout = parseInt(options.timeout as string, 10) || 3000;
     const ms = await this._tcpProbe(host, port, timeout);
     if (ms == null) throw new Error(`无法连接 ${host}:${port} (超时 ${timeout}ms)`);
     return { ok: true, ms: Math.round(ms), port, detail: `${host}:${port} 可达` };
   }
 
-  _tcpProbe(host, port, timeout) {
+  _tcpProbe(host: string, port: number, timeout: number): Promise<number | null> {
     return new Promise((resolve) => {
       const started = Date.now();
-      const sock = net.connect({ host, port }, () => {
+      const sock: NetSocket = net.connect({ host, port }, () => {
         const ms = Date.now() - started;
         sock.destroy();
         resolve(ms);
@@ -192,13 +297,13 @@ class ClientNetTest {
   }
 
   // --- HTTP request speed test ---------------------------------------------
-  async _httpTest(target, options = {}) {
+  async _httpTest(target: string, options: NetTestOptions = {}): Promise<NetTestResult> {
     const url = new URL(/^https?:\/\//i.test(target) ? target : 'http://' + target);
     const method = String(options.method || 'GET').toUpperCase();
-    const redirects = Math.min(Math.max(parseInt(options.redirects, 10) || 0, 0), 10);
-    const timeout = parseInt(options.timeout, 10) || 8000;
-    const protocol = String(options.protocol || '1.1');
-    const headers = {};
+    const redirects = Math.min(Math.max(parseInt(options.redirects as string, 10) || 0, 0), 10);
+    const timeout = parseInt(options.timeout as string, 10) || 8000;
+    const protocol = String(options.protocol || '1.1'); // '1.1' | '2' | '3'
+    const headers: Record<string, string> = {};
     if (options.referer) headers['Referer'] = String(options.referer);
     if (options.userAgent) headers['User-Agent'] = String(options.userAgent);
     else headers['User-Agent'] = 'Node-Proxy-NetTest/1.0';
@@ -235,43 +340,43 @@ class ClientNetTest {
     throw new Error('Unexpected end of HTTP probe loop');
   }
 
-  _singleHttpProbe(url, { method, headers, body, timeout, protocol }) {
+  _singleHttpProbe(url: URL, { method, headers, body, timeout, protocol }: HttpProbeOptions): Promise<HttpProbeOutcome> {
     return new Promise((resolve, reject) => {
       let size = 0;
       let status = 0;
       let done = false;
-      const finish = (redirect) => {
+      const finish = (redirect?: string) => {
         if (done) return;
         done = true;
         resolve({ size, status, redirect });
       };
-      const fail = (err) => {
+      const fail = (err: Error) => {
         if (done) return;
         done = true;
         reject(err);
       };
       if (protocol === '2' && url.protocol === 'https:') {
         const client = http2.connect(url.origin, { timeout });
-        client.on('error', (e) => { try { client.destroy(); } catch (_) {} fail(e); });
+        client.on('error', (e: Error) => { try { client.destroy(); } catch (_) { /* ignore */ } fail(e); });
         const req = client.request({
           ':method': method, ':path': url.pathname + url.search,
           'user-agent': headers['User-Agent'] || 'Node-Proxy-NetTest/1.0',
           ...(headers['Referer'] ? { referer: headers['Referer'] } : {}),
           ...(body !== undefined ? { 'content-type': headers['Content-Type'] } : {}),
         });
-        req.on('response', (h) => {
+        req.on('response', (h: { ':status'?: unknown; location?: string }) => {
           status = Number(h[':status']) || 0;
           if ([301, 302, 303, 307, 308].includes(status) && h.location) return finish(h.location);
         });
-        req.on('data', (c) => {
+        req.on('data', (c: Buffer) => {
           size += c.length;
           if (size > HTTP_BODY_LIMIT) { req.destroy(); finish(); }
         });
         req.on('end', () => finish());
-        req.on('error', (e) => fail(e));
+        req.on('error', (e: Error) => fail(e));
         if (body !== undefined) req.write(body);
         req.end();
-        setTimeout(() => { try { req.destroy(); } catch (_) {} fail(new Error('HTTP/2 请求超时')); }, timeout);
+        setTimeout(() => { try { req.destroy(); } catch (_) { /* ignore */ } fail(new Error('HTTP/2 请求超时')); }, timeout);
         return;
       }
       const lib = url.protocol === 'https:' ? https : http;
@@ -284,13 +389,21 @@ class ClientNetTest {
           headers,
           timeout,
         },
-        (res) => {
+        (res: {
+          statusCode?: number;
+          headers: Record<string, string | string[] | undefined>;
+          resume(): void;
+          destroy(): void;
+          on(event: 'data', cb: (chunk: Buffer) => void): unknown;
+          on(event: 'end', cb: () => void): unknown;
+          on(event: 'error', cb: (err: Error) => void): unknown;
+        }) => {
           status = res.statusCode || 0;
           if ([301, 302, 303, 307, 308].includes(status) && res.headers.location) {
             res.resume();
-            return finish(res.headers.location);
+            return finish(String(res.headers.location));
           }
-          res.on('data', (c) => {
+          res.on('data', (c: Buffer) => {
             size += c.length;
             if (size > HTTP_BODY_LIMIT) {
               res.destroy();
@@ -298,10 +411,10 @@ class ClientNetTest {
             }
           });
           res.on('end', () => finish());
-          res.on('error', (e) => fail(e));
+          res.on('error', (e: Error) => fail(e));
         }
       );
-      req.on('error', (e) => fail(e));
+      req.on('error', (e: Error) => fail(e));
       req.on('timeout', () => { req.destroy(); fail(new Error('请求超时')); });
       if (body !== undefined) req.write(body);
       req.end();
@@ -309,20 +422,20 @@ class ClientNetTest {
   }
 
   // --- DNS lookup ----------------------------------------------------------
-  async _dnsLookup(target, options = {}) {
+  async _dnsLookup(target: string, options: NetTestOptions = {}): Promise<NetTestResult> {
     const host = this._hostOf(target);
-    const records = [];
+    const records: DnsRecords[] = [];
     const types = (options.recordTypes && options.recordTypes.length
       ? options.recordTypes
       : ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS']
     ).slice(0, 8);
     let failed = 0;
     for (const rtype of types) {
-      const res = await new Promise((resolve2) => {
+      const res = await new Promise<{ type: string; values?: string[]; timeout?: boolean; error?: string }>((resolve2) => {
         const timer = setTimeout(() => resolve2({ type: rtype, timeout: true }), 2500);
         dnsPromises.resolve(host, rtype)
-          .then((v) => { clearTimeout(timer); resolve2({ type: rtype, values: this._fmtRecords(rtype, v) }); })
-          .catch((e) => { clearTimeout(timer); resolve2({ type: rtype, error: e.code || 'error' }); });
+          .then((v: unknown) => { clearTimeout(timer); resolve2({ type: rtype, values: this._fmtRecords(rtype, v) }); })
+          .catch((e: Error & { code?: string }) => { clearTimeout(timer); resolve2({ type: rtype, error: e.code || 'error' }); });
       });
       if (res.values) records.push({ type: rtype, values: res.values });
       else failed++;
@@ -337,13 +450,13 @@ class ClientNetTest {
     };
   }
 
-  _fmtRecords(type, values) {
-    if (type === 'MX') return values.map((v) => `${v.exchange} (pri ${v.priority})`);
+  _fmtRecords(type: string, values: unknown): string[] {
+    if (type === 'MX') return (values as Array<{ exchange: string; priority: number }>).map((v) => `${v.exchange} (pri ${v.priority})`);
     return (Array.isArray(values) ? values : [values]).map((v) => String(v));
   }
 
   // --- traceroute ----------------------------------------------------------
-  async _traceroute(target, options = {}) {
+  async _traceroute(target: string, _options: NetTestOptions = {}): Promise<NetTestResult> {
     const { host } = this._hostPortOf(target, 443);
     if (!raw) {
       throw new Error('traceroute 需要 ICMP/UDP raw socket（npm raw-socket + root/CAP_NET_RAW）。当前不可用：' + (rawError || 'raw-socket 未安装'));
@@ -351,31 +464,32 @@ class ClientNetTest {
     return this._udpTraceroute(host);
   }
 
-  _udpTraceroute(host) {
+  // UDP-based traceroute: probe each TTL sequentially, parse ICMP replies
+  _udpTraceroute(host: string): Promise<NetTestResult> {
     return new Promise((resolve, reject) => {
-      require('dns').lookup(host, { family: 4 }, (err, addr) => {
+      require('dns').lookup(host, { family: 4 }, (err: Error | null, addr: string) => {
         if (err) return reject(new Error('解析失败: ' + host));
-        let icmp;
-        let udp;
+        let icmp: RawSocketLike | null = null;
+        let udp: RawSocketLike | null = null;
         try {
-          icmp = raw.createSocket({ protocol: raw.Protocol.ICMP });
-          udp = raw.createSocket({ protocol: raw.Protocol.UDP });
+          icmp = (raw as RawSocketModule).createSocket({ protocol: raw?.Protocol.ICMP as number });
+          udp = (raw as RawSocketModule).createSocket({ protocol: raw?.Protocol.UDP as number });
         } catch (e) {
-          return reject(new Error('无法创建 raw socket: ' + e.message));
+          return reject(new Error('无法创建 raw socket: ' + (e as Error).message));
         }
         const destIp = addr;
         const basePort = 33434 + Math.floor(Math.random() * 1000);
         const perHopTimeout = 800;
-        const hops = [];
+        const hops: TracerouteHop[] = [];
         let ttl = 0;
         let settled = false;
-        let watchdog = setTimeout(() => done(), 25000);
+        const watchdog = setTimeout(() => done(), 25000);
         const cleanup = () => {
           if (settled) return;
           settled = true;
           clearTimeout(watchdog);
-          try { icmp.close(); } catch (_) {}
-          try { udp.close(); } catch (_) {}
+          try { (icmp as RawSocketLike).close(); } catch (_) { /* ignore */ }
+          try { (udp as RawSocketLike).close(); } catch (_) { /* ignore */ }
         };
         const done = () => {
           cleanup();
@@ -389,27 +503,27 @@ class ClientNetTest {
           packet.writeUInt32BE(0xfeedface, 0);
           packet.writeUInt16BE((ttl * 64 + Math.floor(Math.random() * 200)) & 0xffff, 4);
           const started = Date.now();
-          udp.send(packet, 0, packet.length, basePort + ttl, destIp, { ttl }, (err) => {
+          (udp as RawSocketLike).send(packet, 0, packet.length, basePort + ttl, destIp, { ttl }, (err?: Error) => {
             if (err) { cleanup(); return reject(new Error('发送失败: ' + err.message)); }
           });
           const timer = setTimeout(() => probeNext(), perHopTimeout);
-          icmp.once('message', (buffer, source) => {
+          (icmp as RawSocketLike).once('message', (buffer: Buffer, source?: unknown) => {
             const hopIp = this._bufToIp(source) || this._bufToIp(buffer);
-            const reached = buffer.length >= 8 && buffer.readUInt8(0) === 3 && buffer.readUInt8(1) === 3;
+            const reached = buffer.length >= 8 && buffer.readUInt8(0) === 3 && buffer.readUInt8(1) === 3; // dest port unreachable
             clearTimeout(timer);
             hops.push({ ttl, ip: hopIp, ms: Math.round(Date.now() - started) });
             if (reached || ttl >= TRACEROUTE_MAX_HOPS) return done();
             probeNext();
           });
         };
-        icmp.on('error', (e) => { cleanup(); reject(new Error('ICMP socket error: ' + e.message)); });
-        udp.on('error', (e) => { cleanup(); reject(new Error('UDP socket error: ' + e.message)); });
+        (icmp as RawSocketLike).on('error', (e: Error) => { cleanup(); reject(new Error('ICMP socket error: ' + e.message)); });
+        (udp as RawSocketLike).on('error', (e: Error) => { cleanup(); reject(new Error('UDP socket error: ' + e.message)); });
         probeNext();
       });
     });
   }
 
-  _bufToIp(buf) {
+  _bufToIp(buf: unknown): string {
     if (!buf) return '';
     if (Buffer.isBuffer(buf)) {
       if (buf.length === 4) return [buf[0], buf[1], buf[2], buf[3]].join('.');
@@ -419,13 +533,13 @@ class ClientNetTest {
   }
 
   // --- helpers -------------------------------------------------------------
-  _hostOf(target) {
+  _hostOf(target: string): string {
     if (/^[a-z]+:\/\//i.test(target)) return new URL(target).hostname;
     if (target.includes(':')) return target.split(':')[0];
     return target;
   }
 
-  _hostPortOf(target, defPort) {
+  _hostPortOf(target: string, defPort: number | string): { host: string; port: number } {
     if (/^[a-z]+:\/\//i.test(target)) {
       const u = new URL(target);
       return { host: u.hostname, port: parseInt(u.port, 10) || (u.protocol === 'https:' ? 443 : 80) };
@@ -434,10 +548,10 @@ class ClientNetTest {
     if (idx > 0 && /^\d+$/.test(target.slice(idx + 1))) {
       return { host: target.slice(0, idx), port: parseInt(target.slice(idx + 1), 10) };
     }
-    return { host: target, port: parseInt(defPort, 10) || 80 };
+    return { host: target, port: parseInt(defPort as string, 10) || 80 };
   }
 
-  _fmtBytes(n) {
+  _fmtBytes(n: number): string {
     if (n < 1024) return n + ' B';
     if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
     return (n / 1048576).toFixed(2) + ' MB';

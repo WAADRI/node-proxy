@@ -3,27 +3,38 @@
 // =============================================================================
 // Node-Proxy Client v2.0
 // Connects to the proxy server and forwards traffic (HTTP proxy + TCP tunnel)
+// Migrated to TypeScript (issue #42, Phase 2). CJS-style TS on purpose: a
+// value-level import would flip Node's module detection to ESM and break the
+// entry-point semantics, so requires/module usage stays CommonJS and types are
+// declared with import() queries / local interfaces only (stripped, no syntax).
 // =============================================================================
+
+'use strict';
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+
+// The type-only import below is erased by Node's type stripping (no ESM at
+// runtime) but keeps this file a TypeScript module, so its top-level names do
+// not collide with the global-script scope of sibling/legacy entry files.
+import type { IncomingMessage } from 'http';
 
 const WebSocket = require('ws');
 const http = require('http');
 const https = require('https');
 const net = require('net');
 const dgram = require('dgram');
-const url = require('url');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
-const { StreamMux } = require('./lib/stream-mux');
-const { ClientNetTest } = require('./lib/network-test');
-const netTestRunner = new ClientNetTest({ warn: (m) => log && log('warn', m), info: (m) => log && log('info', m), error: (m) => log && log('error', m) });
+const { StreamMux } = require('./lib/stream-mux.ts');
+const { ClientNetTest } = require('./lib/network-test.ts');
+const netTestRunner = new ClientNetTest({ warn: (m: string) => log && log('warn', m), info: (m: string) => log && log('info', m), error: (m: string) => log && log('error', m) });
 let netTestBusy = false;
 
 // =============================================================================
-// Configuration (schema-driven; see lib/config-schema.js - issue #41)
+// Configuration (schema-driven; see lib/config-schema.ts - issue #41)
 // =============================================================================
-const { loadClientConfig } = require('./lib/config-schema');
+const { loadClientConfig } = require('./lib/config-schema.ts');
 const CONFIG = loadClientConfig({
   filePaths: [
     process.env.CONFIG_PATH,
@@ -60,10 +71,10 @@ if (!persistentClientId) {
 // =============================================================================
 const activeRequests = new Map();
 const activeTunnels = new Map();
-let ws = null;
+let ws: WsClient | null = null;
 let reconnectAttempt = 0;
-let heartbeatTimer = null;
-let currentClientId = null;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let currentClientId: string | null = null;
 let intentionalClose = false;
 
 // Liveness detection: the server never replies to the JSON heartbeat, so we
@@ -74,10 +85,66 @@ let intentionalClose = false;
 let missedPongs = 0;
 const MAX_MISSED_PONGS = 3; // ~3 x heartbeat_interval before declaring death
 
+// --- Duck types for the ws instance (client has no @types/ws) ----------------
+interface WsClient {
+  readyState: number;
+  send(data: string, cb?: (err?: Error) => void): void;
+  send(data: Buffer, options: { binary: boolean }, cb?: (err?: Error) => void): void;
+  ping(): void;
+  terminate(): void;
+  close(code?: number, reason?: string): void;
+  on(event: string, listener: (...args: unknown[]) => void): unknown;
+  mux?: MuxLike;
+}
+
+// StreamMux stream/mux structural types (stream-mux.ts stays CJS/script-style
+// with no import statements, so it cannot be type-queried; cover only members
+// this entry touches, mirroring the pre-migration JS usage).
+interface MuxStreamHeaders {
+  type?: string;
+  id?: string | number;
+  method?: string;
+  url?: string;
+  host?: string;
+  port?: number;
+  requestHeaders?: Record<string, string>;
+  headers?: Record<string, string>;
+}
+
+interface MuxStreamLike {
+  id: number | string;
+  state?: string;
+  headers?: MuxStreamHeaders | null;
+  sendHeaders(headers: Record<string, unknown>, endStream?: boolean): void;
+  sendData(data: Buffer | string, endStream?: boolean): void;
+  close(): void;
+  _onData?: ((data: Buffer) => void) | null;
+  _onEnd?: (() => void) | null;
+  _onError?: ((reason: string | number) => void) | null;
+}
+
+interface MuxLike {
+  onStream(cb: (stream: MuxStreamLike) => void): void;
+}
+
+// Message shapes pushed by the server (see server protocol docs)
+type ServerMsg =
+  | { type: 'auth_ok' }
+  | { type: 'auth_error'; message?: string }
+  | { type: 'info_ok'; clientId?: string }
+  | { type: 'request'; id: string; method?: string; url: string; headers?: Record<string, string>; body?: string }
+  | { type: 'tunnel_open'; id: string; host: string; port: number }
+  | { type: 'tunnel_data'; id: string; data: string }
+  | { type: 'tunnel_close'; id: string }
+  | { type: 'udp_data'; id: string; assocId: string; host: string; port: number; data: string; src?: string }
+  | { type: 'broadcast'; message?: string }
+  | { type: 'net_test'; taskId: string; payload: { type: string; targets: string[]; options?: Record<string, unknown> } }
+  | { type: 'error'; message?: string };
+
 // =============================================================================
 // Logging
 // =============================================================================
-function log(level, message, data) {
+function log(level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: unknown): void {
   const ts = new Date().toISOString();
   const prefix = `[${ts}] [${level.toUpperCase()}]`;
   if (data) {
@@ -94,7 +161,9 @@ function getSystemInfo() {
   const interfaces = os.networkInterfaces();
   let localIp = 'unknown';
   for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
+    const ifaces = interfaces[name];
+    if (!ifaces) continue;
+    for (const iface of ifaces) {
       if (iface.family === 'IPv4' && !iface.internal) {
         localIp = iface.address;
         break;
@@ -113,7 +182,7 @@ function getSystemInfo() {
     totalMemory: os.totalmem(),
     freeMemory: os.freemem(),
     region: CONFIG.region,
-    tags: CONFIG.tags ? CONFIG.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
+    tags: CONFIG.tags ? String(CONFIG.tags).split(',').map((t: string) => t.trim()).filter(Boolean) : [],
     nodeVersion: process.version,
     pid: process.pid,
     uptime: os.uptime(),
@@ -140,44 +209,46 @@ function connect() {
     handshakeTimeout: 10000,
   };
 
-  ws = new WebSocket(CONFIG.server_url, wsOptions);
+  const sock: WsClient = new WebSocket(CONFIG.server_url, wsOptions);
+  ws = sock;
 
-  ws.on('open', () => {
+  sock.on('open', () => {
     log('info', 'Connected to server');
     reconnectAttempt = 0;
     intentionalClose = false;
     missedPongs = 0;
-    ws.send(JSON.stringify({ type: 'auth', token: CONFIG.auth_token }));
+    sock.send(JSON.stringify({ type: 'auth', token: CONFIG.auth_token }));
   });
 
   // ws protocol pong (server auto-replies to ping frames) -> connection alive
-  ws.on('pong', () => {
+  sock.on('pong', () => {
     missedPongs = 0;
   });
 
   // Create StreamMux for multiplexed streams (binary frames)
-  ws.mux = new StreamMux(ws);
+  const mux: MuxLike = new StreamMux(sock);
+  sock.mux = mux;
 
   // Handle multiplexed streams from the server (requests & tunnels)
-  ws.mux.onStream((stream) => {
+  mux.onStream((stream: MuxStreamLike) => {
     handleMuxStream(stream);
   });
 
-  ws.on('message', (raw, isBinary) => {
-    // Binary frames are handled by StreamMux
-    if (isBinary === true) {
+  sock.on('message', (raw: unknown) => {
+    // Binary frames are handled by StreamMux internally
+    if (Buffer.isBuffer(raw)) {
       return;
     }
 
     try {
-      const msg = JSON.parse(raw.toString());
+      const msg = JSON.parse(String(raw)) as ServerMsg;
       handleMessage(msg);
     } catch (err) {
-      log('error', 'Invalid message: ' + err.message);
+      log('error', 'Invalid message: ' + (err instanceof Error ? err.message : String(err)));
     }
   });
 
-  ws.on('close', (code, reason) => {
+  sock.on('close', (code: unknown, reason: unknown) => {
     log('info', `Disconnected (code: ${code}, reason: ${reason || 'none'})`);
     cleanupAll();
     if (!intentionalClose) {
@@ -185,8 +256,8 @@ function connect() {
     }
   });
 
-  ws.on('error', (err) => {
-    log('error', 'WebSocket error: ' + err.message);
+  sock.on('error', (err: unknown) => {
+    log('error', 'WebSocket error: ' + (err instanceof Error ? err.message : String(err)));
   });
 }
 
@@ -204,24 +275,25 @@ function startHeartbeat() {
   stopHeartbeat();
   if (CONFIG.heartbeat_interval <= 0) return;
   heartbeatTimer = setInterval(() => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    const sock = ws;
+    if (sock && sock.readyState === WebSocket.OPEN) {
       // Protocol-level ping: server (ws library) auto-replies with a pong.
       // If the pong stops arriving the TCP connection is half-dead even
       // though no close/error fired - force a reconnect in that case.
-      ws.ping();
+      sock.ping();
       missedPongs++;
       if (missedPongs >= MAX_MISSED_PONGS) {
         log('warn', `No pong from server for ${missedPongs} heartbeats - terminating dead connection`);
         missedPongs = 0;
         try {
-          ws.terminate(); // triggers 'close' -> scheduleReconnect
+          sock.terminate(); // triggers 'close' -> scheduleReconnect
         } catch (_) {}
         return;
       }
       // Server-side liveness (JSON heartbeat keeps server health-check happy)
-      ws.send(JSON.stringify({ type: 'heartbeat' }));
+      sock.send(JSON.stringify({ type: 'heartbeat' }));
       // Also send stats
-      ws.send(JSON.stringify({
+      sock.send(JSON.stringify({
         type: 'stats',
         stats: {
           uptime: process.uptime(),
@@ -244,23 +316,24 @@ function stopHeartbeat() {
 // =============================================================================
 // Message Handler
 // =============================================================================
-function handleMessage(msg) {
+function handleMessage(msg: ServerMsg) {
   switch (msg.type) {
-    case 'auth_ok':
+    case 'auth_ok': {
       log('info', 'Authentication successful');
-      ws.send(JSON.stringify({ type: 'info', info: getSystemInfo() }));
+      if (ws) ws.send(JSON.stringify({ type: 'info', info: getSystemInfo() }));
       startHeartbeat();
       break;
+    }
 
     case 'auth_error':
       log('error', 'Authentication failed: ' + (msg.message || 'Invalid token'));
       intentionalClose = true;
-      ws.close();
+      if (ws) ws.close();
       process.exit(1);
       break;
 
     case 'info_ok':
-      currentClientId = msg.clientId;
+      currentClientId = msg.clientId || null;
       log('info', `Registered with ID: ${currentClientId}`);
       break;
 
@@ -297,21 +370,22 @@ function handleMessage(msg) {
       break;
 
     default:
-      log('debug', 'Unknown message type: ' + msg.type);
+      log('debug', 'Unknown message type');
   }
 }
 
 // =============================================================================
 // Network test task (issue #31): server asks THIS node to run tests locally
 // =============================================================================
-function safeSend(obj) {
+function safeSend(obj: Record<string, unknown>) {
   try {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   } catch (_) {}
 }
 
-function handleNetTest(msg) {
-  const { taskId, payload } = msg || {};
+function handleNetTest(msg: Extract<ServerMsg, { type: 'net_test' }>) {
+  const taskId = msg.taskId;
+  const payload = msg.payload;
   const targets = payload && Array.isArray(payload.targets) ? payload.targets.filter(Boolean) : [];
   if (!taskId || !payload || !targets.length) {
     return safeSend({ type: 'net_test_done', taskId, error: 'invalid task payload' });
@@ -323,15 +397,15 @@ function handleNetTest(msg) {
   log('info', `Net test started: ${payload.type} x ${targets.length} targets (${taskId})`);
   Promise.resolve()
     .then(() =>
-      netTestRunner.run(payload.type, targets, payload.options || {}, (r) => {
-        safeSend(Object.assign({ type: 'net_test_progress', taskId }, r));
+      netTestRunner.run(payload.type, targets, payload.options || {}, (r: unknown) => {
+        safeSend(Object.assign({ type: 'net_test_progress', taskId }, r as Record<string, unknown>));
       })
     )
     .then(() => {
       log('info', `Net test done: ${taskId}`);
       safeSend({ type: 'net_test_done', taskId });
     })
-    .catch((err) => {
+    .catch((err: Error) => {
       log('error', `Net test failed: ${err.message}`);
       safeSend({ type: 'net_test_done', taskId, error: err.message || String(err) });
     })
@@ -343,7 +417,7 @@ function handleNetTest(msg) {
 // =============================================================================
 // StreamMux Stream Handler (binary protocol)
 // =============================================================================
-function handleMuxStream(stream) {
+function handleMuxStream(stream: MuxStreamLike) {
   const headers = stream.headers || {};
 
   // HTTP request stream
@@ -362,7 +436,7 @@ function handleMuxStream(stream) {
   stream.close();
 }
 
-function handleMuxRequest(stream, headers) {
+function handleMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders) {
   const requestId = headers.id || stream.id;
 
   if (activeRequests.size >= CONFIG.max_concurrent_requests) {
@@ -372,8 +446,8 @@ function handleMuxRequest(stream, headers) {
   }
 
   // Collect body from DATA frames
-  const bodyChunks = [];
-  stream._onData = (chunk) => {
+  const bodyChunks: Buffer[] = [];
+  stream._onData = (chunk: Buffer) => {
     bodyChunks.push(chunk);
   };
 
@@ -388,18 +462,20 @@ function handleMuxRequest(stream, headers) {
   }
 }
 
-function executeMuxRequest(stream, headers, body) {
+function executeMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders, body: string) {
   const requestId = headers.id || stream.id;
-  const { method, url: targetUrl, requestHeaders } = headers;
+  const method = headers.method || 'GET';
+  const targetUrl = headers.url || '';
+  const requestHeaders = headers.requestHeaders || headers.headers || {};
 
   try {
     const parsedUrl = new URL(targetUrl);
     const options = {
-      method: method || 'GET',
+      method,
       hostname: parsedUrl.hostname,
       port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
       path: parsedUrl.pathname + parsedUrl.search,
-      headers: requestHeaders || headers.headers || {},
+      headers: requestHeaders,
       rejectUnauthorized: CONFIG.tls_reject_unauthorized === false ? false : true,
       timeout: CONFIG.request_timeout,
     };
@@ -409,9 +485,9 @@ function executeMuxRequest(stream, headers, body) {
     delete options.headers['transfer-encoding'];
 
     const transport = parsedUrl.protocol === 'https:' ? https : http;
-    const req = transport.request(options, (res) => {
-      const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
+    const req = transport.request(options, (res: IncomingMessage) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
       res.on('end', () => {
         const responseBody = Buffer.concat(chunks);
         stream.sendHeaders({
@@ -426,7 +502,7 @@ function executeMuxRequest(stream, headers, body) {
       });
     });
 
-    req.on('error', (err) => {
+    req.on('error', (err: Error) => {
       // May fire after 'timeout' already destroyed the request and sent 504.
       if (!activeRequests.has(requestId)) return;
       log('error', `Request ${requestId} failed: ${err.message}`);
@@ -451,13 +527,14 @@ function executeMuxRequest(stream, headers, body) {
     activeRequests.set(requestId, { req });
   } catch (err) {
     stream.sendHeaders({ type: 'response', id: requestId, statusCode: 400, statusMessage: 'Bad Request', headers: { 'content-type': 'text/plain' } });
-    stream.sendData(Buffer.from('Invalid request: ' + err.message), true);
+    stream.sendData(Buffer.from('Invalid request: ' + (err instanceof Error ? err.message : String(err))), true);
   }
 }
 
-function handleMuxTunnel(stream, headers) {
+function handleMuxTunnel(stream: MuxStreamLike, headers: MuxStreamHeaders) {
   const tunnelId = headers.id || stream.id;
-  const { host, port } = headers;
+  const host = headers.host || '';
+  const port = headers.port || 0;
 
   if (activeTunnels.size >= CONFIG.max_concurrent_requests) {
     stream.sendHeaders({ type: 'tunnel_error', id: tunnelId, message: 'Client busy' });
@@ -483,14 +560,14 @@ function handleMuxTunnel(stream, headers) {
 
     stream.sendHeaders({ type: 'tunnel_ready', id: tunnelId });
 
-    socket.on('data', (data) => {
+    socket.on('data', (data: Buffer) => {
       if (stream.state !== 'closed' && stream.state !== 'half_closed_local') {
         stream.sendData(data);
       }
     });
   });
 
-  socket.on('error', (err) => {
+  socket.on('error', (err: Error) => {
     clearTimeout(timeout);
     log('error', `Tunnel ${tunnelId} error: ${err.message}`);
     stream.sendHeaders({ type: 'tunnel_error', id: tunnelId, message: err.message });
@@ -506,7 +583,7 @@ function handleMuxTunnel(stream, headers) {
   });
 
   // Forward stream data to the socket
-  stream._onData = (chunk) => {
+  stream._onData = (chunk: Buffer) => {
     if (!socket.destroyed) socket.write(chunk);
   };
   stream._onEnd = () => {
@@ -520,10 +597,14 @@ function handleMuxTunnel(stream, headers) {
 }
 
 // =============================================================================
-// HTTP Request Handler
+// HTTP Request Handler (JSON protocol)
 // =============================================================================
-function handleRequest(msg) {
-  const { id, method, url: targetUrl, headers, body } = msg;
+function handleRequest(msg: Extract<ServerMsg, { type: 'request' }>) {
+  const id = msg.id;
+  const method = msg.method;
+  const targetUrl = msg.url;
+  const headers = msg.headers || {};
+  const body = msg.body;
 
   if (activeRequests.size >= CONFIG.max_concurrent_requests) {
     sendResponse(id, 503, 'Service Unavailable', { 'content-type': 'text/plain' }, 'Client busy');
@@ -547,9 +628,9 @@ function handleRequest(msg) {
     delete options.headers['transfer-encoding'];
 
     const transport = parsedUrl.protocol === 'https:' ? https : http;
-    const req = transport.request(options, (res) => {
-      const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
+    const req = transport.request(options, (res: IncomingMessage) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
       res.on('end', () => {
         const responseBody = Buffer.concat(chunks); // raw Buffer
         sendResponse(id, res.statusCode, res.statusMessage || '', res.headers, responseBody);
@@ -557,7 +638,7 @@ function handleRequest(msg) {
       });
     });
 
-    req.on('error', (err) => {
+    req.on('error', (err: Error) => {
       // May fire after 'timeout' already destroyed the request and sent 504.
       if (!activeRequests.has(id)) return;
       log('error', `Request ${id} failed: ${err.message}`);
@@ -577,11 +658,11 @@ function handleRequest(msg) {
 
     activeRequests.set(id, { req });
   } catch (err) {
-    sendResponse(id, 400, 'Bad Request', { 'content-type': 'text/plain' }, 'Invalid request: ' + err.message);
+    sendResponse(id, 400, 'Bad Request', { 'content-type': 'text/plain' }, 'Invalid request: ' + (err instanceof Error ? err.message : String(err)));
   }
 }
 
-function sendResponse(id, statusCode, statusMessage, headers, body) {
+function sendResponse(id: string, statusCode: number | undefined, statusMessage: string, headers: Record<string, unknown>, body: string | Buffer | null | undefined) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const msg = {
     type: 'response',
@@ -592,19 +673,21 @@ function sendResponse(id, statusCode, statusMessage, headers, body) {
     // body: encode raw Buffer/string to base64 exactly once
     body: body == null ? '' : (Buffer.isBuffer(body) ? body.toString('base64') : Buffer.from(String(body)).toString('base64')),
   };
-  ws.send(JSON.stringify(msg), (err) => {
+  ws.send(JSON.stringify(msg), (err?: Error) => {
     if (err) log('error', `Failed to send response ${id}: ${err.message}`);
   });
 }
 
 // =============================================================================
-// Tunnel Handler
+// Tunnel Handler (JSON protocol)
 // =============================================================================
-function handleTunnelOpen(msg) {
-  const { id, host, port } = msg;
+function handleTunnelOpen(msg: Extract<ServerMsg, { type: 'tunnel_open' }>) {
+  const id = msg.id;
+  const host = msg.host;
+  const port = msg.port;
 
   if (activeTunnels.size >= CONFIG.max_concurrent_requests) {
-    ws.send(JSON.stringify({ type: 'tunnel_error', id, message: 'Client busy' }));
+    if (ws) ws.send(JSON.stringify({ type: 'tunnel_error', id, message: 'Client busy' }));
     return;
   }
 
@@ -615,7 +698,7 @@ function handleTunnelOpen(msg) {
   const timeout = setTimeout(() => {
     log('warn', `Tunnel ${id} timeout to ${host}:${port}`);
     socket.destroy();
-    ws.send(JSON.stringify({ type: 'tunnel_error', id, message: 'Connection timeout' }));
+    if (ws) ws.send(JSON.stringify({ type: 'tunnel_error', id, message: 'Connection timeout' }));
     activeTunnels.delete(id);
   }, CONFIG.tunnel_timeout);
 
@@ -623,40 +706,40 @@ function handleTunnelOpen(msg) {
     clearTimeout(timeout);
     log('info', `Tunnel ${id} established to ${host}:${port}`);
 
-    ws.send(JSON.stringify({ type: 'tunnel_ready', id }));
+    if (ws) ws.send(JSON.stringify({ type: 'tunnel_ready', id }));
 
-    socket.on('data', (data) => {
+    socket.on('data', (data: Buffer) => {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'tunnel_data', id, data: data.toString('base64') }));
       }
     });
   });
 
-  socket.on('error', (err) => {
+  socket.on('error', (err: Error) => {
     clearTimeout(timeout);
     log('error', `Tunnel ${id} error: ${err.message}`);
-    ws.send(JSON.stringify({ type: 'tunnel_error', id, message: err.message }));
+    if (ws) ws.send(JSON.stringify({ type: 'tunnel_error', id, message: err.message }));
     activeTunnels.delete(id);
   });
 
   socket.on('close', () => {
     clearTimeout(timeout);
     log('debug', `Tunnel ${id} closed`);
-    ws.send(JSON.stringify({ type: 'tunnel_close', id }));
+    if (ws) ws.send(JSON.stringify({ type: 'tunnel_close', id }));
     activeTunnels.delete(id);
   });
 
   activeTunnels.set(id, { socket, timeout });
 }
 
-function handleTunnelData(msg) {
+function handleTunnelData(msg: Extract<ServerMsg, { type: 'tunnel_data' }>) {
   const tunnel = activeTunnels.get(msg.id);
   if (!tunnel || tunnel.socket.destroyed) return;
   const data = Buffer.from(msg.data, 'base64');
   tunnel.socket.write(data);
 }
 
-function handleTunnelClose(msg) {
+function handleTunnelClose(msg: Extract<ServerMsg, { type: 'tunnel_close' }>) {
   const tunnel = activeTunnels.get(msg.id);
   if (tunnel) {
     clearTimeout(tunnel.timeout);
@@ -671,11 +754,22 @@ function handleTunnelClose(msg) {
 // Client sends the datagram to host:port and relays the response back.
 // =============================================================================
 
-// udpClients: assocId -> { socket: dgram.Socket, pending: Map<requestId, rinfo> }
-const udpClients = new Map();
+interface UdpAssoc {
+  socket: import('dgram').Socket;
+  pending: Map<string, { rinfo: { port: number; address: string }; time: number }>;
+  closeTimer: ReturnType<typeof setTimeout>;
+}
 
-function handleUdpData(msg) {
-  const { id, assocId, host, port, data, src } = msg;
+// udpClients: assocId -> UdpAssoc
+const udpClients = new Map<string, UdpAssoc>();
+
+function handleUdpData(msg: Extract<ServerMsg, { type: 'udp_data' }>) {
+  const id = msg.id;
+  const assocId = msg.assocId;
+  const host = msg.host;
+  const port = msg.port;
+  const data = msg.data;
+  const src = msg.src;
   if (!assocId || !host || !port) return;
   if (!data) return;
 
@@ -685,24 +779,27 @@ function handleUdpData(msg) {
     // Get or create the UDP socket for this association
     let udp = udpClients.get(assocId);
     if (!udp) {
-      const socket = dgram.createSocket('udp4');
-      udp = { socket, pending: new Map() };
+      const socket: UdpAssoc['socket'] = dgram.createSocket('udp4');
+      const pending: UdpAssoc['pending'] = new Map();
+      udp = { socket, pending, closeTimer: setTimeout(() => {}, 0) };
       udpClients.set(assocId, udp);
+      const assoc = udp; // fixed non-null reference for the callbacks below
 
-      socket.on('message', (respBuf, rinfo) => {
+      socket.on('message', (respBuf: Buffer, rinfo: { address: string; port: number }) => {
         // Find the pending request that matches this response (by source port)
-        let matchedId = null;
-        for (const [reqId, reqInfo] of udp.pending) {
+        let matchedId: string | null = null;
+        for (const [reqId, reqInfo] of assoc.pending) {
           if (reqInfo.rinfo && reqInfo.rinfo.port === rinfo.port) {
             matchedId = reqId;
             break;
           }
         }
         // If no exact match, send to the most recent request
-        if (!matchedId && udp.pending.size > 0) {
-          matchedId = [...udp.pending.keys()][udp.pending.size - 1];
+        if (!matchedId && assoc.pending.size > 0) {
+          const keys = [...assoc.pending.keys()];
+          matchedId = keys[keys.length - 1] ?? null;
         }
-        const reqInfo = matchedId ? udp.pending.get(matchedId) : null;
+        const reqInfo = matchedId ? assoc.pending.get(matchedId) : null;
         if (!reqInfo) return;
 
         // Relay response back to server (with original source address for routing)
@@ -718,7 +815,7 @@ function handleUdpData(msg) {
         }
       });
 
-      socket.on('error', (err) => {
+      socket.on('error', (err: Error) => {
         log('error', `UDP relay error: ${err.message}`);
         try { socket.close(); } catch (_) {}
         udpClients.delete(assocId);
@@ -729,25 +826,27 @@ function handleUdpData(msg) {
         try { socket.close(); } catch (_) {}
         udpClients.delete(assocId);
       }, 180000); // 3 min idle timeout
-      udp.closeTimer = closeTimer;
+      assoc.closeTimer = closeTimer;
       socket.on('close', () => clearTimeout(closeTimer));
     } else {
+      const existing = udp;
       // Reset idle timer
-      clearTimeout(udp.closeTimer);
-      udp.closeTimer = setTimeout(() => {
-        try { udp.socket.close(); } catch (_) {}
+      clearTimeout(existing.closeTimer);
+      existing.closeTimer = setTimeout(() => {
+        try { existing.socket.close(); } catch (_) {}
         udpClients.delete(assocId);
       }, 180000);
     }
 
+    const assoc = udp;
     // Remember request origin for response routing
-    udp.pending.set(id, { rinfo: { port: 0, address: '' }, time: Date.now() });
+    assoc.pending.set(id, { rinfo: { port: 0, address: '' }, time: Date.now() });
 
     // Send datagram (host may be a domain name - dgram handles DNS)
-    udp.socket.send(payload, port, host, (err) => {
+    assoc.socket.send(payload, port, host, (err: Error | null) => {
       if (err) {
         log('error', `UDP send error to ${host}:${port}: ${err.message}`);
-        udp.pending.delete(id);
+        assoc.pending.delete(id);
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'udp_data_response',
@@ -762,12 +861,12 @@ function handleUdpData(msg) {
     });
 
     // Limit pending entries
-    if (udp.pending.size > 200) {
-      const oldest = [...udp.pending.keys()][0];
-      udp.pending.delete(oldest);
+    if (assoc.pending.size > 200) {
+      const oldest = [...assoc.pending.keys()][0];
+      if (oldest !== undefined) assoc.pending.delete(oldest);
     }
   } catch (err) {
-    log('error', `UDP data error: ${err.message}`);
+    log('error', `UDP data error: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -778,18 +877,18 @@ function cleanupAll() {
   stopHeartbeat();
   currentClientId = null;
 
-  for (const [id, tunnel] of activeTunnels) {
+  for (const [, tunnel] of activeTunnels) {
     clearTimeout(tunnel.timeout);
     if (!tunnel.socket.destroyed) tunnel.socket.destroy();
   }
   activeTunnels.clear();
 
-  for (const [id, req] of activeRequests) {
+  for (const [, req] of activeRequests) {
     if (req.req) req.req.destroy();
   }
   activeRequests.clear();
 
-  for (const [assocId, udp] of udpClients) {
+  for (const [, udp] of udpClients) {
     clearTimeout(udp.closeTimer);
     try { udp.socket.close(); } catch (_) {}
   }
@@ -811,10 +910,10 @@ function shutdown() {
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
-process.on('uncaughtException', (err) => {
+process.on('uncaughtException', (err: Error) => {
   log('error', 'Uncaught exception: ' + (err.stack || err.message));
 });
-process.on('unhandledRejection', (reason) => {
+process.on('unhandledRejection', (reason: unknown) => {
   log('error', 'Unhandled rejection: ' + reason);
 });
 

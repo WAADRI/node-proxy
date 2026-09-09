@@ -1,7 +1,7 @@
 # =============================================================================
 # Node-Proxy Client - Dockerfile
 # =============================================================================
-FROM node:20-alpine
+FROM node:24-alpine
 
 WORKDIR /app
 
@@ -24,4 +24,4 @@ ENV NODE_ENV=production
 # Default: connect to local server (override via env)
 ENV SERVER_URL=ws://127.0.0.1:3000/ws
 
-ENTRYPOINT ["node", "client.js"]
+ENTRYPOINT ["node", "client.ts"]
