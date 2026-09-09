@@ -45,6 +45,20 @@ function asNumber(v: unknown): number {
   return typeof v === 'number' ? v : Number(v) || 0;
 }
 
+// Write to a proxied socket only while it is still open. After socket.end()
+// (or destroy) a late write - e.g. a tunnel timeout callback racing a client
+// disconnect, or a duplicate error reply - would emit 'write after end' on
+// the socket error handler and show up as noisy SOCKS5 socket errors.
+function safeWrite(socket: NetSocket | null | undefined, data: Buffer | string): boolean {
+  if (!socket || socket.destroyed || socket.writableEnded) return false;
+  try {
+    socket.write(data);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 export function setupClientWebSocket(
   httpServer: HttpServer,
   clientManager: ClientManager,
@@ -428,12 +442,12 @@ function handleTunnelReady(clientManager: ClientManager, stream: MuxStreamLike, 
 
   const { socket, head, type, client } = p;
 
-  if (socket && socket.write && !socket.destroyed) {
+  if (socket) {
     if (type === 'socks5') {
-      socket.write(encodeSocks5Reply(0x00));
+      safeWrite(socket, encodeSocks5Reply(0x00));
     } else {
-      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-      if (head && head.length > 0) socket.write(head);
+      safeWrite(socket, 'HTTP/1.1 200 Connection Established\r\n\r\n');
+      if (head && head.length > 0) safeWrite(socket, head as Buffer);
     }
   }
 
@@ -461,10 +475,8 @@ function handleTunnelReady(clientManager: ClientManager, stream: MuxStreamLike, 
   // Forward stream data back to the socket
   stream._onData = (chunk: Buffer) => {
     if (p._touchIdle) p._touchIdle();
-    if (socket && !socket.destroyed) {
-      socket.write(chunk);
-      clientManager.trackBytes(client?.id, 0, chunk.length);
-    }
+    safeWrite(socket, chunk);
+    clientManager.trackBytes(client?.id, 0, chunk.length);
   };
   stream._onEnd = () => {
     if (socket && !socket.destroyed) socket.end();
@@ -472,8 +484,12 @@ function handleTunnelReady(clientManager: ClientManager, stream: MuxStreamLike, 
   stream._onError = (_reason: string | number) => {
     if (socket && !socket.destroyed) {
       try {
-        if (p.type === 'socks5') socket.write(encodeSocks5Reply(0x01));
-        else socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+        // Only reply with failure when the success reply never went out
+        // (p.ready), otherwise a late error double-writes the socket.
+        if (!p.ready) {
+          if (p.type === 'socks5') safeWrite(socket, encodeSocks5Reply(0x01));
+          else socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+        }
         socket.end();
       } catch (_) {
         // ignore
@@ -497,7 +513,7 @@ function handleTunnelData(clientManager: ClientManager, stream: MuxStreamLike, _
   // Collect data from the stream
   stream._onData = (chunk: Buffer) => {
     if (p._touchIdle) p._touchIdle();
-    p.socket!.write(chunk);
+    safeWrite(p.socket, chunk);
     clientManager.trackBytes(p.client?.id, 0, chunk.length);
   };
 }
@@ -524,8 +540,12 @@ function handleTunnelError(clientManager: ClientManager, stream: MuxStreamLike, 
 
   if (p.socket && !p.socket.destroyed) {
     try {
-      if (p.type === 'socks5') p.socket.write(encodeSocks5Reply(0x01));
-      else p.socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+      // Only send the failure reply if the tunnel was never confirmed
+      // (p.ready), so an error racing a success cannot double-write.
+      if (!p.ready) {
+        if (p.type === 'socks5') safeWrite(p.socket, encodeSocks5Reply(0x01));
+        else p.socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+      }
       p.socket.end();
     } catch (_) {
       // ignore
@@ -625,12 +645,12 @@ function handleTunnelReadyLegacy(clientManager: ClientManager, msg: ClientMessag
   const { socket, head, type, client, startTime } = p;
   const duration = startTime ? Date.now() - startTime : 0;
 
-  if (socket && socket.write && !socket.destroyed) {
+  if (socket) {
     if (type === 'socks5') {
-      socket.write(encodeSocks5Reply(0x00));
+      safeWrite(socket, encodeSocks5Reply(0x00));
     } else {
-      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-      if (head && head.length > 0) socket.write(head);
+      safeWrite(socket, 'HTTP/1.1 200 Connection Established\r\n\r\n');
+      if (head && head.length > 0) safeWrite(socket, head as Buffer);
     }
   }
   clientManager.trackSuccess(client?.id);
@@ -670,7 +690,7 @@ function handleTunnelDataLegacy(clientManager: ClientManager, msg: ClientMessage
   if (!p || !p.socket || p.socket.destroyed) return;
   if (p._touchIdle) p._touchIdle();
   const data = Buffer.from(asString(msg.data), 'base64');
-  p.socket.write(data);
+  safeWrite(p.socket, data);
   clientManager.trackBytes(p.client?.id, 0, data.length);
 }
 
@@ -692,8 +712,12 @@ function handleTunnelErrorLegacy(clientManager: ClientManager, msg: ClientMessag
 
   if (p.socket && !p.socket.destroyed) {
     try {
-      if (p.type === 'socks5') p.socket.write(encodeSocks5Reply(0x01));
-      else p.socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+      // Only send the failure reply if the tunnel was never confirmed
+      // (p.ready), so an error racing a success cannot double-write.
+      if (!p.ready) {
+        if (p.type === 'socks5') safeWrite(p.socket, encodeSocks5Reply(0x01));
+        else p.socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+      }
       p.socket.end();
     } catch (_) {
       // ignore
