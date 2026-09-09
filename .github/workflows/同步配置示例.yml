@@ -5,7 +5,7 @@ on:
     paths:
       - 'server/lib/config.*'
       - 'client/lib/config-schema.*'
-      - 'client/client.js'
+      - 'client/client.ts'
       - 'server/scripts/**'
 
 concurrency:
@@ -27,12 +27,13 @@ jobs:
         with:
           node-version: 24
 
-      # The generator loads server/lib/config.js which needs js-yaml.
+      # The generator (TypeScript, run via Node 24 type-stripping) loads
+      # server/lib/config.ts and client/lib/config-schema.ts, which need js-yaml.
       - name: 安装依赖
         run: npm install --prefix server --no-audit --no-fund
 
       - name: 重新生成 config.yaml.example（server + client）
-        run: node server/scripts/gen-config-example.js
+        run: node server/scripts/gen-config-example.ts
 
       - name: 检查是否有变更
         id: diff
