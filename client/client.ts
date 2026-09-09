@@ -93,6 +93,7 @@ interface WsClient {
   ping(): void;
   terminate(): void;
   close(code?: number, reason?: string): void;
+  on(event: 'message', listener: (data: Buffer | string, isBinary: boolean) => void): unknown;
   on(event: string, listener: (...args: unknown[]) => void): unknown;
   mux?: MuxLike;
 }
@@ -234,9 +235,11 @@ function connect() {
     handleMuxStream(stream);
   });
 
-  sock.on('message', (raw: unknown) => {
-    // Binary frames are handled by StreamMux internally
-    if (Buffer.isBuffer(raw)) {
+  sock.on('message', (raw: unknown, isBinary: boolean) => {
+    // Binary frames are handled by StreamMux internally.
+    // NOTE: ws 8.x delivers text frames as Buffer with isBinary=false, so we
+    // must check the isBinary flag, NOT Buffer.isBuffer(), to distinguish them.
+    if (Buffer.isBuffer(raw) && isBinary) {
       return;
     }
 
