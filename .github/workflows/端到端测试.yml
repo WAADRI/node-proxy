@@ -1,0 +1,111 @@
+# =============================================================================
+# 端到端测试（issue #72）
+# 在 GitHub Actions 中启动主服务器代码 + 客户端代码，通过 HTTP/SOCKS5 代理
+# 随机请求若干网站验证整条数据链可用。作为 PR 合并检查项：
+#   Settings -> Branches -> main -> Require status checks to pass
+#   -> 勾选本工作流 job「端到端」。
+# =============================================================================
+name: 端到端测试
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+concurrency:
+  group: e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: 端到端
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: 安装依赖
+        run: |
+          npm ci --prefix server --no-audit --no-fund
+          npm ci --prefix client --no-audit --no-fund
+
+      # 主服务与客户端都在本 job 内后台启动；单 step 内完成等待注册与流量
+      # 验证，step 结束前用 trap 清理两个后台进程。
+      - name: 启动主服务 + 客户端并随机请求网站验证
+        run: |
+          set -euo pipefail
+
+          # --- 启动主服务器（默认 config.yaml：HTTP 代理 8080 / SOCKS5 1080 /
+          #     WS+面板 3000；auth.proxy.enabled=false => 代理免鉴权）-----------
+          (cd server && node server.ts > "$RUNNER_TEMP/node-proxy-server.log" 2>&1) &
+          echo $! > "$RUNNER_TEMP/server.pid"
+
+          # --- 启动客户端（令牌用默认值，与服务端 config.yaml 一致）----------
+          cat > "$RUNNER_TEMP/client-e2e.yaml" <<EOF
+          server_url: ws://127.0.0.1:3000/ws
+          auth_token: node-proxy-default-token
+          EOF
+          CONFIG_PATH="$RUNNER_TEMP/client-e2e.yaml" node client/client.ts > "$RUNNER_TEMP/node-proxy-client.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/client.pid"
+
+          cleanup() {
+            kill "$(cat "$RUNNER_TEMP/server.pid")" "$(cat "$RUNNER_TEMP/client.pid")" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          # --- 等待节点注册：经 HTTP 代理访问 example.com 直至返回 200 -------
+          code=""
+          for i in $(seq 1 90); do
+            code=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' -x http://127.0.0.1:8080 https://example.com/ 2>/dev/null || true)
+            if [ "$code" = "200" ]; then
+              echo "==> 节点已注册，代理就绪（第 ${i} 秒）"
+              break
+            fi
+            sleep 1
+          done
+          if [ "$code" != "200" ]; then
+            echo "==> 等待代理就绪超时，最后状态码: ${code:-无}"
+            echo "----- server.log (tail) -----"
+            tail -80 "$RUNNER_TEMP/node-proxy-server.log" || true
+            echo "----- client.log (tail) -----"
+            tail -80 "$RUNNER_TEMP/node-proxy-client.log" || true
+            exit 1
+          fi
+
+          # --- 随机抽 3 个目标站经 HTTP 代理验证 ------------------------------
+          SITES=(https://example.com https://www.iana.org/ https://www.cloudflare.com/ https://api.ipify.org http://example.net/)
+          picked=$(printf '%s\n' "${SITES[@]}" | shuf -n 3)
+          for url in $picked; do
+            code=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' -x http://127.0.0.1:8080 "$url" 2>/dev/null || true)
+            echo "==> HTTP  代理 -> $url = ${code:-无响应}"
+            case "$code" in
+              000|502|503|504|'')
+                echo "==> 失败：$url 返回 ${code:-无}（隧道/上游错误）"
+                echo "----- server.log (tail) -----"
+                tail -80 "$RUNNER_TEMP/node-proxy-server.log" || true
+                echo "----- client.log (tail) -----"
+                tail -80 "$RUNNER_TEMP/node-proxy-client.log" || true
+                exit 1
+                ;;
+            esac
+          done
+
+          # --- SOCKS5 路径验证（CONNECT over SOCKS5） --------------------------
+          code=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' -x socks5h://127.0.0.1:1080 https://example.com/ 2>/dev/null || true)
+          echo "==> SOCKS5 代理 -> https://example.com/ = ${code:-无响应}"
+          case "$code" in
+            000|502|503|504|'')
+              echo "==> 失败：SOCKS5 https://example.com/ 返回 ${code:-无}"
+              exit 1
+              ;;
+          esac
+
+          echo "==> 端到端验证通过"
