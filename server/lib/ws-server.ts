@@ -437,6 +437,13 @@ function handleTunnelReady(clientManager: ClientManager, stream: MuxStreamLike, 
   const p = clientManager.pendingTunnels.get(msgId);
   if (!p) return;
 
+  // Idempotence guard: a tunnel_ready must only be processed once. mux
+  // streams opened via openTunnel are dispatched through mux.onStream by the
+  // generic HEADERS handler in StreamMux._handleFrame; without this guard a
+  // duplicate delivery would write the SOCKS5 success reply twice, prefixing
+  // the tunnel data with 10 stale reply bytes.
+  if (p.ready) return;
+
   if (p.timeout) clearTimeout(p.timeout);
   p.timeout = null;
 
