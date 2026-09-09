@@ -3,12 +3,13 @@ rem ===========================================================================
 rem Node-Proxy Client - one-shot installer for Windows (issue #40)
 rem   * downloads the latest dev binary (client-win-x64.exe)
 rem   * installs it to %ProgramFiles%\node-proxy
-rem   * writes config.yaml (server_url / auth_token / region / tags)
+rem   * writes config.yaml (server_url / auth_token; region & tags are managed
+rem     from the server panel since issue #53)
 rem   * registers a Windows service via nssm: node-proxy-client
 rem
 rem Usage (run as Administrator):
 rem   docs\install.bat --server-url ws://1.2.3.4:3000/ws --token SECRET ^
-rem        [--client-id np-node-01] [--region cn] [--tags region:cn]
+rem        [--client-id np-node-01]
 rem   docs\install.bat --status | --restart | --uninstall
 rem
 rem Network: tries GitHub directly, then mirror prefixes, retrying each
@@ -27,8 +28,6 @@ set "SERVICE=node-proxy-client"
 set "SERVER_URL="
 set "TOKEN="
 set "CLIENT_ID="
-set "REGION="
-set "TAGS="
 set "ACTION=install"
 
 :parse
@@ -36,8 +35,6 @@ if "%~1"=="" goto parse_done
 if /i "%~1"=="--server-url" ( set "SERVER_URL=%~2" & shift & shift & goto parse )
 if /i "%~1"=="--token" ( set "TOKEN=%~2" & shift & shift & goto parse )
 if /i "%~1"=="--client-id" ( set "CLIENT_ID=%~2" & shift & shift & goto parse )
-if /i "%~1"=="--region" ( set "REGION=%~2" & shift & shift & goto parse )
-if /i "%~1"=="--tags" ( set "TAGS=%~2" & shift & shift & goto parse )
 if /i "%~1"=="--status" ( set "ACTION=status" & shift & goto parse )
 if /i "%~1"=="--restart" ( set "ACTION=restart" & shift & goto parse )
 if /i "%~1"=="--uninstall" ( set "ACTION=uninstall" & shift & goto parse )
@@ -45,7 +42,7 @@ if /i "%~1"=="-h" goto usage
 if /i "%~1"=="--help" goto usage
 echo Unknown argument: %~1
 :usage
-echo Usage: %~nx0 --server-url ws://host:3000/ws --token SECRET [--client-id ID] [--region X] [--tags X,Y]
+echo Usage: %~nx0 --server-url ws://host:3000/ws --token SECRET [--client-id ID]
 exit /b 1
 :parse_done
 
@@ -103,8 +100,6 @@ echo ==^> Writing config.yaml ...
 > "%INSTALL_DIR%\config.yaml" (
   echo server_url: %SERVER_URL%
   echo auth_token: %TOKEN%
-  if not "%REGION%"=="" echo region: %REGION%
-  if not "%TAGS%"=="" echo tags: %TAGS%
 )
 
 rem ---- nssm (service wrapper) ----

@@ -31,16 +31,12 @@ async function main(): Promise<void> {
   if (!serverUrl) { console.log('server_url 必填'); process.exit(1); }
   const authToken = (await q('认证令牌 (AUTH_TOKEN): ')).trim();
   if (!authToken) { console.log('auth_token 必填（与服务端一致）'); process.exit(1); }
-  const clientId = (await q('节点固定 ID (CLIENT_ID, 可选, 便于面板识别): ')).trim();
-  const region = (await q('区域标识 (REGION, 可选): ')).trim();
-  const tags = (await q('标签 (TAGS, 逗号分隔, 可选): ')).trim();
+  const clientId = (await q('节点固定 ID (CLIENT_ID, 可选, 便于面板识别; 不填则自动生成 UUID): ')).trim();
 
   const cfg: Record<string, string> = {
     server_url: serverUrl,
     auth_token: authToken,
   };
-  if (region) cfg.region = region;
-  if (tags) cfg.tags = tags;
 
   const target = process.env.CONFIG_PATH || path.join(process.cwd(), 'config.yaml');
   fs.writeFileSync(target, yaml.dump(cfg, { noRefs: true }));

@@ -3,12 +3,13 @@
 # Node-Proxy Client - one-shot installer for Linux (issue #40)
 #   * downloads the latest dev client binary (client-linux-x64 / -arm64)
 #   * installs it to /opt/node-proxy
-#   * writes config.yaml (server_url / auth_token / region / tags)
+#   * writes config.yaml (server_url / auth_token; region & tags are managed
+#     from the server panel since issue #53)
 #   * registers + starts a systemd service: node-proxy-client
 #
 # Usage:
 #   sudo bash docs/install.sh --server-url ws://1.2.3.4:3000/ws --token SECRET \
-#        [--client-id np-node-01] [--region cn] [--tags region:cn]
+#        [--client-id np-node-01]
 #   sudo bash docs/install.sh --status | --restart | --uninstall
 #
 # Network: tries GitHub directly, then several public GitHub mirror prefixes,
@@ -25,8 +26,6 @@ SERVICE="node-proxy-client"
 SERVER_URL=""
 TOKEN=""
 CLIENT_ID=""
-REGION=""
-TAGS=""
 ACTION="install"
 
 usage() {
@@ -39,8 +38,6 @@ while [[ $# -gt 0 ]]; do
     --server-url) SERVER_URL="${2:-}"; shift 2 ;;
     --token) TOKEN="${2:-}"; shift 2 ;;
     --client-id) CLIENT_ID="${2:-}"; shift 2 ;;
-    --region) REGION="${2:-}"; shift 2 ;;
-    --tags) TAGS="${2:-}"; shift 2 ;;
     --status) ACTION="status"; shift ;;
     --restart) ACTION="restart"; shift ;;
     --uninstall) ACTION="uninstall"; shift ;;
@@ -132,8 +129,6 @@ echo "==> 写入 config.yaml ..."
 cat > "${INSTALL_DIR}/config.yaml" <<EOF
 server_url: ${SERVER_URL}
 auth_token: ${TOKEN}
-$( [[ -n "$REGION" ]] && echo "region: ${REGION}" )
-$( [[ -n "$TAGS" ]] && echo "tags: ${TAGS}" )
 EOF
 
 echo "==> 注册 systemd 服务 ${SERVICE} ..."
