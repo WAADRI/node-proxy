@@ -8,7 +8,7 @@
 import type { Server as HttpServer, OutgoingHttpHeaders } from 'http';
 import type { Socket as NetSocket } from 'net';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
-import { StreamMux, type MuxStreamLike } from './stream-mux.js';
+import { StreamMux, type MuxStreamLike } from './stream-mux.ts';
 import type { ClientManager, ClientInfo, PendingRecord } from './client-manager.ts';
 import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
@@ -258,7 +258,7 @@ export function setupClientWebSocket(
 
 function handleClientResponse(clientManager: ClientManager, stream: MuxStreamLike, _logger: AppLogger) {
   const headers = asRecord(stream.headers);
-  const msgId = asString(headers.id) || stream.id;
+  const msgId = asString(headers.id) || String(stream.id);
 
   const p = clientManager.pendingRequests.get(msgId);
   if (!p) return;
@@ -352,7 +352,7 @@ function handleClientResponse(clientManager: ClientManager, stream: MuxStreamLik
       }
       if (body.length > 0) clientManager.trackBytes(recClientId, 0, body.length);
     };
-    stream._onError = (reason: string) => {
+    stream._onError = (reason: string | number) => {
       if (!res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'text/plain' });
         res.end('Proxy error: ' + reason);
@@ -418,7 +418,7 @@ function armTunnelIdle(clientManager: ClientManager, p: PendingRecord, socket: N
 
 function handleTunnelReady(clientManager: ClientManager, stream: MuxStreamLike, _logger: AppLogger) {
   const headers = asRecord(stream.headers);
-  const msgId = asString(headers.id) || stream.id;
+  const msgId = asString(headers.id) || String(stream.id);
 
   const p = clientManager.pendingTunnels.get(msgId);
   if (!p) return;
@@ -469,7 +469,7 @@ function handleTunnelReady(clientManager: ClientManager, stream: MuxStreamLike, 
   stream._onEnd = () => {
     if (socket && !socket.destroyed) socket.end();
   };
-  stream._onError = (_reason: string) => {
+  stream._onError = (_reason: string | number) => {
     if (socket && !socket.destroyed) {
       try {
         if (p.type === 'socks5') socket.write(encodeSocks5Reply(0x01));
@@ -489,7 +489,7 @@ function handleTunnelReady(clientManager: ClientManager, stream: MuxStreamLike, 
 
 function handleTunnelData(clientManager: ClientManager, stream: MuxStreamLike, _logger: AppLogger) {
   const headers = asRecord(stream.headers);
-  const msgId = asString(headers.id) || stream.id;
+  const msgId = asString(headers.id) || String(stream.id);
 
   const p = clientManager.pendingTunnels.get(msgId);
   if (!p || !p.socket || p.socket.destroyed) return;
@@ -504,7 +504,7 @@ function handleTunnelData(clientManager: ClientManager, stream: MuxStreamLike, _
 
 function handleTunnelClose(clientManager: ClientManager, stream: MuxStreamLike, _logger: AppLogger) {
   const headers = asRecord(stream.headers);
-  const msgId = asString(headers.id) || stream.id;
+  const msgId = asString(headers.id) || String(stream.id);
 
   const p = clientManager.pendingTunnels.get(msgId);
   if (!p) return;
@@ -516,7 +516,7 @@ function handleTunnelClose(clientManager: ClientManager, stream: MuxStreamLike, 
 
 function handleTunnelError(clientManager: ClientManager, stream: MuxStreamLike, _logger: AppLogger) {
   const headers = asRecord(stream.headers);
-  const msgId = asString(headers.id) || stream.id;
+  const msgId = asString(headers.id) || String(stream.id);
 
   const p = clientManager.pendingTunnels.get(msgId);
   if (!p) return;
