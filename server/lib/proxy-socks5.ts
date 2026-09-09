@@ -441,11 +441,15 @@ function handleUDPAssociate(
       port = msg[5 + nameLen] * 256 + msg[5 + nameLen + 1];
       dataStart = 7 + nameLen;
     } else if (msgAtyp === 0x04) {
-      // IPv6
+      // IPv6: 16 bytes at msg[4..19] -> 8 x 16-bit words (same formatting as
+      // the CONNECT path; a per-byte expansion is not valid IPv6 text)
       if (msg.length < 22) return;
-      host = Array.from(msg.slice(4, 20))
-        .map((n) => n.toString(16).padStart(2, '0'))
-        .join(':');
+      const ipv6 = msg.slice(4, 20);
+      const groups: string[] = [];
+      for (let i = 0; i < 16; i += 2) {
+        groups.push(ipv6.readUInt16BE(i).toString(16));
+      }
+      host = groups.join(':');
       port = msg[20] * 256 + msg[21];
       dataStart = 22;
     } else {
