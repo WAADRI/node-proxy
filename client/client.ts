@@ -549,16 +549,29 @@ function handleMuxTunnel(stream: MuxStreamLike, headers: MuxStreamHeaders) {
 
   const socket = new net.Socket();
 
+  // Distinguish connect-phase failures from errors on an established tunnel:
+  // only the former should be reported as tunnel_error — a mid-stream reset
+  // (e.g. ECONNRESET from the target) is normal teardown and the tunnel has
+  // already reported tunnel_ready, so the server would only treat it as noise.
+  let established = false;
+  let reported = false;
+  const failTunnel = (message: string, code?: string) => {
+    if (reported) return;
+    reported = true;
+    stream.sendHeaders({ type: 'tunnel_error', id: tunnelId, message, code: code || '' });
+    stream.close();
+    activeTunnels.delete(tunnelId);
+  };
+
   const timeout = setTimeout(() => {
     log('warn', `Tunnel ${tunnelId} timeout to ${host}:${port}`);
     socket.destroy();
-    stream.sendHeaders({ type: 'tunnel_error', id: tunnelId, message: 'Connection timeout' });
-    stream.close();
-    activeTunnels.delete(tunnelId);
+    failTunnel('Connection timeout', 'ETIMEDOUT');
   }, CONFIG.tunnel_timeout);
 
   socket.connect(port, host, () => {
     clearTimeout(timeout);
+    established = true;
     log('info', `Tunnel ${tunnelId} established to ${host}:${port}`);
 
     stream.sendHeaders({ type: 'tunnel_ready', id: tunnelId });
@@ -570,12 +583,20 @@ function handleMuxTunnel(stream: MuxStreamLike, headers: MuxStreamHeaders) {
     });
   });
 
-  socket.on('error', (err: Error) => {
+  socket.on('error', (err: NodeJS.ErrnoException) => {
     clearTimeout(timeout);
-    log('error', `Tunnel ${tunnelId} error: ${err.message}`);
-    stream.sendHeaders({ type: 'tunnel_error', id: tunnelId, message: err.message });
-    stream.close();
-    activeTunnels.delete(tunnelId);
+    if (!established) {
+      // Connect-phase failure: report so the server can reply to the
+      // SOCKS5/HTTP client promptly instead of waiting for its timeout.
+      log('error', `Tunnel ${tunnelId} failed to ${host}:${port}: ${err.message}`);
+      failTunnel(err.message, err.code || '');
+      return;
+    }
+    // Established tunnel errored mid-stream (target reset, idle close, ...):
+    // normal teardown. Tear the socket down; the 'close' handler reports
+    // tunnel_close / END_STREAM. Do NOT send tunnel_error here.
+    log('debug', `Tunnel ${tunnelId} error after established: ${err.message}`);
+    if (!socket.destroyed) socket.destroy();
   });
 
   socket.on('close', () => {
@@ -698,15 +719,25 @@ function handleTunnelOpen(msg: Extract<ServerMsg, { type: 'tunnel_open' }>) {
 
   const socket = new net.Socket();
 
+  // Same semantics as the mux path: only connect-phase failures raise
+  // tunnel_error; an error on an established tunnel is normal teardown.
+  let established = false;
+  const failTunnel = (message: string) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'tunnel_error', id, message }));
+    }
+    if (!socket.destroyed) socket.destroy();
+    activeTunnels.delete(id);
+  };
+
   const timeout = setTimeout(() => {
     log('warn', `Tunnel ${id} timeout to ${host}:${port}`);
-    socket.destroy();
-    if (ws) ws.send(JSON.stringify({ type: 'tunnel_error', id, message: 'Connection timeout' }));
-    activeTunnels.delete(id);
+    failTunnel('Connection timeout');
   }, CONFIG.tunnel_timeout);
 
   socket.connect(port, host, () => {
     clearTimeout(timeout);
+    established = true;
     log('info', `Tunnel ${id} established to ${host}:${port}`);
 
     if (ws) ws.send(JSON.stringify({ type: 'tunnel_ready', id }));
@@ -720,9 +751,13 @@ function handleTunnelOpen(msg: Extract<ServerMsg, { type: 'tunnel_open' }>) {
 
   socket.on('error', (err: Error) => {
     clearTimeout(timeout);
-    log('error', `Tunnel ${id} error: ${err.message}`);
-    if (ws) ws.send(JSON.stringify({ type: 'tunnel_error', id, message: err.message }));
-    activeTunnels.delete(id);
+    if (!established) {
+      log('error', `Tunnel ${id} failed to ${host}:${port}: ${err.message}`);
+      failTunnel(err.message);
+      return;
+    }
+    log('debug', `Tunnel ${id} error after established: ${err.message}`);
+    if (!socket.destroyed) socket.destroy();
   });
 
   socket.on('close', () => {
