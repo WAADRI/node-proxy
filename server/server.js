@@ -45,7 +45,7 @@ const { setupClientWebSocket } = require('./lib/ws-server.ts');
 const { loadTLSCredentials } = require('./lib/tls');
 const { SettingsManager } = require('./lib/settings');
 const { LogHub } = require('./lib/log-hub');
-const { NetworkTestManager } = require('./lib/network-test');
+const { NetworkTestManager } = require('./lib/network-test.ts');
 
 // Initialize auth
 const authManager = new AuthManager(config, logger);
