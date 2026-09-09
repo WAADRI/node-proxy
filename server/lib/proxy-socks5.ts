@@ -283,7 +283,7 @@ function handleTCPConnect(
       return;
     }
 
-    tunnelId = stream.id;
+    tunnelId = String(stream.id);
     client.pendingTunnels.add(tunnelId);
 
     currentTimeout = setTimeout(() => {
