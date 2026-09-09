@@ -1,8 +1,9 @@
 // =============================================================================
 // Swagger - OpenAPI documentation for the proxy API
 // Migrated to TypeScript (issue #42, Phase 2). CJS-style: values are exported
-// via module.exports only; no import/export statements, so Node 24 type
-// stripping keeps this file CommonJS.
+// via module.exports only; the type-only export below makes TypeScript treat
+// this as a module (eliminating global-scope collisions).
+export type {};
 interface SwaggerRes {
   json(value: unknown): void;
   send(value: string): void;

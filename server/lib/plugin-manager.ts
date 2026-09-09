@@ -110,8 +110,8 @@ class PluginManager {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     let count = 0;
     for (const entry of entries) {
-      if (entry.isFile() && (entry.name.endsWith('.js') || entry.name.endsWith('.mjs'))) {
-        const name = entry.name.replace(/\.(js|mjs)$/, '');
+      if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.mts') || entry.name.endsWith('.js') || entry.name.endsWith('.mjs'))) {
+        const name = entry.name.replace(/\.(ts|mts|js|mjs)$/, '');
         try {
           this._loadPlugin(name, path.join(dir, entry.name));
           count++;
@@ -161,10 +161,12 @@ class PluginManager {
     // source could be a file path, npm package name, or URL
     if (this.plugins.has(name)) return { success: false, error: 'Plugin already installed' };
 
-    const filePath = path.resolve(this.pluginDir, `${name}.js`);
+    const ext = (fs.existsSync(source) ? path.extname(source) : '.ts') as '.ts' | '.mts' | '.js' | '.mjs';
+    const filePath = path.resolve(this.pluginDir, `${name}${ext}`);
     try {
       // If source is a file path, copy it
       if (fs.existsSync(source)) {
+        // Copy preserving source extension (already handled via ext derivation above)
         fs.copyFileSync(source, filePath);
       } else {
         // Write source as the plugin content

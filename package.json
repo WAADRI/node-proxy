@@ -6,7 +6,7 @@
   "scripts": {
     "typecheck": "tsc -p server/tsconfig.json && tsc -p client/tsconfig.json",
     "lint": "eslint --no-error-on-unmatched-pattern \"server/**/*.ts\" \"client/**/*.ts\"",
-    "openapi:validate": "node server/scripts/export-openapi.js && redocly lint --extends=minimal server/openapi/generated.json && node server/scripts/check-openapi-routes.js && node -e \"require('fs').rmSync('server/openapi/generated.json',{force:true})\""
+    "openapi:validate": "node server/scripts/export-openapi.ts && redocly lint --extends=minimal server/openapi/generated.json && node server/scripts/check-openapi-routes.ts && node -e \"require('fs').rmSync('server/openapi/generated.json',{force:true})\""
   },
   "devDependencies": {
     "@redocly/cli": "^1.16.0",

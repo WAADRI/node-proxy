@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // =============================================================================
 // OpenAPI consistency check (issue #42, Phase 1)
 // Ensures the runtime spec in server/lib/swagger.ts covers every JSON API route
@@ -12,7 +13,14 @@
 // HTML page, /app assets, swagger meta endpoints, prometheus /metrics which is
 // documented separately as text/plain under the root server).
 // =============================================================================
+// Migrated to TypeScript (issue #42, Phase 2). CJS-style: values are exported
+// via module.exports only; the type-only export below makes TypeScript treat
+// this as a module (eliminating global-scope collisions).
+// =============================================================================
 'use strict';
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+export type {};
 
 const fs = require('fs');
 const path = require('path');
@@ -36,11 +44,11 @@ const EXCLUDE = [
 
 const MOUNT_PREFIXES = ['/api/v1', '/api'];
 
-function collectRoutes(file) {
+function collectRoutes(file: string): Set<string> {
   const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
   const re = /\b(?:app|api|router)\.(get|post|put|patch|delete|all|use)\(\s*(['"`])(\/[^'"`]*)\2/g;
-  const routes = new Set();
-  let m;
+  const routes = new Set<string>();
+  let m: RegExpExecArray | null;
   while ((m = re.exec(src)) !== null) {
     const method = m[1].toUpperCase();
     let p = m[3];
@@ -50,17 +58,18 @@ function collectRoutes(file) {
         break;
       }
     }
-    p = p.replace(/:[A-Za-z0-9_]+/g, (x) => `{${x.slice(1)}}`);
+    p = p.replace(/:[A-Za-z0-9_]+/g, (x: string) => `{${x.slice(1)}}`);
     if (EXCLUDE.some(([em, ep]) => em === method && (ep === p || ep.endsWith('*') && p.startsWith(ep.slice(0, -1))))) continue;
     routes.add(`${method} ${p}`);
   }
   return routes;
 }
 
-function collectSpec() {
+function collectSpec(): Set<string> {
   const { swaggerSpec } = require('../lib/swagger.ts');
-  const out = new Set();
-  for (const [p, item] of Object.entries(swaggerSpec.paths || {})) {
+  const out = new Set<string>();
+  const paths = (swaggerSpec.paths || {}) as Record<string, Record<string, unknown>>;
+  for (const [p, item] of Object.entries(paths)) {
     for (const method of Object.keys(item)) {
       out.add(`${method.toUpperCase()} ${p}`);
     }
@@ -68,8 +77,8 @@ function collectSpec() {
   return out;
 }
 
-function main() {
-  const impl = new Set();
+function main(): void {
+  const impl = new Set<string>();
   for (const f of SOURCES) for (const r of collectRoutes(f)) impl.add(r);
   const spec = collectSpec();
 
