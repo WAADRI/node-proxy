@@ -3,8 +3,26 @@
 // =============================================================================
 // Node-Proxy Server v3.0 - Main Entry Point
 // Phase 3: Multi-user RBAC, Domain router, Cache, Swagger, Plugin, ACME
+// Migrated to TypeScript (issue #42, Phase 2). CJS-style TS on purpose: Node
+// type stripping loads this file as CommonJS and runs it exactly like the old
+// server.js; this file has no module.exports (single-entry assembly script),
+// and all `require('./lib/*.ts')` callers resolve at runtime unchanged.
 // =============================================================================
 'use strict';
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+
+// The type-only import below is erased by Node's type stripping (no ESM at
+// runtime) but keeps this file a TypeScript module, so its top-level names do
+// not collide with the global-script scope of still-require-only sibling files.
+import type { IncomingMessage } from 'http';
+
+// Minimal structural type for the `ws` sockets wired up here (the ws package
+// is still plain JS via require('ws')); covers only the members touched below.
+interface WebSocketLike {
+  send(data: string): void;
+  on(event: string, listener: (...args: unknown[]) => void): void;
+}
 
 const http = require('http');
 const https = require('https');
@@ -85,8 +103,8 @@ clientManager.netTest = new NetworkTestManager(logger);
 clientManager.netTest.listClientIds = () => Array.from(clientManager.clients.keys());
 // Issue #31: the node column intentionally shows the CLIENT_ID (stable id the
 // operator configures on the node), not hostname/alias.
-clientManager.netTest.getClientLabel = (id) => id;
-clientManager.netTest.sendToClient = (clientId, obj) => {
+clientManager.netTest.getClientLabel = (id: string) => id;
+clientManager.netTest.sendToClient = (clientId: string, obj: unknown) => {
   const c = clientManager.getById(clientId);
   if (c && c.ws && c.ws.readyState === 1) {
     try {
@@ -98,7 +116,7 @@ clientManager.netTest.sendToClient = (clientId, obj) => {
 };
 // If a running node test loses its node, mark the missing targets failed.
 clientManager.onChange(() => {
-  clientManager.netTest.onClientsChanged((id) => !!clientManager.getById(id));
+  clientManager.netTest.onClientsChanged((id: string) => !!clientManager.getById(id));
 });
 
 // Load persisted routing strategy & other runtime settings.
@@ -121,7 +139,7 @@ const clientWss = setupClientWebSocket(httpServer, clientManager, authManager, c
 const { WebSocketServer } = require('ws');
 const webWss = new WebSocketServer({ noServer: true });
 
-webWss.on('connection', (ws) => {
+webWss.on('connection', (ws: WebSocketLike) => {
   try {
     ws.send(JSON.stringify({ type: 'status', data: clientManager.getStats() }));
   } catch (_) {}
@@ -134,7 +152,7 @@ webWss.on('connection', (ws) => {
   clientManager.onChange(onChange);
 
   // Push new request log entries to the panel in real time
-  const offLog = clientManager.requestLog.onChange((entry) => {
+  const offLog = clientManager.requestLog.onChange((entry: unknown) => {
     try {
       ws.send(JSON.stringify({ type: 'log', data: entry }));
     } catch (_) {}
@@ -148,13 +166,13 @@ webWss.on('connection', (ws) => {
 });
 
 // Handle HTTP upgrade for WebSocket
-httpServer.on('upgrade', (request, socket, head) => {
+httpServer.on('upgrade', (request: IncomingMessage, socket: import('stream').Duplex, head: Buffer) => {
   // The upgrade socket is no longer error-managed by the http server; a peer
   // reset here must not surface as an uncaught exception.
   socket.on('error', () => {});
-  const urlObj = url.parse(request.url);
+  const urlObj = url.parse(request.url as string);
   if (urlObj.pathname === '/ws') {
-    clientWss.handleUpgrade(request, socket, head, (ws) => {
+    clientWss.handleUpgrade(request, socket, head, (ws: WebSocketLike) => {
       clientWss.emit('connection', ws, request);
     });
   } else if (urlObj.pathname === '/web-ws') {
@@ -162,14 +180,14 @@ httpServer.on('upgrade', (request, socket, head) => {
     if (token) {
       const result = authManager.verifyWebToken(token);
       if (result.valid) {
-        webWss.handleUpgrade(request, socket, head, (ws) => {
+        webWss.handleUpgrade(request, socket, head, (ws: WebSocketLike) => {
           webWss.emit('connection', ws, request);
         });
         return;
       }
     }
     if (!config.auth.web.enabled) {
-      webWss.handleUpgrade(request, socket, head, (ws) => {
+      webWss.handleUpgrade(request, socket, head, (ws: WebSocketLike) => {
         webWss.emit('connection', ws, request);
       });
       return;
@@ -180,9 +198,9 @@ httpServer.on('upgrade', (request, socket, head) => {
   }
 });
 
-function extractToken(req) {
-  const urlObj = url.parse(req.url, true);
-  if (urlObj.query && urlObj.query.token) return urlObj.query.token;
+function extractToken(req: IncomingMessage): string | null {
+  const urlObj = url.parse(req.url as string, true);
+  if (urlObj.query && urlObj.query.token) return urlObj.query.token as string;
   const auth = req.headers['authorization'];
   if (auth && auth.startsWith('Bearer ')) return auth.slice(7);
   const cookie = req.headers['cookie'];
@@ -220,7 +238,7 @@ const tlsCreds = loadTLSCredentials(config);
 
 if (tlsCreds) {
   const httpsServer = https.createServer(tlsCreds, app);
-  httpsServer.on('upgrade', (request, socket, head) => {
+  httpsServer.on('upgrade', (request: IncomingMessage, socket: import('stream').Duplex, head: Buffer) => {
     httpServer.emit('upgrade', request, socket, head);
   });
   httpsServer.listen(config.server.web_port, isIPv6Only ? '::' : listenHost, () => {
@@ -255,9 +273,13 @@ setTimeout(() => {
   const authStatus = config.auth.proxy.enabled ? 'enabled' : 'disabled';
   const tlsStatus = tlsCreds ? 'enabled' : 'disabled';
   const webAuthStatus = config.auth.web.enabled ? 'enabled' : 'disabled';
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- `storageStatus` kept verbatim from the original JS (unused there too)
   const storageStatus = storage.available ? 'enabled' : 'disabled';
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- `metricsStatus` kept verbatim from the original JS (unused there too)
   const metricsStatus = metricsManager.enabled ? 'enabled' : 'disabled';
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- `cbStatus` kept verbatim from the original JS (unused there too)
   const cbStatus = 'enabled';
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- `bwStatus` kept verbatim from the original JS (unused there too)
   const bwStatus = config.bandwidth?.enabled ? 'enabled' : 'disabled';
   const pluginCount = pluginManager.list().length;
   const ruleCount = domainRouter.listRules().length;
@@ -301,10 +323,10 @@ setTimeout(() => {
 // =============================================================================
 // Graceful Shutdown
 // =============================================================================
-function shutdown(signal) {
+function shutdown(signal: string) {
   logger.info({ signal }, 'Shutting down...');
   clientManager.stopHealthChecks();
-  for (const [id, client] of clientManager.clients) {
+  for (const [id, client] of clientManager.clients) { // eslint-disable-line @typescript-eslint/no-unused-vars -- `id` kept verbatim from the original JS (unused there too)
     try { client.ws.close(1001, 'Server shutting down'); } catch (_) {}
   }
   storage.close();
@@ -324,8 +346,9 @@ process.on('uncaughtException', (err) => {
   // take down the whole proxy: log and continue. Everything else is still
   // fatal so we can restart cleanly instead of running in a broken state.
   const transient = ['ECONNRESET', 'EPIPE', 'ECONNABORTED', 'ETIMEDOUT', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND'];
-  if (err && err.code && transient.includes(err.code)) {
-    logger.warn({ error: err.stack, code: err.code }, 'Transient network error ignored');
+  const errno = err as NodeJS.ErrnoException;
+  if (errno.code && transient.includes(errno.code)) {
+    logger.warn({ error: err.stack, code: errno.code }, 'Transient network error ignored');
     return;
   }
   logger.fatal({ error: err.stack }, 'Uncaught exception');
@@ -334,4 +357,3 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   logger.error({ error: reason }, 'Unhandled rejection');
 });
-

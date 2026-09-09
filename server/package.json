@@ -2,10 +2,10 @@
   "name": "node-proxy-server",
   "version": "2.1.0",
   "description": "Node-Proxy Server - Distributed IP proxy with circuit breaker, routing strategies, bandwidth limiting, Prometheus metrics, SQLite persistence",
-  "main": "server.js",
+  "main": "server.ts",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js --logging-pretty",
+    "start": "node server.ts",
+    "dev": "node --watch server.ts --logging-pretty",
     "test": "node --test test/",
     "gen-cert": "node lib/tls.ts --generate",
     "docker:build": "docker build -t node-proxy-server .",
