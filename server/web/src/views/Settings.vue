@@ -1,10 +1,17 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
-import { NButton, NInputNumber, NSwitch, NTag, useMessage } from 'naive-ui';
+import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag, useMessage } from 'naive-ui';
 import AppIcon from '../components/AppIcon.vue';
 import ConfirmDialog from '../components/ConfirmDialog.vue';
 import { fetchSettings, saveSettingsGroup, resetSettingsGroup } from '../api';
-import { requestStatus } from '../store';
+import {
+  fetchProxyPasswords,
+  createProxyPassword,
+  updateProxyPassword,
+  deleteProxyPassword,
+  regenerateProxyPassword,
+} from '../api';
+import { requestStatus, store } from '../store';
 
 const message = useMessage();
 
@@ -44,6 +51,8 @@ function load() {
     .finally(() => {
       loading.value = false;
     });
+  requestStatus().catch(() => {});
+  refreshPasswords();
 }
 
 // --- numeric field model (bound to runtime values once loaded) ---------------
@@ -163,6 +172,167 @@ function doReset() {
     })
     .catch((err) => message.error('恢复失败: ' + err.message));
 }
+
+// ===========================================================================
+// Multi proxy passwords (issue #53)
+// ===========================================================================
+const pwLoading = ref(false);
+const pwDenied = ref(false);
+const pwRows = ref([]); // entries + a derived mode/target for the selects
+const pwDefaultUser = ref('');
+
+const STRATEGY_OPTIONS = Object.keys(STRATEGY_LABELS).map((s) => ({
+  label: STRATEGY_LABELS[s],
+  value: s,
+}));
+
+// Routing options: default pool, tag/group pools, or a specific node UUID.
+const pwRouteOptions = computed(() => {
+  const out = [{ label: '默认池（全局路由策略）', value: 'none' }];
+  const seenTags = new Set();
+  const seenGroups = new Set();
+  const nodes = (store.status && store.status.clients) || [];
+  for (const c of nodes) {
+    for (const t of c.tags || []) {
+      if (t && !seenTags.has(t)) {
+        seenTags.add(t);
+        out.push({ label: '标签：' + t, value: 'tag:' + t });
+      }
+    }
+    if (c.group && !seenGroups.has(c.group)) {
+      seenGroups.add(c.group);
+      out.push({ label: '分组：' + c.group, value: 'tag:' + c.group });
+    }
+  }
+  for (const c of nodes) {
+    const label = c.alias || (c.info && c.info.hostname) || c.id;
+    out.push({
+      label: '节点：' + label + (c.alias || (c.info && c.info.hostname) ? ' (' + c.id.substring(0, 8) + '…)' : ''),
+      value: 'node:' + c.id,
+    });
+  }
+  return out;
+});
+
+function rowToMode(row) {
+  if (row.clientId) return { mode: 'node', target: 'node:' + row.clientId };
+  if (row.tag) return { mode: 'tag', target: 'tag:' + row.tag };
+  return { mode: 'none', target: 'none' };
+}
+
+function refreshPasswords() {
+  pwLoading.value = true;
+  fetchProxyPasswords()
+    .then((d) => {
+      pwDenied.value = false;
+      pwDefaultUser.value = (d.defaultPool && d.defaultPool.username) || '';
+      pwRows.value = (d.passwords || []).map((e) => {
+        const m = rowToMode(e);
+        return { ...e, _mode: m.mode, _target: m.target };
+      });
+    })
+    .catch((err) => {
+      pwDenied.value = true;
+      if (err.message && err.message.indexOf('Permission') === -1) {
+        message.error('加载代理密码失败: ' + err.message);
+      }
+    })
+    .finally(() => {
+      pwLoading.value = false;
+    });
+}
+
+// Add-password form
+const addOpen = ref(false);
+const addForm = ref({ label: '', strategy: null, _target: 'none', enabled: true });
+function addRow() {
+  addOpen.value = true;
+  addForm.value = { label: '', strategy: null, _target: 'none', enabled: true };
+}
+function createRow() {
+  const f = addForm.value;
+  const payload = { label: f.label.trim(), strategy: f.strategy, enabled: f.enabled !== false };
+  if (String(f._target).startsWith('tag:')) payload.tag = String(f._target).slice(4);
+  else if (String(f._target).startsWith('node:')) payload.clientId = String(f._target).slice(5);
+  createProxyPassword(payload)
+    .then((d) => {
+      if (!d.success) throw new Error(d.message || '创建失败');
+      message.success('已创建（新密码自动生成）');
+      addOpen.value = false;
+      refreshPasswords();
+      requestStatus().catch(() => {});
+    })
+    .catch((err) => message.error('创建失败: ' + err.message));
+}
+
+function commitRow(row, patch) {
+  updateProxyPassword(row.id, patch)
+    .then((d) => {
+      if (!d.success) throw new Error(d.message || '更新失败');
+      refreshPasswords();
+    })
+    .catch((err) => message.error('更新失败: ' + err.message));
+}
+
+function onChangeTarget(row, value) {
+  row._target = value;
+  const patch = { tag: null, clientId: null };
+  if (String(value).startsWith('tag:')) patch.tag = String(value).slice(4);
+  else if (String(value).startsWith('node:')) patch.clientId = String(value).slice(5);
+  commitRow(row, patch);
+}
+function onChangeStrategy(row, value) {
+  row.strategy = value;
+  commitRow(row, { strategy: value });
+}
+function onToggleEnabled(row, checked) {
+  row.enabled = checked;
+  commitRow(row, { enabled: checked });
+}
+
+function copyPassword(text) {
+  if (navigator.clipboard) {
+    navigator.clipboard
+      .writeText(text)
+      .then(() => message.success('已复制'))
+      .catch(() => message.error('复制失败'));
+  }
+}
+
+function regenRow(row) {
+  regenerateProxyPassword(row.id)
+    .then((d) => {
+      if (!d.success) throw new Error(d.message || '重新生成失败');
+      message.success('已生成新密码');
+      refreshPasswords();
+    })
+    .catch((err) => message.error('重新生成失败: ' + err.message));
+}
+
+const pwDeleteTarget = ref(null);
+const pwDeleteVisible = ref(false);
+function askDeleteRow(row) {
+  pwDeleteTarget.value = row;
+  pwDeleteVisible.value = true;
+}
+function doDeleteRow() {
+  const row = pwDeleteTarget.value;
+  pwDeleteVisible.value = false;
+  pwDeleteTarget.value = null;
+  if (!row) return;
+  deleteProxyPassword(row.id)
+    .then((d) => {
+      if (!d.success) throw new Error(d.message || '删除失败');
+      message.success('已删除');
+      refreshPasswords();
+    })
+    .catch((err) => message.error('删除失败: ' + err.message));
+}
+
+const pwUsage = computed(() => {
+  if (!pwDefaultUser.value) return '';
+  return 'HTTP: curl -x http://任意用户名:<密码>@服务器:8080 https://目标/  |  SOCKS5: curl -x socks5h://任意用户名:<密码>@服务器:1080 https://目标/';
+});
 </script>
 
 <template>
@@ -314,6 +484,64 @@ function doReset() {
       </div>
     </div>
 
+    <!-- Proxy passwords (multi-password routing, issue #53) -->
+    <div class="s-group">
+      <div class="s-group-head">
+        <h3>代理密码（分流）</h3>
+        <NTag size="small" :bordered="false" type="info">即时生效</NTag>
+      </div>
+
+      <div v-if="pwDenied" class="s-no-perm">无权限查看或管理代理密码</div>
+
+      <template v-else>
+        <p class="pw-hint">额外密码只校验密码本身（用户名可任意）。可将流量分流到标签/分组节点池（池内用所选策略），或直接指定某节点。</p>
+
+        <div v-if="!addOpen" class="pw-toolbar">
+          <NButton size="small" type="primary" @click="addRow">+ 生成新密码</NButton>
+        </div>
+        <div v-else class="pw-add">
+          <div class="s-form pw-add-field">
+            <label>备注</label>
+            <NInput v-model:value="addForm.label" placeholder="如：爬虫A" style="width: 150px" />
+          </div>
+          <div class="s-form pw-add-field">
+            <label>分流目标</label>
+            <NSelect v-model:value="addForm._target" :options="pwRouteOptions" filterable style="width: 230px" />
+          </div>
+          <div class="s-form pw-add-field">
+            <label>路由策略</label>
+            <NSelect v-model:value="addForm.strategy" :options="STRATEGY_OPTIONS" clearable placeholder="默认（全局）" style="width: 170px" />
+          </div>
+          <div class="pw-add-btns">
+            <NButton size="small" type="primary" @click="createRow">创建</NButton>
+            <NButton size="small" @click="addOpen = false">取消</NButton>
+          </div>
+        </div>
+
+        <div v-if="pwLoading" class="s-loading" style="padding: 24px 0">加载中...</div>
+        <div v-else-if="!pwRows.length" class="pw-empty">暂无额外代理密码。生成一个后即可用它把流量分流到指定标签/分组或强制走某个节点。</div>
+
+        <div v-for="row in pwRows" :key="row.id" class="pw-row">
+          <NInput v-model:value="row.label" size="small" placeholder="备注" style="width: 150px"
+            @change="(v) => commitRow(row, { label: String(v || '').trim() })" />
+          <div class="pw-pass">
+            <NInput :value="row.password" size="small" readonly style="width: 240px" />
+            <NButton size="small" @click="copyPassword(row.password)">复制</NButton>
+            <NButton size="small" @click="regenRow(row)">重新生成</NButton>
+          </div>
+          <NSelect :value="row._target" :options="pwRouteOptions" filterable size="small" style="width: 220px"
+            @update:value="(v) => onChangeTarget(row, v)" />
+          <NSelect :value="row.strategy" :options="STRATEGY_OPTIONS" clearable placeholder="策略默认" size="small" style="width: 140px"
+            @update:value="(v) => onChangeStrategy(row, v)" />
+          <div class="pw-ops">
+            <NSwitch :value="row.enabled" size="small" @update:value="(c) => onToggleEnabled(row, c)" />
+            <span class="pw-enable-text">{{ row.enabled ? '启用' : '停用' }}</span>
+            <NButton size="small" type="error" ghost @click="askDeleteRow(row)">删除</NButton>
+          </div>
+        </div>
+      </template>
+    </div>
+
     <!-- Restart-only read-only -->
     <div class="s-group">
       <div class="s-group-head">
@@ -342,6 +570,14 @@ function doReset() {
       :danger="false"
       ok-text="恢复默认"
       @ok="doReset"
+    />
+    <ConfirmDialog
+      v-model:show="pwDeleteVisible"
+      title="删除代理密码"
+      :message="pwDeleteTarget ? '确定删除该代理密码（' + (pwDeleteTarget.label || '未命名') + '）？使用它的客户端将立即无法认证。' : ''"
+      :danger="true"
+      ok-text="删除"
+      @ok="doDeleteRow"
     />
   </div>
   <div v-else class="s-loading">
@@ -433,6 +669,52 @@ function doReset() {
 .s-ro-item b { color: var(--np-text); font-weight: 600; }
 .s-ro-item .ro-ok { color: var(--np-success); }
 .s-ro-item .ro-warn { color: var(--np-danger); }
+
+/* Proxy passwords (issue #53) */
+.pw-hint {
+  font-size: 12.5px;
+  color: var(--np-text-muted);
+  margin: 0 0 12px;
+}
+.pw-toolbar { margin-bottom: 10px; }
+.pw-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  background: var(--np-bg);
+  border: 1px solid var(--np-border-soft);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.pw-add-field { margin-bottom: 0; }
+.pw-add-btns { display: flex; gap: 8px; padding-bottom: 2px; }
+.pw-empty {
+  font-size: 13px;
+  color: var(--np-text-muted);
+  background: var(--np-bg);
+  border: 1px dashed var(--np-border-soft);
+  border-radius: 10px;
+  padding: 18px 14px;
+  text-align: center;
+}
+.pw-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  background: var(--np-bg);
+  border: 1px solid var(--np-border-soft);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.pw-pass { display: flex; align-items: center; gap: 6px; }
+.pw-pass .n-input { font-family: 'Fira Code', Consolas, monospace; font-size: 12px; }
+.pw-ops { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.pw-enable-text { font-size: 12px; color: var(--np-text-muted); }
+
 .s-loading {
   text-align: center;
   color: var(--np-text-muted);
