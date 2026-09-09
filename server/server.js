@@ -42,9 +42,9 @@ const { createHttpProxy } = require('./lib/proxy-http.ts');
 const { createSocks5Proxy } = require('./lib/proxy-socks5.ts');
 const { createWebServer } = require('./lib/web-server.ts');
 const { setupClientWebSocket } = require('./lib/ws-server.ts');
-const { loadTLSCredentials } = require('./lib/tls');
-const { SettingsManager } = require('./lib/settings');
-const { LogHub } = require('./lib/log-hub');
+const { loadTLSCredentials } = require('./lib/tls.ts');
+const { SettingsManager } = require('./lib/settings.ts');
+const { LogHub } = require('./lib/log-hub.ts');
 const { NetworkTestManager } = require('./lib/network-test.ts');
 
 // Initialize auth
@@ -62,9 +62,9 @@ const domainRouter = new DomainRouter(config, logger);
 const cache = new RequestCache(config, logger);
 const pluginManager = new PluginManager(config, logger);
 const acmeManager = new ACMEManager(config, logger);
-const aclManager = new (require('./lib/acl').ACLManager)(config, logger);
-const auditLogger = new (require('./lib/audit').AuditLogger)(config, logger);
-const autoUpdater = new (require('./lib/auto-update').AutoUpdater)(config, logger);
+const aclManager = new (require('./lib/acl.ts').ACLManager)(config, logger);
+const auditLogger = new (require('./lib/audit.ts').AuditLogger)(config, logger);
+const autoUpdater = new (require('./lib/auto-update.ts').AutoUpdater)(config, logger);
 
 // Initialize client manager and wire up dependencies
 const clientManager = new ClientManager(config, logger);
