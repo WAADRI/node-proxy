@@ -19,7 +19,7 @@ interface AuthManagerLike {
 }
 
 interface CleanupState {
-  tunnelId: string | null;
+  tunnelId: string | number | null;
   currentClient: ClientNode | null;
   currentTimeout: ReturnType<typeof setTimeout> | null;
   udpSocket: dgram.Socket | null;
@@ -224,7 +224,7 @@ function handleTCPConnect(
   config: ServerConfig,
   logger: AppLogger
 ) {
-  let tunnelId = uuidv4();
+  let tunnelId: string | number = uuidv4();
   let currentTimeout: ReturnType<typeof setTimeout> | null = null;
 
   // ACL check for TCP CONNECT

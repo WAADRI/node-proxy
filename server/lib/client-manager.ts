@@ -11,7 +11,7 @@ import type { Socket } from 'net';
 import type { WebSocket } from 'ws';
 import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
-import type { StreamMux, MuxStreamLike } from './stream-mux.js';
+import type { StreamMux, MuxStreamLike } from './stream-mux.ts';
 
 // --- External modules injected by server.js (duck-typed minimal contracts) ---
 
@@ -128,7 +128,9 @@ export interface ClientNode {
   lastPing: number;
   pingFailures: number;
   pendingRequests: Set<string>;
-  pendingTunnels: Set<string>;
+  // key can be a numeric mux stream id (SOCKS5 mux path) or a uuid string
+  // (legacy JSON tunnels and HTTP requests)
+  pendingTunnels: Set<string | number>;
   stats: ClientStatsEntry;
   lastActivity: number;
   alias?: string | null;
@@ -162,7 +164,7 @@ export class ClientManager {
   log: AppLogger;
   clients: Map<string, ClientNode> = new Map();
   pendingRequests: Map<string, PendingRecord> = new Map();
-  pendingTunnels: Map<string, PendingRecord> = new Map();
+  pendingTunnels: Map<string | number, PendingRecord> = new Map();
   private _onChangeListeners: Set<ChangeListener> = new Set();
   private _healthTimer: ReturnType<typeof setInterval> | null = null;
 
