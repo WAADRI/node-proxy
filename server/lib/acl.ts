@@ -1,10 +1,99 @@
 // =============================================================================
 // ACL Rule Engine - Access Control List for proxy traffic
 // Phase 3: ACL Rule Engine
+// Migrated to TypeScript (issue #42, Phase 2). CJS-style TS on purpose: only
+// type-only imports are used (erased by Node type stripping), so this file
+// loads as CommonJS and callers keep requiring it via require('./lib/acl.ts');
+// ACLManager is exported through module.exports.
 // =============================================================================
+
 'use strict';
 
+/* eslint-disable @typescript-eslint/no-require-imports */
+
 const net = require('net');
+
+import type { AppLogger } from './logger.ts';
+import type { ServerConfig } from './config.ts';
+
+// --- Typed shapes (config section / rule inputs / compiled artifacts) --------
+interface AclSectionConfig {
+  enabled?: boolean;
+  rules?: AclRuleInput[];
+}
+
+// Structural view of the client context read by rule matching (id/tags only).
+interface AclClientContext {
+  id?: string;
+  tags?: string[];
+}
+
+interface AclTimeWindowConfig {
+  start: string;
+  end: string;
+}
+
+interface AclMatchConditions {
+  sourceIp?: string;
+  targetDomain?: string;
+  targetIp?: string;
+  targetPort?: string;
+  protocol?: string;
+  clientTag?: string | string[];
+  time?: AclTimeWindowConfig;
+}
+
+interface AclRuleInput {
+  id?: string;
+  action?: string;
+  priority?: number;
+  description?: string;
+  match?: AclMatchConditions;
+  enabled?: boolean;
+}
+
+interface CidrNet {
+  ip: number;
+  mask: number;
+  bits: number;
+}
+
+interface PortRangeEntry {
+  start: number;
+  end: number;
+}
+
+interface TimeRangeMinutes {
+  start: number;
+  end: number;
+}
+
+interface AclRuleView {
+  id: string;
+  action: string;
+  priority: number;
+  description: string;
+  match: AclMatchConditions;
+  enabled: boolean;
+  hits: number;
+}
+
+interface CompiledAclRule {
+  id: string;
+  action: string;
+  priority: number;
+  description: string;
+  match: AclMatchConditions;
+  enabled: boolean;
+  createdAt: number;
+  hits: number;
+  // Pre-compiled match conditions (attached by addRule for fast matching)
+  _sourceNets?: CidrNet[];
+  _targetNets?: CidrNet[];
+  _domainRegex?: RegExp | null;
+  _portRange?: PortRangeEntry[] | null;
+  _timeRange?: TimeRangeMinutes | null;
+}
 
 /**
  * ACL Rule Engine
@@ -18,15 +107,22 @@ const net = require('net');
  * - Client tags
  */
 class ACLManager {
-  constructor(config, logger) {
+  log: AppLogger;
+  rules: CompiledAclRule[];
+  enabled: boolean;
+  _cache: Map<string, { result: boolean; time: number }>; // LRU cache for match results
+  _cacheTTL: number; // 5 seconds
+
+  constructor(config: ServerConfig, logger: AppLogger) {
     this.log = logger;
     this.rules = [];
-    this.enabled = config.acl?.enabled !== false; // Fix: honor acl.enabled from config
+    const aclSection = config.acl as AclSectionConfig | undefined;
+    this.enabled = aclSection?.enabled !== false; // Fix: honor acl.enabled from config
     this._cache = new Map(); // LRU cache for match results
     this._cacheTTL = 5000; // 5 seconds
 
     // Load initial rules from config
-    const rules = config.acl?.rules || [];
+    const rules = aclSection?.rules || [];
     for (const rule of rules) {
       this.addRule(rule);
     }
@@ -47,13 +143,13 @@ class ACLManager {
    * @param {Object} [rule.match.time] - Time restriction { start: "HH:MM", end: "HH:MM" }
    * @param {string} rule.description - Human-readable description
    */
-  addRule(rule) {
+  addRule(rule: AclRuleInput): boolean {
     if (!rule.action || !['allow', 'deny'].includes(rule.action)) {
       this.log.error({ rule }, 'ACL rule must have action: allow or deny');
       return false;
     }
 
-    const compiled = {
+    const compiled: CompiledAclRule = {
       id: rule.id || this._generateId(),
       action: rule.action,
       priority: rule.priority || 0,
@@ -90,7 +186,7 @@ class ACLManager {
   /**
    * Remove an ACL rule by ID
    */
-  removeRule(ruleId) {
+  removeRule(ruleId: string): boolean {
     const idx = this.rules.findIndex(r => r.id === ruleId);
     if (idx === -1) return false;
     this.rules.splice(idx, 1);
@@ -101,7 +197,7 @@ class ACLManager {
   /**
    * List all ACL rules
    */
-  listRules() {
+  listRules(): AclRuleView[] {
     return this.rules.map(r => ({
       id: r.id,
       action: r.action,
@@ -122,7 +218,7 @@ class ACLManager {
    * @param {string} sourceIp - Source IP address
    * @returns {boolean} true if allowed, false if denied
    */
-  check(client, targetHost, protocol = 'http', targetPort = 0, sourceIp = '') {
+  check(client: AclClientContext | null, targetHost: string, protocol = 'http', targetPort = 0, sourceIp = ''): boolean {
     if (!this.rules.length) return true; // No rules = allow all
     if (!this.enabled) return true;
 
@@ -233,33 +329,35 @@ class ACLManager {
   // Private helpers
   // ===========================================================================
 
-  _generateId() {
+  _generateId(): string {
     return 'acl-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
   }
 
-  _parseCIDR(cidrStr) {
+  _parseCIDR(cidrStr: string): CidrNet[] {
     if (!cidrStr) return [];
     const parts = cidrStr.split(',');
-    return parts.map(p => {
-      p = p.trim();
-      if (p.includes('/')) {
-        const [ip, bits] = p.split('/');
-        const mask = parseInt(bits, 10);
-        const ipLong = this._ipToLong(ip);
-        if (ipLong === null) return null;
-        return { ip: ipLong, mask, bits };
-      } else {
-        if (net.isIP(p)) {
-          const ipLong = this._ipToLong(p);
+    return parts
+      .map(p => {
+        p = p.trim();
+        if (p.includes('/')) {
+          const [ip, bits] = p.split('/');
+          const mask = parseInt(bits, 10);
+          const ipLong = this._ipToLong(ip);
           if (ipLong === null) return null;
-          return { ip: ipLong, mask: 32, bits: 32 };
+          return { ip: ipLong, mask, bits };
+        } else {
+          if (net.isIP(p)) {
+            const ipLong = this._ipToLong(p);
+            if (ipLong === null) return null;
+            return { ip: ipLong, mask: 32, bits: 32 };
+          }
+          return null;
         }
-        return null;
-      }
-    }).filter(Boolean);
+      })
+      .filter((n): n is CidrNet => n !== null);
   }
 
-  _ipToLong(ip) {
+  _ipToLong(ip: string): number | null {
     if (!net.isIPv4(ip)) return null;
     const parts = ip.split('.');
     return ((parseInt(parts[0], 10) << 24) |
@@ -268,7 +366,7 @@ class ACLManager {
             parseInt(parts[3], 10)) >>> 0;
   }
 
-  _isInCIDR(ip, nets) {
+  _isInCIDR(ip: string, nets?: CidrNet[] | null): boolean {
     if (!nets || !nets.length) return true;
     const ipLong = this._ipToLong(ip);
     if (ipLong === null) return false;
@@ -279,7 +377,7 @@ class ACLManager {
     });
   }
 
-  _wildcardToRegex(pattern) {
+  _wildcardToRegex(pattern: string): RegExp | null {
     if (!pattern) return null;
     const escaped = pattern
       .replace(/[.+^${}()|[\]\\]/g, '\\$&')
@@ -288,36 +386,38 @@ class ACLManager {
     return new RegExp(`^${escaped}$`, 'i');
   }
 
-  _parsePortRange(portStr) {
+  _parsePortRange(portStr: string): PortRangeEntry[] | null {
     if (!portStr) return null;
     const parts = portStr.split(',');
-    return parts.map(p => {
-      p = p.trim();
-      if (p.includes('-')) {
-        const [start, end] = p.split('-').map(Number);
-        return { start: isNaN(start) ? 0 : start, end: isNaN(end) ? 65535 : end };
-      }
-      const port = parseInt(p, 10);
-      if (isNaN(port)) return null;
-      return { start: port, end: port };
-    }).filter(Boolean);
+    return parts
+      .map(p => {
+        p = p.trim();
+        if (p.includes('-')) {
+          const [start, end] = p.split('-').map(Number);
+          return { start: isNaN(start) ? 0 : start, end: isNaN(end) ? 65535 : end };
+        }
+        const port = parseInt(p, 10);
+        if (isNaN(port)) return null;
+        return { start: port, end: port };
+      })
+      .filter((r): r is PortRangeEntry => r !== null);
   }
 
-  _isInPortRange(port, ranges) {
+  _isInPortRange(port: number, ranges?: PortRangeEntry[] | null): boolean {
     if (!ranges) return true;
     return ranges.some(r => port >= r.start && port <= r.end);
   }
 
-  _parseTimeRange(time) {
+  _parseTimeRange(time?: AclTimeWindowConfig): TimeRangeMinutes | null {
     if (!time || !time.start || !time.end) return null;
-    const parseTime = (t) => {
+    const parseTime = (t: string): number => {
       const parts = t.split(':').map(Number);
       return parts[0] * 60 + (parts[1] || 0);
     };
     return { start: parseTime(time.start), end: parseTime(time.end) };
   }
 
-  _isInTimeRange(range) {
+  _isInTimeRange(range?: TimeRangeMinutes | null): boolean {
     if (!range) return true;
     const now = new Date();
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
