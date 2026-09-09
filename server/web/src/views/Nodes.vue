@@ -1,6 +1,6 @@
 <script setup>
 import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { NButton, NCheckbox, NInput, NModal, NPopover, NDataTable, NTag, useMessage } from 'naive-ui';
+import { NButton, NCheckbox, NInput, NModal, NPopover, NSelect, NDataTable, useMessage } from 'naive-ui';
 import AppIcon from '../components/AppIcon.vue';
 import { store, requestStatus } from '../store';
 import { kickClient, saveClientMeta } from '../api';
@@ -18,6 +18,7 @@ const ALL_COLUMNS = [
   { key: 'ip', label: 'IP 地址', width: 150 },
   { key: 'platform', label: '系统 / 平台', width: 140 },
   { key: 'region', label: '区域', width: 110 },
+  { key: 'group', label: '分组', width: 110 },
   { key: 'tags', label: '标签', width: 160 },
   { key: 'notes', label: '备注', width: 170 },
   { key: 'req', label: '请求', width: 70 },
@@ -68,20 +69,54 @@ const clients = computed(() => (store.status ? store.status.clients || [] : []))
 const loading = computed(() => !store.status);
 
 const search = ref('');
+const groupFilter = ref(null);
 const filtered = computed(() => {
   const q = search.value.trim().toLowerCase();
-  const list = clients.value;
+  let list = clients.value;
+  if (groupFilter.value) {
+    const g = String(groupFilter.value).toLowerCase();
+    list = list.filter((c) => (c.group || '').toLowerCase() === g);
+  }
   if (!q) return list;
   return list.filter((c) => {
     const info = c.info || {};
     return (
       c.id.toLowerCase().includes(q) ||
+      (c.group || '').toLowerCase().includes(q) ||
       (info.hostname || '').toLowerCase().includes(q) ||
       (info.ip || '').toLowerCase().includes(q) ||
       (info.platform || '').toLowerCase().includes(q) ||
       (info.region || '').toLowerCase().includes(q)
     );
   });
+});
+
+const groupOptions = computed(() => {
+  const seen = new Set();
+  const out = [];
+  for (const c of clients.value) {
+    const g = c.group;
+    if (g && !seen.has(g)) {
+      seen.add(g);
+      out.push({ label: g, value: g });
+    }
+  }
+  return out;
+});
+
+// Suggest existing explicit tags for the multiselect; new tags can be typed in.
+const tagOptions = computed(() => {
+  const seen = new Set();
+  const out = [];
+  for (const c of clients.value) {
+    for (const t of c.tags || []) {
+      if (t && !seen.has(t)) {
+        seen.add(t);
+        out.push({ label: t, value: t });
+      }
+    }
+  }
+  return out;
 });
 
 // ---------------------------------------------------------------------------
@@ -110,7 +145,8 @@ function rowCtx(row) {
 
 function openEdit(row, field) {
   editClient.value = row;
-  editTags.value = (row.tags || []).join(', ');
+  editTags.value = row.tags ? [...row.tags] : [];
+  editGroup.value = row.group || '';
   editNotes.value = row.notes || '';
   editRegion.value = row.region || (row.info && row.info.region) || '';
   editFocus.value = field || null;
@@ -124,7 +160,7 @@ function openEdit(row, field) {
 const clickable = (row, field, cls) => ({
   class: [cls, 'cell-edit'],
   style: { cursor: 'pointer' },
-  title: '点击编辑' + (field === 'tags' ? '标签' : field === 'notes' ? '备注' : '区域'),
+  title: '点击编辑' + (field === 'tags' ? '标签' : field === 'group' ? '分组' : field === 'notes' ? '备注' : '区域'),
   onClick: () => openEdit(row, field),
 });
 
@@ -153,6 +189,11 @@ const tableColumns = computed(() =>
           return (ctx.info.platform || '-') + (ctx.info.arch ? ' (' + ctx.info.arch + ')' : '');
         case 'region':
           return h('span', clickable(row, 'region', row.region ? 'np-region-ov' : ''), row.region || ctx.info.region || '-');
+        case 'group': {
+          if (!row.group)
+            return h('span', clickable(row, 'group', ''), h('span', { style: 'color: var(--np-text-muted)' }, '-'));
+          return h('span', clickable(row, 'group', ''), h('span', { class: 'np-group-chip' }, row.group));
+        }
         case 'tags': {
           const tags = row.tags || [];
           if (!tags.length)
@@ -211,13 +252,17 @@ const tableColumns = computed(() =>
 // ---------------------------------------------------------------------------
 const editOpen = ref(false);
 const editClient = ref(null);
-const editTags = ref('');
+const editTags = ref([]);
+const editGroup = ref('');
 const editNotes = ref('');
 const editRegion = ref('');
 const editFocus = ref(null);
 const saving = ref(false);
 const armed = ref(false);
 let armTimer = null;
+
+// Programmatic focus target for the tags multiselect (NSelect has no DOM id).
+const editTagsSel = ref(null);
 
 function disarmKick() {
   armed.value = false;
@@ -257,34 +302,47 @@ function saveEdit() {
   const client = editClient.value;
   if (!client) return;
   saving.value = true;
-  const tagsArr = editTags.value
-    .split(',')
-    .map((t) => t.trim())
+  const tagsArr = (editTags.value || [])
+    .map((t) => String(t).trim())
     .filter(Boolean);
   const p1 = saveClientMeta(client.id, 'tags', tagsArr);
-  const p2 = saveClientMeta(client.id, 'notes', editNotes.value.trim());
-  const p3 = saveClientMeta(client.id, 'region', editRegion.value.trim());
-  Promise.allSettled([p1, p2, p3]).then(([a, b, c]) => {
+  const p2 = saveClientMeta(client.id, 'group', editGroup.value.trim() || null);
+  const p3 = saveClientMeta(client.id, 'notes', editNotes.value.trim());
+  const p4 = saveClientMeta(client.id, 'region', editRegion.value.trim());
+  Promise.allSettled([p1, p2, p3, p4]).then((results) => {
     saving.value = false;
-    const failed = [a, b, c].filter((r) => r.status !== 'fulfilled' || !r.value.success).length;
-    if (failed === 0) {
+    const failed = results.filter((r) => r.status !== 'fulfilled' || !r.value.success);
+    if (failed.length === 0) {
       message.success('保存完成');
       closeEdit();
-    } else {
-      message.error(failed === 3 ? '保存失败' : '部分保存失败 (' + failed + '/3)');
+      return;
     }
+    let reason = '';
+    for (const r of failed) {
+      if (r.status === 'rejected') {
+        reason = r.reason && r.reason.message ? r.reason.message : '';
+      } else if (r.value && r.value.message) {
+        reason = r.value.message;
+      }
+      if (reason) break;
+    }
+    message.error(reason || '保存失败 (' + failed.length + '/' + results.length + ')');
   });
 }
 
 // Auto-focus requested field once modal opens
 watch(editOpen, (open) => {
-  if (open && editFocus.value) {
-    setTimeout(() => {
-      const map = { tags: '#editTags', notes: '#editNotes', region: '#editRegion' };
-      const el = document.querySelector(map[editFocus.value]);
-      if (el) el.focus();
-    }, 120);
-  }
+  if (!open || !editFocus.value) return;
+  setTimeout(() => {
+    const field = editFocus.value;
+    if (field === 'tags') {
+      if (editTagsSel.value && editTagsSel.value.focus) editTagsSel.value.focus();
+      return;
+    }
+    const map = { notes: '#editNotes', region: '#editRegion', group: '#editGroup' };
+    const el = document.querySelector(map[field]);
+    if (el) el.focus();
+  }, 120);
 });
 
 let refreshTimer = null;
@@ -323,6 +381,16 @@ const cbRowClass = (row) => {
       >
         <template #prefix><AppIcon name="search" :size="14" /></template>
       </NInput>
+
+      <NSelect
+        v-model:value="groupFilter"
+        clearable
+        filterable
+        placeholder="全部分组"
+        :options="groupOptions"
+        style="width: 160px"
+        size="small"
+      />
 
       <NPopover trigger="click" placement="bottom-start" style="padding: 8px">
         <template #trigger>
@@ -387,38 +455,41 @@ const cbRowClass = (row) => {
           {{ editClient ? editClient.id.substring(0, 8) + '…' : '' }}
         </span>
       </div>
-      <p class="np-edit-sub">修改节点的标签、备注和服务端覆盖区域，保存后即时生效。</p>
 
       <div class="np-form">
-        <label>标签（多个用英文逗号分隔，将替换当前标签）</label>
-        <NInput v-model:value="editTags" id="editTags" placeholder="如: region:cn, isp:unicom, vip" />
+        <label>标签</label>
+        <NSelect
+          ref="editTagsSel"
+          v-model:value="editTags"
+          multiple
+          filterable
+          tag
+          :options="tagOptions"
+          placeholder="选择或输入标签"
+        />
       </div>
       <div class="np-form">
-        <label>备注（内部备注信息）</label>
-        <NInput v-model:value="editNotes" id="editNotes" type="textarea" :rows="2" placeholder="如: 专用节点" />
+        <label>分组</label>
+        <NInput v-model:value="editGroup" id="editGroup" placeholder="输入分组名称" />
       </div>
       <div class="np-form">
-        <label>区域覆盖（覆盖客户端上报的区域）</label>
+        <label>备注</label>
+        <NInput v-model:value="editNotes" id="editNotes" type="textarea" :rows="2" placeholder="内部备注" />
+      </div>
+      <div class="np-form">
+        <label>区域覆盖</label>
         <NInput v-model:value="editRegion" id="editRegion" placeholder="如: beijing" />
       </div>
 
-      <div class="np-danger-zone">
-        <div class="np-danger-head">危险操作</div>
-        <p class="np-danger-hint">断开节点会终止其当前所有进行中的请求，客户端会自动重连。需两次点击确认。</p>
-        <NButton
-          size="small"
-          type="error"
-          :class="{ armed }"
-          @click="armKick"
-        >
-          {{ armed ? '再次点击确认断开（5 秒后取消）' : '断开该节点' }}
-        </NButton>
-      </div>
-
       <template #footer>
-        <div style="display: flex; justify-content: flex-end; gap: 8px">
-          <NButton size="small" @click="closeEdit">取消</NButton>
-          <NButton size="small" type="primary" :loading="saving" @click="saveEdit">保存</NButton>
+        <div class="np-edit-foot">
+          <NButton size="small" type="error" :class="{ armed }" @click="armKick">
+            {{ armed ? '确认断开该节点' : '断开该节点' }}
+          </NButton>
+          <div style="display: flex; gap: 8px">
+            <NButton size="small" @click="closeEdit">取消</NButton>
+            <NButton size="small" type="primary" :loading="saving" @click="saveEdit">保存</NButton>
+          </div>
         </div>
       </template>
     </NModal>
@@ -476,10 +547,18 @@ const cbRowClass = (row) => {
   color: var(--np-text-muted);
   font-weight: 400;
 }
-.np-edit-sub {
-  font-size: 12.5px;
-  color: var(--np-text-muted);
-  margin: 0 0 14px;
+.np-edit-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.np-edit-foot .armed {
+  animation: np-pulse 0.7s infinite alternate;
+}
+@keyframes np-pulse {
+  from { box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.4); }
+  to { box-shadow: 0 0 0 7px rgba(248, 81, 73, 0); }
 }
 .np-form {
   display: flex;
@@ -488,21 +567,15 @@ const cbRowClass = (row) => {
   margin-bottom: 12px;
 }
 .np-form label { font-size: 12.5px; color: var(--np-text-2); }
-.np-danger-zone {
-  margin-top: 8px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--np-border);
-}
-.np-danger-head { font-size: 12px; color: var(--np-danger); font-weight: 600; }
-.np-danger-hint {
-  font-size: 11.5px;
-  color: var(--np-text-muted);
-  margin: 3px 0 10px;
-}
-.np-danger-zone .armed { animation: np-pulse 0.7s infinite alternate; }
-@keyframes np-pulse {
-  from { box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.4); }
-  to { box-shadow: 0 0 0 7px rgba(248, 81, 73, 0); }
+.np-group-chip {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--np-primary);
+  background: rgba(var(--np-primary-rgb, 24, 160, 88), 0.12);
+  border: 1px solid rgba(var(--np-primary-rgb, 24, 160, 88), 0.35);
 }
 .np-region-ov { color: var(--np-primary); font-weight: 600; }
 </style>
