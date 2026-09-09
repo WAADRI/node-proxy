@@ -62,6 +62,9 @@ export interface ClientMetaRow {
   weight: number;
   bandwidth_limit: number | null;
   region?: string;
+  // Node group (issue #53): the group name doubles as an implicit tag for
+  // routing. Stored in the `grp` column (SQLite keyword safety).
+  group?: string | null;
   created_at: number;
   updated_at: number;
   [key: string]: unknown;
@@ -74,6 +77,7 @@ export interface ClientMetadataUpdate {
   weight?: number | null;
   bandwidth_limit?: number | null;
   region?: string | null;
+  group?: string | null;
 }
 
 function parseJsonArray(raw: unknown): string[] {
@@ -210,6 +214,13 @@ class Storage {
     // Migration: add region column to client_metadata (v3.1)
     try {
       this.db!.run("ALTER TABLE client_metadata ADD COLUMN region TEXT DEFAULT ''");
+    } catch (_) {
+      // column may already exist
+    }
+
+    // Migration: add group column to client_metadata (issue #53, node groups)
+    try {
+      this.db!.run("ALTER TABLE client_metadata ADD COLUMN grp TEXT DEFAULT ''");
     } catch (_) {
       // column may already exist
     }
@@ -464,10 +475,11 @@ class Storage {
             ? existing.bandwidth_limit
             : null;
       const region = meta.region != null ? meta.region : (existing.region != null ? existing.region : '');
+      const group = meta.group != null ? (meta.group || '') : (existing.group != null ? existing.group : '');
       const createdAt = existing.created_at || now;
 
       this.db.run(
-        `INSERT OR REPLACE INTO client_metadata (client_id, tags, alias, notes, weight, bandwidth_limit, region, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO client_metadata (client_id, tags, alias, notes, weight, bandwidth_limit, region, grp, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           clientId,
           JSON.stringify(tags),
@@ -476,6 +488,7 @@ class Storage {
           weight,
           bandwidthLimit,
           region,
+          group,
           createdAt,
           now,
         ]
@@ -503,6 +516,7 @@ class Storage {
           weight: num(row.weight),
           bandwidth_limit: row.bandwidth_limit != null ? num(row.bandwidth_limit) : null,
           region: row.region != null ? String(row.region) : undefined,
+          group: row.grp != null && String(row.grp) !== '' ? String(row.grp) : null,
           created_at: num(row.created_at),
           updated_at: num(row.updated_at),
         };
@@ -529,6 +543,8 @@ class Storage {
             notes: row[3] != null ? String(row[3]) : null,
             weight: num(row[4]),
             bandwidth_limit: row[5] != null ? num(row[5]) : null,
+            region: row[8] != null && String(row[8]) !== '' ? String(row[8]) : undefined,
+            group: row[9] != null && String(row[9]) !== '' ? String(row[9]) : null,
             created_at: num(row[6]),
             updated_at: num(row[7]),
           };
