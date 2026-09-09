@@ -11,13 +11,84 @@
 // Parameters that cannot be changed at runtime (ports, auth token, ...) are
 // exposed read-only by list() so the panel can show "change requires editing
 // config.yaml + restart".
+// Migrated to TypeScript (issue #42, Phase 2). CJS-style TS on purpose: the
+// file keeps CommonJS (module.exports) so Node type stripping loads it directly;
+// only type-only imports are used (stripped at load, no ESM flip).
 // =============================================================================
 'use strict';
 
-const ROUTING_STRATEGIES = ['random', 'least-loaded', 'fastest-response', 'weighted'];
+ 
+
+import type { AppLogger } from './logger.ts';
+import type { ServerConfig } from './config.ts';
+
+// --- Structural contracts for the collaborating modules -----------------------
+// Duck-typed minimal shapes: storage/router/circuitBreaker/bandwidthLimiter/
+// cache are plain CJS modules (some not yet migrated); only the surface this
+// file touches is declared, so no value-level require/import is needed here.
+
+interface SettingsStorageLike {
+  available: boolean;
+  getConfigOverride(key: string): unknown;
+  setConfigOverride(key: string, value: unknown): void;
+  deleteConfigOverride(key: string): void;
+}
+
+interface SettingsRouterLike {
+  getStrategy(): string;
+  setStrategy(strategy: string): boolean;
+}
+
+interface SettingsCircuitBreakerLike {
+  getEffectiveConfig(): unknown;
+  updateConfig(config: unknown): unknown;
+}
+
+interface SettingsBandwidthLimiterLike {
+  getEffectiveConfig(): unknown;
+  updateConfig(config: unknown): unknown;
+}
+
+interface SettingsCacheLike {
+  defaultTTL: number | undefined;
+}
+
+interface SettingsModules {
+  router: SettingsRouterLike | null;
+  circuitBreaker: SettingsCircuitBreakerLike | null;
+  bandwidthLimiter: SettingsBandwidthLimiterLike | null;
+  cache: SettingsCacheLike | null;
+}
+
+// Values accepted by apply(): one entry per runtime-adjustable field. Entries
+// stay opaque (unknown) - each apply() branch validates its own fields.
+interface SettingsValues {
+  strategy?: unknown;
+  enabled?: unknown;
+  error_threshold?: unknown;
+  window_ms?: unknown;
+  recovery_timeout_ms?: unknown;
+  half_open_max_attempts?: unknown;
+  default_rate?: unknown;
+  default_burst?: unknown;
+  global_rate?: unknown;
+  global_burst?: unknown;
+  request_timeout?: unknown;
+  tunnel_timeout?: unknown;
+  tunnel_idle_timeout?: unknown;
+  max_concurrent?: unknown;
+  default_ttl?: unknown;
+}
+
+// _numFields outcome: either an error or the validated numeric fields.
+type NumFieldsResult =
+  | { error: string; values?: never }
+  | { error?: never; values: Record<string, number> };
+
+const ROUTING_STRATEGIES: string[] = ['random', 'least-loaded', 'fastest-response', 'weighted'];
 
 // config_overrides key per settings group (routing keeps its legacy plain key)
-const OVERRIDE_KEYS = {
+const OVERRIDE_KEYS: Record<string, string> = {
   routing: 'routing_strategy',
   circuit_breaker: 'circuit_breaker_config',
   bandwidth: 'bandwidth_config',
@@ -26,16 +97,22 @@ const OVERRIDE_KEYS = {
 };
 
 // Groups whose values are plain scalars vs objects persisted as JSON
-const GROUPS = ['routing', 'circuit_breaker', 'bandwidth', 'client', 'cache'];
+const GROUPS: string[] = ['routing', 'circuit_breaker', 'bandwidth', 'client', 'cache'];
 
 class SettingsManager {
-  constructor(config, storage, modules, logger) {
+  config: ServerConfig;
+  storage: SettingsStorageLike | null;
+  modules: SettingsModules;
+  log: AppLogger;
+  baseConfig: ServerConfig;
+
+  constructor(config: ServerConfig, storage: SettingsStorageLike | null, modules: SettingsModules, logger: AppLogger) {
     this.config = config;
     this.storage = storage;
     this.modules = modules; // { router, circuitBreaker, bandwidthLimiter, cache }
     this.log = logger;
     // Boot-time config is the source of truth for "reset to default"
-    this.baseConfig = JSON.parse(JSON.stringify(config));
+    this.baseConfig = JSON.parse(JSON.stringify(config)) as ServerConfig;
   }
 
   // ---------------------------------------------------------------------------
@@ -54,7 +131,8 @@ class SettingsManager {
       }
       this.log.info('Runtime settings restored from storage');
     } catch (err) {
-      this.log.error({ error: err.message }, 'Failed to restore runtime settings');
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error({ error: message }, 'Failed to restore runtime settings');
     }
   }
 
@@ -81,7 +159,7 @@ class SettingsManager {
       cache: { default_ttl: m.cache ? m.cache.defaultTTL : null },
     };
 
-    const overrides = {};
+    const overrides: Record<string, boolean> = {};
     if (this.storage && this.storage.available) {
       for (const group of GROUPS) {
         overrides[group] = this.storage.getConfigOverride(OVERRIDE_KEYS[group]) != null;
@@ -118,7 +196,7 @@ class SettingsManager {
   // ---------------------------------------------------------------------------
   // Apply a settings change for a group. Returns { ok, error? }
   // ---------------------------------------------------------------------------
-  apply(group, values, silent = false) {
+  apply(group: string, values?: SettingsValues | null, silent = false) {
     if (!GROUPS.includes(group)) return { ok: false, error: 'Unknown settings group: ' + group };
     const v = values || {};
 
@@ -132,7 +210,9 @@ class SettingsManager {
         if (!this.modules.router.setStrategy(strategy)) {
           return { ok: false, error: 'Router rejected strategy: ' + strategy };
         }
-        this.config.routing.strategy = strategy;
+        // routing section exists whenever a routing change can be applied (same
+        // unconditional write as the original JS)
+        this.config.routing!.strategy = strategy;
         this._persist(group, strategy);
         break;
       }
@@ -147,7 +227,7 @@ class SettingsManager {
       case 'bandwidth': {
         const num = this._numFields(v, ['default_rate', 'default_burst', 'global_rate', 'global_burst'], 0);
         if (num.error) return num;
-        const patch = { ...num.values };
+        const patch: Record<string, number | boolean> = { ...num.values };
         if (v.enabled !== undefined) patch.enabled = !!v.enabled;
         if (!this.modules.bandwidthLimiter) return { ok: false, error: 'Bandwidth limiter not available' };
         const applied = this.modules.bandwidthLimiter.updateConfig(patch);
@@ -170,7 +250,7 @@ class SettingsManager {
       case 'cache': {
         const num = this._numFields(v, ['default_ttl'], 0);
         if (num.error) return num;
-        if (this.modules.cache) this.modules.cache.defaultTTL = num.values.default_ttl;
+        if (this.modules.cache) this.modules.cache.defaultTTL = num.values!.default_ttl;
         this.config.cache = { ...(this.config.cache || {}), ...num.values };
         this._persist(group, num.values);
         break;
@@ -186,7 +266,7 @@ class SettingsManager {
   // ---------------------------------------------------------------------------
   // Restore a group to its boot-time (config.yaml/env) value
   // ---------------------------------------------------------------------------
-  reset(group) {
+  reset(group: string) {
     if (!GROUPS.includes(group)) return { ok: false, error: 'Unknown settings group: ' + group };
     const base = this.baseConfig;
 
@@ -195,7 +275,7 @@ class SettingsManager {
         if (this.modules.router) {
           this.modules.router.setStrategy(base.routing?.strategy || 'random');
         }
-        this.config.routing.strategy = base.routing?.strategy || 'random';
+        this.config.routing!.strategy = base.routing?.strategy || 'random';
         break;
       case 'circuit_breaker':
         if (this.modules.circuitBreaker) {
@@ -226,8 +306,8 @@ class SettingsManager {
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
-  _numFields(v, fields, min) {
-    const values = {};
+  _numFields(v: SettingsValues, fields: readonly (keyof SettingsValues)[], min: number): NumFieldsResult {
+    const values: Record<string, number> = {};
     for (const f of fields) {
       if (v[f] === undefined || v[f] === null || v[f] === '') continue;
       const n = Number(v[f]);
@@ -242,12 +322,12 @@ class SettingsManager {
     return { values };
   }
 
-  _persist(group, value) {
+  _persist(group: string, value: unknown) {
     if (!this.storage || !this.storage.available) return;
     this.storage.setConfigOverride(OVERRIDE_KEYS[group], value);
   }
 
-  _clear(group) {
+  _clear(group: string) {
     if (!this.storage || !this.storage.available) return;
     this.storage.deleteConfigOverride(OVERRIDE_KEYS[group]);
   }
