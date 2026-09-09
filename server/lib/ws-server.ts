@@ -538,11 +538,17 @@ function handleTunnelError(clientManager: ClientManager, stream: MuxStreamLike, 
   if (!p) return;
   if (p.timeout) clearTimeout(p.timeout);
 
+  // A tunnel that already established (p.ready) then errored is normal
+  // connection teardown (e.g. ECONNRESET mid-stream from the target), not a
+  // node health failure — never feed the circuit breaker for those. Only
+  // establishment failures (the tunnel never became ready) count.
+  const established = !!p.ready;
+
   if (p.socket && !p.socket.destroyed) {
     try {
       // Only send the failure reply if the tunnel was never confirmed
       // (p.ready), so an error racing a success cannot double-write.
-      if (!p.ready) {
+      if (!established) {
         if (p.type === 'socks5') safeWrite(p.socket, encodeSocks5Reply(0x01));
         else p.socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
       }
@@ -552,7 +558,9 @@ function handleTunnelError(clientManager: ClientManager, stream: MuxStreamLike, 
     }
   }
 
-  clientManager.trackError(p.client?.id, 'tunnel_error');
+  if (!established) {
+    clientManager.trackError(p.client?.id, 'tunnel_error');
+  }
   clientManager.pendingTunnels.delete(msgId);
   if (p.client) p.client.pendingTunnels.delete(msgId);
 }
@@ -710,11 +718,15 @@ function handleTunnelErrorLegacy(clientManager: ClientManager, msg: ClientMessag
   if (!p) return;
   if (p.timeout) clearTimeout(p.timeout);
 
+  // Only count establishment failures against the circuit breaker; an error
+  // on an already-established tunnel is normal connection teardown.
+  const established = !!p.ready;
+
   if (p.socket && !p.socket.destroyed) {
     try {
       // Only send the failure reply if the tunnel was never confirmed
       // (p.ready), so an error racing a success cannot double-write.
-      if (!p.ready) {
+      if (!established) {
         if (p.type === 'socks5') safeWrite(p.socket, encodeSocks5Reply(0x01));
         else p.socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
       }
@@ -724,7 +736,9 @@ function handleTunnelErrorLegacy(clientManager: ClientManager, msg: ClientMessag
     }
   }
 
-  clientManager.trackError(p.client?.id, 'tunnel_error');
+  if (!established) {
+    clientManager.trackError(p.client?.id, 'tunnel_error');
+  }
   clientManager.pendingTunnels.delete(id);
   if (p.client) p.client.pendingTunnels.delete(id);
 }

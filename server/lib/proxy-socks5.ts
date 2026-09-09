@@ -263,12 +263,20 @@ function handleTCPConnect(
 
   const client = clientManager.selectClient();
   if (!client) {
+    logger.warn(
+      { targetHost: host, targetPort: port, ip: socket.remoteAddress || '' },
+      'SOCKS5 CONNECT rejected: no eligible client (all circuit-broken?)'
+    );
     socket.write(encodeReply(0x01));
     socket.end();
     return;
   }
 
   if (client.pendingTunnels.size >= (config.client?.max_concurrent || 100)) {
+    logger.warn(
+      { clientId: client.id, pending: client.pendingTunnels.size, limit: config.client?.max_concurrent || 100 },
+      'SOCKS5 CONNECT rejected: client at tunnel capacity'
+    );
     socket.write(encodeReply(0x01));
     socket.end();
     return;
@@ -278,6 +286,7 @@ function handleTCPConnect(
   if (client.mux) {
     const stream = client.mux.openTunnel(host, port, 128);
     if (!stream) {
+      logger.warn({ clientId: client.id, targetHost: host, targetPort: port }, 'SOCKS5 CONNECT rejected: openTunnel failed');
       socket.write(encodeReply(0x01));
       socket.end();
       return;
@@ -294,6 +303,10 @@ function handleTCPConnect(
         // ignore
       }
       clientManager.trackError(client.id, 'tunnel_timeout');
+      // Release the pending slots so timed-out tunnels cannot accumulate up
+      // to the max_concurrent cap and reject later SOCKS5 connections.
+      clientManager.pendingTunnels.delete(tunnelId);
+      client.pendingTunnels.delete(tunnelId);
     }, config.client.tunnel_timeout);
 
     clientManager.pendingTunnels.set(tunnelId, {
@@ -335,6 +348,10 @@ function handleTCPConnect(
         // ignore
       }
       clientManager.trackError(client.id, 'tunnel_timeout');
+      // Release the pending slots so timed-out tunnels cannot accumulate up
+      // to the max_concurrent cap and reject later SOCKS5 connections.
+      clientManager.pendingTunnels.delete(tunnelId);
+      client.pendingTunnels.delete(tunnelId);
     }, config.client.tunnel_timeout);
 
     clientManager.pendingTunnels.set(tunnelId, {
