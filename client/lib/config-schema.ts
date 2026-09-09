@@ -163,8 +163,11 @@ function renderExampleYaml(): string {
   const lines: string[] = [
     '# =============================================================================',
     '# Node-Proxy Client - config.yaml.example',
-    '# 本文件由 client/lib/config-schema.js 自动生成，请勿手改。',
-    '# 部署用法：复制为 config.yaml 后按需修改；环境变量会覆盖同名项。',
+    '# 本文件由 client/lib/config-schema.ts 自动生成，请勿手改。',
+    '# 部署用法：复制为 config.yaml 后按需修改。',
+    '# issue #53：仅 server_url / auth_token 支持环境变量覆盖（SERVER_URL / AUTH_TOKEN）；',
+    '# 节点 UUID 走 CLIENT_ID 或 CLIENT_ID_FILE（缺省自动生成并持久化）；',
+    '# 区域与标签由服务端面板管理，客户端不再配置。',
     '# =============================================================================',
     '',
   ];

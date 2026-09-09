@@ -1,8 +1,8 @@
 # =============================================================================
 # Node-Proxy Server - config.yaml.example
-# 本文件由 server/lib/config.js 的 DEFAULTS 自动生成 —— 请勿手改。
+# 本文件由 server/lib/config.ts 的 DEFAULTS 自动生成 —— 请勿手改。
 # 部署用法：复制为 config.yaml 后按需修改；NP_* 环境变量与 config.local.yaml 可覆盖。
-# 变更源头见 server/lib/config.js；CI（同步配置示例）会自动同步本文件。
+# 变更源头见 server/lib/config.ts；CI（同步配置示例）会自动同步本文件。
 # =============================================================================
 server:
   host: 0.0.0.0
