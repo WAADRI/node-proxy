@@ -1,9 +1,17 @@
+#!/usr/bin/env node
 // =============================================================================
 // Generate config.yaml.example for server AND client from code defaults
-// (issue #41). Run: node server/scripts/gen-config-example.js
+// (issue #41). Run: node server/scripts/gen-config-example.ts
 // A CI workflow auto-runs this on push and commits any resulting changes.
 // =============================================================================
+// Migrated to TypeScript (issue #42, Phase 2). CJS-style: values are exported
+// via module.exports only; the type-only export below makes TypeScript treat
+// this as a module (eliminating global-scope collisions).
+// =============================================================================
 'use strict';
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+export type {};
 
 const fs = require('fs');
 const path = require('path');
@@ -25,7 +33,7 @@ const serverHead = [
 fs.writeFileSync(path.join(root, 'server', 'config.yaml.example'), serverHead + yaml.dump(DEFAULTS, { noRefs: true }));
 
 // --- client ------------------------------------------------------------------
-const { renderExampleYaml } = require('../../client/lib/config-schema');
+const { renderExampleYaml } = require('../../client/lib/config-schema.ts');
 fs.writeFileSync(path.join(root, 'client', 'config.yaml.example'), renderExampleYaml());
 
 console.log('config.yaml.example regenerated (server + client)');

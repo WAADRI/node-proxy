@@ -4,7 +4,13 @@
 // Asks the security-relevant settings and writes them to config.local.yaml
 // (an untracked overlay that survives `git pull`). Restart the server after.
 // =============================================================================
+// Migrated to TypeScript (issue #42, Phase 2). CJS-style TS on purpose.
+// =============================================================================
 'use strict';
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+
+import type { Readable, Writable } from 'stream';
 
 const fs = require('fs');
 const path = require('path');
@@ -12,12 +18,12 @@ const readline = require('readline');
 const crypto = require('crypto');
 const yaml = require('js-yaml');
 
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-const q = (prompt) => new Promise((res) => rl.question(prompt, res));
+const rl = readline.createInterface({ input: process.stdin as Readable, output: process.stdout as Writable });
+const q = (prompt: string): Promise<string> => new Promise((res) => rl.question(prompt, res));
 
-const rnd = (len) => crypto.randomBytes(len).toString('base64url').slice(0, len);
+const rnd = (len: number): string => crypto.randomBytes(len).toString('base64url').slice(0, len);
 
-async function main() {
+async function main(): Promise<void> {
   console.log('=== Node-Proxy Server 配置向导 ===');
   console.log('（直接回车使用默认值；生成的覆盖写入 config.local.yaml，不修改 config.yaml）\n');
 
@@ -25,7 +31,7 @@ async function main() {
   const authToken = token.trim() || rnd(32);
 
   const proxyAuth = (await q('启用代理用户密码认证? (y/N): ')).trim().toLowerCase();
-  let proxy = null;
+  let proxy: { enabled: boolean; username?: string; password?: string } | null = null;
   if (proxyAuth === 'y' || proxyAuth === 'yes') {
     const user = (await q(`  代理用户名 (默认 proxy): `)).trim() || 'proxy';
     const pass = (await q('  代理密码 (回车生成随机): ')).trim() || rnd(16);
@@ -59,4 +65,4 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((e) => { console.error(e.message); process.exit(1); });
+main().catch((e: Error) => { console.error(e.message); process.exit(1); });
