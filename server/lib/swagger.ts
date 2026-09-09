@@ -1,7 +1,15 @@
 // =============================================================================
 // Swagger - OpenAPI documentation for the proxy API
-// =============================================================================
-'use strict';
+// Migrated to TypeScript (issue #42, Phase 2). CJS-style: values are exported
+// via module.exports only; no import/export statements, so Node 24 type
+// stripping keeps this file CommonJS.
+interface SwaggerRes {
+  json(value: unknown): void;
+  send(value: string): void;
+}
+interface SwaggerApp {
+  get(path: string, handler: (req: unknown, res: SwaggerRes) => void): unknown;
+}
 
 const swaggerSpec = {
   openapi: '3.0.3',
@@ -617,7 +625,7 @@ const swaggerSpec = {
   },
 };
 
-function setupSwagger(app) {
+function setupSwagger(app: SwaggerApp) {
   // Serve swagger.json
   app.get('/api/swagger.json', (req, res) => {
     res.json(swaggerSpec);
