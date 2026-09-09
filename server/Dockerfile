@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 # Node-Proxy Server - Dockerfile
 #   Builds the Vue management panel (server/web) and bundles it into the image.
 # =============================================================================
@@ -47,5 +47,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 ENV NODE_ENV=production
 
-ENTRYPOINT ["node", "server.js"]
+ENTRYPOINT ["node", "server.ts"]
 CMD []
