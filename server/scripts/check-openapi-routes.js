@@ -1,6 +1,6 @@
 // =============================================================================
 // OpenAPI consistency check (issue #42, Phase 1)
-// Ensures the runtime spec in server/lib/swagger.js covers every JSON API route
+// Ensures the runtime spec in server/lib/swagger.ts covers every JSON API route
 // the server actually registers ("no invisible endpoints").
 //
 //  * scans server source files for express route registrations
@@ -58,7 +58,7 @@ function collectRoutes(file) {
 }
 
 function collectSpec() {
-  const { swaggerSpec } = require('../lib/swagger');
+  const { swaggerSpec } = require('../lib/swagger.ts');
   const out = new Set();
   for (const [p, item] of Object.entries(swaggerSpec.paths || {})) {
     for (const method of Object.keys(item)) {

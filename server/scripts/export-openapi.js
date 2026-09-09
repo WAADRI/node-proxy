@@ -1,13 +1,13 @@
 // =============================================================================
-// Export the runtime OpenAPI spec (server/lib/swagger.js) to generated.json so
-// redocly can lint it. Single source of truth stays swaggerSpec in swagger.js.
+// Export the runtime OpenAPI spec (server/lib/swagger.ts) to generated.json so
+// redocly can lint it. Single source of truth stays swaggerSpec in swagger.ts.
 // =============================================================================
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
 
-const { swaggerSpec } = require('../lib/swagger');
+const { swaggerSpec } = require('../lib/swagger.ts');
 
 // Deep-copy and auto-fill operationIds (e.g. GET /client/{id}/tags ->
 // getClientIdTags) so redocly lints clean without hand-maintaining 50+ ids.

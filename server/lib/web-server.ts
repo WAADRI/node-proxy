@@ -165,7 +165,7 @@ function createWebServer(
   // ===========================================================================
   // Swagger / OpenAPI docs
   // ===========================================================================
-  const { setupSwagger } = require('./swagger') as { setupSwagger(app: unknown): void };
+  const { setupSwagger } = require('./swagger.ts') as { setupSwagger(app: unknown): void };
   setupSwagger(app);
 
   // ===========================================================================
