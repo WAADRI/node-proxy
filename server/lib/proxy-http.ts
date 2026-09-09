@@ -14,11 +14,18 @@ import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
 import type { DomainRouter } from './domain-router.ts';
 import type { RequestCache, HeadersLike } from './cache.ts';
+import type { ProxyRoute } from './auth.ts';
 
 // plugin-manager is a CJS-style module without an exported class type; the
 // proxy only needs the fire-and-forget hook entry point.
 interface PluginManagerLike {
   executeHook(hookName: string, context: unknown): unknown;
+}
+
+// Auth contract: resolveProxyAuth additionally returns the per-password
+// routing directive (tag / forced node UUID / strategy, issue #53).
+interface HttpAuthManagerLike {
+  resolveProxyAuth(header: string | string[] | undefined): { ok: boolean; route?: ProxyRoute };
 }
 
 // Both ServerResponse (request-event CONNECT branch) and the raw net.Socket
@@ -32,7 +39,7 @@ interface ConnectTarget {
 
 export function createHttpProxy(
   clientManager: ClientManager,
-  authManager: { validateProxyAuth(header: string | string[] | undefined): boolean },
+  authManager: HttpAuthManagerLike,
   config: ServerConfig,
   logger: AppLogger,
   domainRouter: DomainRouter | null,
@@ -60,17 +67,20 @@ function runPluginHook(pluginManager: PluginManagerLike | null | undefined, hook
   Promise.resolve(pluginManager.executeHook(hook, context)).catch(() => {});
 }
 
+// Resolves proxy credentials and returns the routing directive, or null when
+// authentication fails (caller responds 407).
 function checkProxyAuth(
   req: IncomingMessage,
-  authManager: { validateProxyAuth(header: string | string[] | undefined): boolean },
+  authManager: HttpAuthManagerLike,
   logger: AppLogger
-) {
+): ProxyRoute | null {
   const authHeader = req.headers['proxy-authorization'];
-  if (!authManager.validateProxyAuth(authHeader)) {
+  const result = authManager.resolveProxyAuth(authHeader);
+  if (!result.ok) {
     logger.warn({ ip: req.socket.remoteAddress, method: req.method, url: req.url }, 'Proxy auth failed');
-    return false;
+    return null;
   }
-  return true;
+  return result.route || {};
 }
 
 // Best-effort real client IP: honour X-Forwarded-For when a reverse proxy
@@ -99,7 +109,7 @@ function handleHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   clientManager: ClientManager,
-  authManager: { validateProxyAuth(header: string | string[] | undefined): boolean },
+  authManager: HttpAuthManagerLike,
   config: ServerConfig,
   logger: AppLogger,
   domainRouter: DomainRouter | null,
@@ -107,7 +117,8 @@ function handleHttpRequest(
   pluginManager: PluginManagerLike | null
 ) {
   const startedAt = Date.now();
-  if (!checkProxyAuth(req, authManager, logger)) {
+  const route = checkProxyAuth(req, authManager, logger);
+  if (!route) {
     res.writeHead(407, { 'Proxy-Authenticate': 'Basic realm="Node-Proxy"', 'Content-Type': 'text/plain' });
     res.end('Proxy authentication required');
     return;
@@ -204,7 +215,12 @@ function handleHttpRequest(
   }
 
   // Select client with optional tag
-  const client = clientManager.selectClient(tag);
+  // Per-password route (tag / forced node UUID / strategy) wins over the
+  // domain-rule tag when both are present (issue #53).
+  const client = clientManager.selectClient(route.tag || tag, {
+    clientId: route.clientId || null,
+    strategy: route.strategy || null,
+  });
   if (!client) {
     res.writeHead(503, { 'Content-Type': 'text/plain' });
     res.end('No available proxy clients');
@@ -363,7 +379,7 @@ function handleConnect(
   req: IncomingMessage,
   socket: ConnectTarget,
   clientManager: ClientManager,
-  authManager: { validateProxyAuth(header: string | string[] | undefined): boolean },
+  authManager: HttpAuthManagerLike,
   config: ServerConfig,
   logger: AppLogger,
   domainRouter: DomainRouter | null,
@@ -378,7 +394,8 @@ function handleConnect(
     logger.warn({ error: message }, 'CONNECT socket error');
   });
 
-  if (!checkProxyAuth(req, authManager, logger)) {
+  const route = checkProxyAuth(req, authManager, logger);
+  if (!route) {
     socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="Node-Proxy"\r\n\r\n');
     return;
   }
@@ -412,7 +429,12 @@ function handleConnect(
     tag = domainRouter.match(host);
   }
 
-  const client = clientManager.selectClient(tag);
+  // Per-password route (tag / forced node UUID / strategy) wins over the
+  // domain-rule tag when both are present (issue #53).
+  const client = clientManager.selectClient(route.tag || tag, {
+    clientId: route.clientId || null,
+    strategy: route.strategy || null,
+  });
   if (!client) {
     socket.end('HTTP/1.1 503 Service Unavailable\r\n\r\n');
     return;
