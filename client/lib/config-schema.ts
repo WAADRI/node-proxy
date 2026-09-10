@@ -45,10 +45,29 @@ const SCHEMA: SchemaEntry[] = [
     example: 'my-secret-token',
     secret: true,
   },
-  // issue #53: node identity (region / tags) and tuning knobs are no longer
-  // passed through environment variables. Only the endpoint (SERVER_URL) and
-  // the auth secret (AUTH_TOKEN) honor env overrides; everything below is
-  // config-file only. Region/tags are managed on the server panel now.
+  // issue #53: only the endpoint (SERVER_URL) and the auth secret (AUTH_TOKEN)
+  // honor env overrides; everything below is config-file only.
+  //
+  // region / tags stay configurable here as optional node-side defaults: the
+  // panel remains authoritative (a value set there wins), but a node that
+  // declares its identity in config.yaml still reports it, so existing
+  // deployments keep showing up after upgrading past #89.
+  {
+    key: 'region',
+    env: [],
+    type: 'string',
+    default: '',
+    desc: '节点区域（可选，面板未设置时显示该值；面板设置后以面板为准）',
+    example: 'cn-guangzhou',
+  },
+  {
+    key: 'tags',
+    env: [],
+    type: 'string',
+    default: '',
+    desc: '节点标签，逗号分隔（可选，面板未设置时显示该值；面板设置后以面板为准）',
+    example: 'cn,premium',
+  },
   {
     key: 'reconnect_delay',
     env: [],
@@ -167,7 +186,7 @@ function renderExampleYaml(): string {
     '# 部署用法：复制为 config.yaml 后按需修改。',
     '# issue #53：仅 server_url / auth_token 支持环境变量覆盖（SERVER_URL / AUTH_TOKEN）；',
     '# 节点 UUID 走 CLIENT_ID 或 CLIENT_ID_FILE（缺省自动生成并持久化）；',
-    '# 区域与标签由服务端面板管理，客户端不再配置。',
+    '# region / tags 可选：面板没设置时显示这里的值，面板设置后以面板为准。',
     '# =============================================================================',
     '',
   ];
