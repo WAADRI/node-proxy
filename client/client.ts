@@ -74,8 +74,12 @@ const activeTunnels = new Map();
 let ws: WsClient | null = null;
 let reconnectAttempt = 0;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let currentClientId: string | null = null;
 let intentionalClose = false;
+// When the socket last entered the CONNECTING state (0 = not connecting).
+// Bounds a handshake that never completes so the watchdog can force a retry.
+let connectingSince = 0;
 
 // Liveness detection: the server never replies to the JSON heartbeat, so we
 // additionally send ws protocol-level pings and expect pongs. A TCP connection
@@ -84,6 +88,13 @@ let intentionalClose = false;
 // forever instead of reconnecting.
 let missedPongs = 0;
 const MAX_MISSED_PONGS = 3; // ~3 x heartbeat_interval before declaring death
+
+// A ws close handshake can stall forever when the peer vanished without a FIN:
+// the socket parks in CLOSING, the 'close' event never fires, and the node sits
+// there disconnected until it is restarted by hand. After this long in
+// CONNECTING (or any time found in CLOSING/CLOSED) the watchdog tears the
+// socket down itself and reconnects.
+const CONNECT_GRACE_MS = 20000;
 
 // --- Duck types for the ws instance (client has no @types/ws) ----------------
 interface WsClient {
@@ -199,18 +210,33 @@ function getSystemInfo() {
 // WebSocket Connection
 // =============================================================================
 function connect() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   if (ws) {
     try { ws.close(); } catch (_) {}
   }
 
   log('info', `Connecting to ${CONFIG.server_url} ...`);
+  connectingSince = Date.now();
 
   const wsOptions = {
     rejectUnauthorized: CONFIG.tls_reject_unauthorized,
     handshakeTimeout: 10000,
   };
 
-  const sock: WsClient = new WebSocket(CONFIG.server_url, wsOptions);
+  let sock: WsClient;
+  try {
+    sock = new WebSocket(CONFIG.server_url, wsOptions);
+  } catch (err) {
+    // A constructor throw (bad URL, TLS setup failure) would otherwise escape
+    // the reconnect timer and permanently kill the reconnect chain.
+    log('error', 'Failed to create WebSocket: ' + (err instanceof Error ? err.message : String(err)));
+    connectingSince = 0;
+    scheduleReconnect();
+    return;
+  }
   ws = sock;
 
   sock.on('open', () => {
@@ -218,6 +244,7 @@ function connect() {
     reconnectAttempt = 0;
     intentionalClose = false;
     missedPongs = 0;
+    connectingSince = 0;
     sock.send(JSON.stringify({ type: 'auth', token: CONFIG.auth_token }));
   });
 
@@ -253,7 +280,16 @@ function connect() {
 
   sock.on('close', (code: unknown, reason: unknown) => {
     log('info', `Disconnected (code: ${code}, reason: ${reason || 'none'})`);
-    cleanupAll();
+    connectingSince = 0;
+    if (ws === sock) ws = null;
+    // cleanupAll must never be allowed to swallow the reconnect: a throw here
+    // used to abort the handler before scheduleReconnect() ran, leaving the
+    // node permanently offline.
+    try {
+      cleanupAll();
+    } catch (err) {
+      log('error', 'cleanupAll failed on close: ' + (err instanceof Error ? err.message : String(err)));
+    }
     if (!intentionalClose) {
       scheduleReconnect();
     }
@@ -261,17 +297,53 @@ function connect() {
 
   sock.on('error', (err: unknown) => {
     log('error', 'WebSocket error: ' + (err instanceof Error ? err.message : String(err)));
+    // Normally 'close' follows 'error' and drives the reconnect, but not for
+    // every failure mode - make sure a reconnect is pending either way.
+    if (!intentionalClose && ws === sock) {
+      scheduleReconnect();
+    }
   });
 }
 
+// Tear down a socket that can no longer recover and make sure a reconnect is
+// scheduled. Needed because a stalled close handshake parks the socket in
+// CLOSING, where neither 'close' nor 'error' ever fires again.
+function forceReconnect(reason: string) {
+  log('warn', `Forcing reconnect: ${reason}`);
+  missedPongs = 0;
+  connectingSince = 0;
+  const sock = ws;
+  ws = null;
+  if (sock) {
+    try {
+      sock.terminate();
+    } catch (_) {
+      // ignore - terminate on an already-dead socket is harmless
+    }
+  }
+  try {
+    cleanupAll();
+  } catch (err) {
+    log('error', 'cleanupAll failed during forced reconnect: ' + (err instanceof Error ? err.message : String(err)));
+  }
+  scheduleReconnect();
+}
+
 function scheduleReconnect() {
+  if (intentionalClose) return;
+  // Only ever one reconnect chain: 'close', 'error' and the watchdog can all
+  // observe the same failure, and stacking timers would open several sockets.
+  if (reconnectTimer) return;
   const delay = Math.min(
     CONFIG.reconnect_delay * Math.pow(1.5, reconnectAttempt) + Math.random() * CONFIG.reconnect_jitter,
     CONFIG.max_reconnect_delay
   );
   reconnectAttempt++;
   log('info', `Reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttempt})`);
-  setTimeout(connect, delay);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, delay);
 }
 
 function startHeartbeat() {
@@ -279,20 +351,47 @@ function startHeartbeat() {
   if (CONFIG.heartbeat_interval <= 0) return;
   heartbeatTimer = setInterval(() => {
     const sock = ws;
-    if (sock && sock.readyState === WebSocket.OPEN) {
-      // Protocol-level ping: server (ws library) auto-replies with a pong.
-      // If the pong stops arriving the TCP connection is half-dead even
-      // though no close/error fired - force a reconnect in that case.
-      sock.ping();
-      missedPongs++;
-      if (missedPongs >= MAX_MISSED_PONGS) {
-        log('warn', `No pong from server for ${missedPongs} heartbeats - terminating dead connection`);
-        missedPongs = 0;
-        try {
-          sock.terminate(); // triggers 'close' -> scheduleReconnect
-        } catch (_) {}
-        return;
+    if (!sock) {
+      // No socket at all (e.g. a reconnect was lost): make sure one is coming.
+      scheduleReconnect();
+      return;
+    }
+
+    const state = sock.readyState;
+
+    // CLOSING / CLOSED: a stalled close handshake never emits 'close' (the
+    // peer vanished without a FIN), so waiting on the event leaves the node
+    // silently offline forever. Drive the reconnect ourselves.
+    if (state === WebSocket.CLOSING || state === WebSocket.CLOSED) {
+      forceReconnect(`socket stuck in readyState ${state}`);
+      return;
+    }
+
+    // CONNECTING: a handshake that never completes must not hang forever.
+    if (state === WebSocket.CONNECTING) {
+      if (connectingSince && Date.now() - connectingSince > CONNECT_GRACE_MS) {
+        forceReconnect('handshake never completed');
       }
+      return;
+    }
+
+    if (state !== WebSocket.OPEN) return;
+
+    // Protocol-level ping: server (ws library) auto-replies with a pong.
+    // If the pong stops arriving the TCP connection is half-dead even
+    // though no close/error fired - force a reconnect in that case.
+    try {
+      sock.ping();
+    } catch (err) {
+      forceReconnect('ping failed: ' + (err instanceof Error ? err.message : String(err)));
+      return;
+    }
+    missedPongs++;
+    if (missedPongs >= MAX_MISSED_PONGS) {
+      forceReconnect(`no pong from server for ${missedPongs} heartbeats`);
+      return;
+    }
+    try {
       // Server-side liveness (JSON heartbeat keeps server health-check happy)
       sock.send(JSON.stringify({ type: 'heartbeat' }));
       // Also send stats
@@ -305,6 +404,8 @@ function startHeartbeat() {
           activeTunnels: activeTunnels.size,
         },
       }));
+    } catch (err) {
+      forceReconnect('heartbeat send failed: ' + (err instanceof Error ? err.message : String(err)));
     }
   }, CONFIG.heartbeat_interval);
 }
@@ -950,6 +1051,18 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 process.on('uncaughtException', (err: Error) => {
   log('error', 'Uncaught exception: ' + (err.stack || err.message));
+  // Node's own guidance is that the process is in an undefined state here, so
+  // never leave the reconnect chain broken: if the socket is not usable, force
+  // a fresh connection instead of hanging silently (which is how a node ends
+  // up shown as disconnected on the panel with no process restart).
+  try {
+    const sock = ws;
+    if (!sock || sock.readyState !== WebSocket.OPEN) {
+      forceReconnect('uncaught exception with unhealthy socket');
+    }
+  } catch (_) {
+    // last resort: must not throw out of the handler
+  }
 });
 process.on('unhandledRejection', (reason: unknown) => {
   log('error', 'Unhandled rejection: ' + reason);
