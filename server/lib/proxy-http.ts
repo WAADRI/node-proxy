@@ -454,7 +454,9 @@ function handleConnect(
   const timeout = setTimeout(() => {
     clientManager.pendingTunnels.delete(tunnelId);
     client.pendingTunnels.delete(tunnelId);
-    clientManager.trackError(client.id, 'tunnel_timeout');
+    // NOTE: not feeding the circuit breaker here — a tunnel_timeout is a
+    // target-level failure, not a node-health signal.  Feeding the breaker
+    // also made SOCKS5 unreachable via this client (same breaker).
     if (!socket.destroyed) {
       socket.end('HTTP/1.1 504 Gateway Timeout\r\n\r\n');
     }

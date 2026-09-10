@@ -325,6 +325,11 @@ function handleTCPConnect(
       // to the max_concurrent cap and reject later SOCKS5 connections.
       clientManager.pendingTunnels.delete(tunnelId);
       client.pendingTunnels.delete(tunnelId);
+      // NOTE: not feeding the circuit breaker here — a tunnel_timeout is a
+      // target-level failure (host unreachable / DNS failing for that one
+      // target), not a node-health signal. Feeding the breaker caused the
+      // SOCKS5 proxy to become unavailable for ALL targets once per-target
+      // timeouts accumulated ("运行了半天又不行了").
     }, config.client.tunnel_timeout);
 
     clientManager.pendingTunnels.set(tunnelId, {
@@ -370,6 +375,7 @@ function handleTCPConnect(
       // to the max_concurrent cap and reject later SOCKS5 connections.
       clientManager.pendingTunnels.delete(tunnelId);
       client.pendingTunnels.delete(tunnelId);
+      // NOTE: not feeding the circuit breaker here — see mux-path note above.
     }, config.client.tunnel_timeout);
 
     clientManager.pendingTunnels.set(tunnelId, {
