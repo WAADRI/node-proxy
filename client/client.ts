@@ -193,8 +193,14 @@ function getSystemInfo() {
     cpuCount: os.cpus().length,
     totalMemory: os.totalmem(),
     freeMemory: os.freemem(),
-    // Region / tags are intentionally not reported (issue #53): node identity
-    // is managed from the server panel (client metadata + groups).
+    // Region / tags from config.yaml are reported as node-side defaults: the
+    // panel stays authoritative (a value set there wins), but a node declaring
+    // its identity in config.yaml must keep showing up after upgrading past
+    // #89, which dropped this reporting and made existing configs look ignored.
+    region: CONFIG.region ? String(CONFIG.region) : undefined,
+    tags: CONFIG.tags
+      ? String(CONFIG.tags).split(',').map((t: string) => t.trim()).filter(Boolean)
+      : [],
     nodeVersion: process.version,
     pid: process.pid,
     uptime: os.uptime(),
@@ -1078,6 +1084,10 @@ log('info', `  Server: ${CONFIG.server_url}`);
 log('info', `  Hostname: ${os.hostname()}`);
 log('info', `  Platform: ${os.platform()} ${os.arch()}`);
 log('info', `  Concurrency: ${CONFIG.max_concurrent_requests}`);
+// Surface the optional node-side identity so a config that the server will not
+// display (region/tags) is visible in the startup log.
+log('info', `  Region: ${CONFIG.region ? String(CONFIG.region) : '(not set)'}`);
+log('info', `  Tags: ${CONFIG.tags ? String(CONFIG.tags) : '(not set)'}`);
 log('info', '========================================');
 
 connect();
