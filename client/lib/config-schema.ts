@@ -45,16 +45,19 @@ const SCHEMA: SchemaEntry[] = [
     example: 'my-secret-token',
     secret: true,
   },
-  // issue #53: only the endpoint (SERVER_URL) and the auth secret (AUTH_TOKEN)
-  // honor env overrides; everything below is config-file only.
+  // Node-side identity and the tuning knobs keep their environment-variable
+  // mappings. Real deployments pass per-node values through docker compose
+  // environment entries, and #89 dropping those mappings silently ignored every
+  // setting in an existing compose file (region/tags included), which is
+  // impossible to notice when the values happen to match the defaults.
+  // A config.yaml entry still works; an environment override wins, matching the
+  // precedence in effect before #89.
   //
-  // region / tags stay configurable here as optional node-side defaults: the
-  // panel remains authoritative (a value set there wins), but a node that
-  // declares its identity in config.yaml still reports it, so existing
-  // deployments keep showing up after upgrading past #89.
+  // region / tags are node-side defaults only: the panel stays authoritative
+  // (a value set there wins), these merely seed what the node reports.
   {
     key: 'region',
-    env: [],
+    env: ['REGION', 'NODE_REGION'],
     type: 'string',
     default: '',
     desc: '节点区域（可选，面板未设置时显示该值；面板设置后以面板为准）',
@@ -62,7 +65,7 @@ const SCHEMA: SchemaEntry[] = [
   },
   {
     key: 'tags',
-    env: [],
+    env: ['TAGS'],
     type: 'string',
     default: '',
     desc: '节点标签，逗号分隔（可选，面板未设置时显示该值；面板设置后以面板为准）',
@@ -70,56 +73,56 @@ const SCHEMA: SchemaEntry[] = [
   },
   {
     key: 'reconnect_delay',
-    env: [],
+    env: ['RECONNECT_DELAY'],
     type: 'number',
     default: 3000,
     desc: '断线重连初始延迟（毫秒）',
   },
   {
     key: 'max_reconnect_delay',
-    env: [],
+    env: ['MAX_RECONNECT_DELAY'],
     type: 'number',
     default: 30000,
     desc: '断线重连最大延迟（毫秒）',
   },
   {
     key: 'reconnect_jitter',
-    env: [],
+    env: ['RECONNECT_JITTER'],
     type: 'number',
     default: 1000,
     desc: '重连延迟随机抖动（毫秒）',
   },
   {
     key: 'heartbeat_interval',
-    env: [],
+    env: ['HEARTBEAT_INTERVAL'],
     type: 'number',
     default: 15000,
     desc: '心跳间隔（毫秒）',
   },
   {
     key: 'request_timeout',
-    env: [],
+    env: ['REQUEST_TIMEOUT'],
     type: 'number',
     default: 30000,
     desc: 'HTTP 请求超时（毫秒）',
   },
   {
     key: 'tunnel_timeout',
-    env: [],
+    env: ['TUNNEL_TIMEOUT'],
     type: 'number',
     default: 30000,
     desc: 'TCP 隧道建连超时（毫秒）',
   },
   {
     key: 'max_concurrent_requests',
-    env: [],
+    env: ['MAX_CONCURRENT_REQUESTS'],
     type: 'number',
     default: 100,
     desc: '最大并发请求数',
   },
   {
     key: 'tls_reject_unauthorized',
-    env: [],
+    env: ['TLS_REJECT_UNAUTHORIZED'],
     type: 'boolean',
     default: false,
     desc: '是否校验证书（自签证书场景设 false）',
@@ -184,7 +187,7 @@ function renderExampleYaml(): string {
     '# Node-Proxy Client - config.yaml.example',
     '# 本文件由 client/lib/config-schema.ts 自动生成，请勿手改。',
     '# 部署用法：复制为 config.yaml 后按需修改。',
-    '# issue #53：仅 server_url / auth_token 支持环境变量覆盖（SERVER_URL / AUTH_TOKEN）；',
+    '# 每一项都可用对应环境变量覆盖（环境变量优先级高于本文件）；',
     '# 节点 UUID 走 CLIENT_ID 或 CLIENT_ID_FILE（缺省自动生成并持久化）；',
     '# region / tags 可选：面板没设置时显示这里的值，面板设置后以面板为准。',
     '# =============================================================================',
