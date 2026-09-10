@@ -104,7 +104,8 @@ class Storage {
   db: SqlJsDatabaseLike | null = null;
   available = false;
   private dbPath: string | null = null;
-  private _saveCounter = 0;
+  private _saveTimer: ReturnType<typeof setInterval> | null = null;
+  private _dirty = false;
   ready?: Promise<void>;
 
   constructor(config: Record<string, unknown>, logger: Storage['log']) {
@@ -141,13 +142,26 @@ class Storage {
         this.db = new SQL.Database();
       }
 
-      this.db.run('PRAGMA journal_mode = WAL');
+      this.db.run('PRAGMA journal_mode = DELETE');
       this._initSchema();
       this.available = true;
       this.dbPath = dbPath;
 
       // Save initial schema
       this._save();
+
+      // Periodic save — exports the in-memory sql.js database to disk at a
+      // fixed interval instead of after every N insert/update operations.
+      // A counter-based approach (every 100 calls) generates dozens of
+      // full-database exports per second on a busy proxy, blocking the event
+      // loop and causing Docker health-check timeouts → container restart
+      // → on-disk file may be stale/empty → traffic data "disappears".
+      this._saveTimer = setInterval(() => {
+        if (this._dirty) {
+          this._save();
+          this._dirty = false;
+        }
+      }, 30000);
 
       this.log.info({ path: dbPath }, 'Storage initialized');
     } catch (err) {
@@ -246,7 +260,7 @@ class Storage {
         'INSERT INTO client_events (client_id, event_type, data, created_at) VALUES (?, ?, ?, ?)',
         [clientId, eventType, JSON.stringify(data), Date.now()]
       );
-      this._save();
+      this._dirty = true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.error({ error: message }, 'Failed to log client event');
@@ -302,9 +316,7 @@ class Storage {
           [clientId, bytesSent, bytesReceived, count, periodStart, periodStart + 60000]
         );
       }
-      // Save periodically (every 100 records)
-      this._saveCounter = this._saveCounter + 1;
-      if (this._saveCounter % 100 === 0) this._save();
+      this._dirty = true;
     } catch (_) {
       // Ignore - best effort
     }
@@ -321,7 +333,9 @@ class Storage {
         return { bytesSent: num(vals[0]), bytesReceived: num(vals[1]), requests: num(vals[2]) };
       }
       return { bytesSent: 0, bytesReceived: 0, requests: 0 };
-    } catch (_) {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error({ error: message }, 'getTrafficStats query failed');
       return { bytesSent: 0, bytesReceived: 0, requests: 0 };
     }
   }
@@ -363,7 +377,9 @@ class Storage {
         });
       }
       return out;
-    } catch (_) {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error({ error: message }, 'getTrafficDaily query failed');
       return [];
     }
   }
@@ -379,7 +395,9 @@ class Storage {
         const vals = result[0].values[0];
         return { bytesSent: num(vals[0]), bytesReceived: num(vals[1]) };
       }
-    } catch (_) {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error({ error: message }, 'getTrafficTotals query failed');
       // fall through
     }
     return { bytesSent: 0, bytesReceived: 0 };
@@ -395,9 +413,10 @@ class Storage {
         'INSERT OR REPLACE INTO config_overrides (key, value, updated_at) VALUES (?, ?, ?)',
         [key, JSON.stringify(value), Date.now()]
       );
-      this._save();
-    } catch (_) {
-      // ignore
+      this._dirty = true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error({ error: message }, 'Failed to set config override');
     }
   }
 
@@ -575,6 +594,10 @@ class Storage {
   }
 
   close() {
+    if (this._saveTimer) {
+      clearInterval(this._saveTimer);
+      this._saveTimer = null;
+    }
     if (this.db) {
       try {
         this._save();
