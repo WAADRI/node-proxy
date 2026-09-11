@@ -59,6 +59,26 @@ function safeWrite(socket: NetSocket | null | undefined, data: Buffer | string):
   }
 }
 
+// Returns the clientId this socket still owns, or null when the registration
+// belongs to a newer connection (or to nobody).
+//
+// A stale socket's 'close' can fire AFTER the same clientId has already
+// re-registered on a fresh socket - typically when a node restarts: the old TCP
+// connection is still being torn down while the new one has already sent 'info'.
+// remove() deletes the entry by id alone and never touches the socket, so an
+// unguarded call drops the LIVE registration while its connection stays open.
+// The node then keeps heart-beating into a session the server has forgotten and
+// never recovers, because only 'info' can re-register a client.
+function ownedRegistration(
+  clientManager: ClientManager,
+  clientId: string | null,
+  ws: WebSocket
+): string | null {
+  if (!clientId) return null;
+  const current = clientManager.getById(clientId);
+  return current && current.ws === ws ? clientId : null;
+}
+
 export function setupClientWebSocket(
   httpServer: HttpServer,
   clientManager: ClientManager,
@@ -202,9 +222,26 @@ export function setupClientWebSocket(
             break;
 
           case 'heartbeat':
-          case 'pong':
-            if (clientId) clientManager.recordPong(clientId);
+          case 'pong': {
+            if (!clientId) break;
+            const owner = ownedRegistration(clientManager, clientId, ws);
+            if (owner) {
+              clientManager.recordPong(owner);
+              break;
+            }
+            // The socket is open but no longer owns a registration (dropped by a
+            // stale close or a health check). A JSON heartbeat cannot re-register
+            // a client - only 'info' can - so without this the node would sit here
+            // looking healthy at the ws layer while the server routes nothing to
+            // it. Close the socket so the client reconnects and registers again.
+            logger.warn({ clientId }, 'Heartbeat from unregistered session - closing');
+            try {
+              ws.close(4002, 'Session not registered');
+            } catch (_) {
+              // ignore
+            }
             break;
+          }
 
           case 'stats':
             if (clientId) {
@@ -234,13 +271,17 @@ export function setupClientWebSocket(
 
     ws.on('close', (code: number, _reason: string) => {
       mux.destroy();
-      if (clientId) clientManager.remove(clientId, `ws_close:${code}`);
+      // Only drop the registration if this socket still owns it: a replaced
+      // connection closing late must not delete the session that took over.
+      const owner = ownedRegistration(clientManager, clientId, ws);
+      if (owner) clientManager.remove(owner, `ws_close:${code}`);
     });
 
     ws.on('error', (err) => {
       logger.error({ error: err.message, clientId }, 'Client WebSocket error');
       mux.destroy();
-      if (clientId) clientManager.remove(clientId, 'ws_error');
+      const owner = ownedRegistration(clientManager, clientId, ws);
+      if (owner) clientManager.remove(owner, 'ws_error');
     });
 
     // Heartbeat via StreamMux
