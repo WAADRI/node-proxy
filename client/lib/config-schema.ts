@@ -1,8 +1,18 @@
 // =============================================================================
-// Client configuration schema - single source of truth for defaults, env
-// mapping, the generated config.yaml.example and the interactive setup wizard
-// (issues #40 / #41).
+// Client configuration schema - single source of truth for the handful of
+// settings a node may configure, plus the internals it may not.
 // =============================================================================
+// Issue #53 (item 4): a node is configured with its endpoint, its auth
+// credential and the region/tags it reports - nothing else. Deployments used to
+// carry their own tuning values (heartbeat interval, timeouts, concurrency,
+// reconnect backoff), which let two nodes behave differently in ways nobody
+// could see from the panel. Those are fixed constants now: they stay in the
+// config object so the runtime keeps a single source of values, but neither
+// config.yaml nor the environment can change them.
+//
+// The node UUID is not part of this schema: it comes from CLIENT_ID or
+// CLIENT_ID_FILE, and is auto-generated (and persisted) when unset.
+//
 // Migrated to TypeScript (issue #42, Phase 2). CJS-style module: keeps
 // require()/module.exports so Node type-strips it in place and the runtime
 // behavior is unchanged.
@@ -27,13 +37,15 @@ interface SchemaEntry {
 
 type ConfigValues = Record<string, ConfigScalar>;
 
+// Settings a node may be configured with (config.yaml, overridden by the
+// environment). Everything a node legitimately needs to differ on lives here.
 const SCHEMA: SchemaEntry[] = [
   {
     key: 'server_url',
     env: ['SERVER_URL'],
     type: 'string',
     default: 'ws://127.0.0.1:3000/ws',
-    desc: '代理服务器 WebSocket 地址',
+    desc: '代理服务器 WebSocket 地址（端点）',
     example: 'ws://1.2.3.4:3000/ws',
   },
   {
@@ -41,18 +53,10 @@ const SCHEMA: SchemaEntry[] = [
     env: ['AUTH_TOKEN'],
     type: 'string',
     default: 'node-proxy-default-token',
-    desc: '认证令牌（须与服务端一致，默认值不安全，生产必改）',
+    desc: '鉴权凭据（须与服务端一致，默认值不安全，生产必改）',
     example: 'my-secret-token',
     secret: true,
   },
-  // Node-side identity and the tuning knobs keep their environment-variable
-  // mappings. Real deployments pass per-node values through docker compose
-  // environment entries, and #89 dropping those mappings silently ignored every
-  // setting in an existing compose file (region/tags included), which is
-  // impossible to notice when the values happen to match the defaults.
-  // A config.yaml entry still works; an environment override wins, matching the
-  // precedence in effect before #89.
-  //
   // region / tags are node-side defaults only: the panel stays authoritative
   // (a value set there wins), these merely seed what the node reports.
   {
@@ -71,67 +75,77 @@ const SCHEMA: SchemaEntry[] = [
     desc: '节点标签，逗号分隔（可选，面板未设置时显示该值；面板设置后以面板为准）',
     example: 'cn,premium',
   },
+];
+
+// Fixed internals. These are deliberately NOT configurable (issue #53, item 4):
+// no config.yaml entry and no environment variable can change them. They are
+// still present in the loaded config so the runtime reads them from one place.
+// An ignored value is reported on stderr rather than dropped silently - a
+// setting that quietly stops taking effect is exactly the failure mode that
+// made the old per-node tuning untrustworthy.
+const FIXED: SchemaEntry[] = [
   {
     key: 'reconnect_delay',
     env: ['RECONNECT_DELAY'],
     type: 'number',
     default: 3000,
-    desc: '断线重连初始延迟（毫秒）',
+    desc: '断线重连初始延迟（毫秒，固定值）',
   },
   {
     key: 'max_reconnect_delay',
     env: ['MAX_RECONNECT_DELAY'],
     type: 'number',
     default: 30000,
-    desc: '断线重连最大延迟（毫秒）',
+    desc: '断线重连最大延迟（毫秒，固定值）',
   },
   {
     key: 'reconnect_jitter',
     env: ['RECONNECT_JITTER'],
     type: 'number',
     default: 1000,
-    desc: '重连延迟随机抖动（毫秒）',
+    desc: '重连延迟随机抖动（毫秒，固定值）',
   },
   {
     key: 'heartbeat_interval',
     env: ['HEARTBEAT_INTERVAL'],
     type: 'number',
     default: 15000,
-    desc: '心跳间隔（毫秒）',
+    desc: '心跳间隔（毫秒，固定值）',
   },
   {
     key: 'request_timeout',
     env: ['REQUEST_TIMEOUT'],
     type: 'number',
     default: 30000,
-    desc: 'HTTP 请求超时（毫秒）',
+    desc: 'HTTP 请求超时（毫秒，固定值）',
   },
   {
     key: 'tunnel_timeout',
     env: ['TUNNEL_TIMEOUT'],
     type: 'number',
     default: 30000,
-    desc: 'TCP 隧道建连超时（毫秒）',
+    desc: 'TCP 隧道建连超时（毫秒，固定值）',
   },
   {
     key: 'max_concurrent_requests',
     env: ['MAX_CONCURRENT_REQUESTS'],
     type: 'number',
     default: 100,
-    desc: '最大并发请求数',
+    desc: '最大并发请求数（固定值）',
   },
   {
     key: 'tls_reject_unauthorized',
     env: ['TLS_REJECT_UNAUTHORIZED'],
     type: 'boolean',
     default: false,
-    desc: '是否校验证书（自签证书场景设 false）',
+    desc: '是否校验证书（固定值，自签证书场景保持 false）',
   },
 ];
 
 function defaults(): ConfigValues {
   const out: ConfigValues = {};
   for (const it of SCHEMA) out[it.key] = it.default;
+  for (const it of FIXED) out[it.key] = it.default;
   return out;
 }
 
@@ -159,12 +173,37 @@ function coerce(type: SchemaEntry['type'], raw: unknown): ConfigScalar | null {
 interface LoadClientConfigOptions {
   filePaths?: string[];
   env?: Record<string, string | undefined>;
+  warn?: (message: string) => void;
 }
 
-function loadClientConfig({ filePaths = [], env = process.env }: LoadClientConfigOptions = {}): ConfigValues {
+// Report a setting that is no longer honoured instead of ignoring it silently:
+// an operator who keeps an old compose file or config.yaml needs to know that
+// the value stopped applying.
+function ignoredHints(
+  warn: (message: string) => void,
+  sources: { env?: Record<string, string | undefined>; yamlKeys?: Set<string> },
+): void {
+  const reported = new Set<string>();
+  for (const it of FIXED) {
+    const fromYaml = sources.yamlKeys ? sources.yamlKeys.has(it.key) : false;
+    const envKey = sources.env ? it.env.find((k) => sources.env![k] !== undefined) : undefined;
+    if (!fromYaml && !envKey) continue;
+    if (reported.has(it.key)) continue;
+    reported.add(it.key);
+    const where = fromYaml ? 'config.yaml' : `环境变量 ${envKey}`;
+    warn(`[config] ${it.key} 已不再可配置（issue #53），来自 ${where} 的值被忽略，使用固定值 ${JSON.stringify(it.default)}`);
+  }
+}
+
+function loadClientConfig({
+  filePaths = [],
+  env = process.env,
+  warn = (message: string) => console.warn(message),
+}: LoadClientConfigOptions = {}): ConfigValues {
   const config = defaults();
 
-  // 1) yaml config file (first existing path wins)
+  // 1) yaml config file (first existing path wins). Only configurable keys are
+  // read; fixed internals in the file are ignored and reported.
   const yaml = require('js-yaml');
   for (const cp of filePaths) {
     if (cp && fs.existsSync(cp)) {
@@ -177,6 +216,7 @@ function loadClientConfig({ filePaths = [], env = process.env }: LoadClientConfi
               if (v !== null) config[it.key] = v;
             }
           }
+          ignoredHints(warn, { yamlKeys: new Set(Object.keys(doc)) });
         }
       } catch (_) {}
       break;
@@ -194,6 +234,7 @@ function loadClientConfig({ filePaths = [], env = process.env }: LoadClientConfi
       break;
     }
   }
+  ignoredHints(warn, { env });
 
   return config;
 }
@@ -209,6 +250,9 @@ function renderExampleYaml(): string {
     '# 节点 UUID 走 CLIENT_ID 或 CLIENT_ID_FILE（缺省自动生成并持久化）；',
     '# region / tags 可选：面板没设置时显示这里的值，面板设置后以面板为准。',
     '# =============================================================================',
+    '#',
+    '# 节点只允许配置以下几项（issue #53 第四条）。心跳、超时、并发、重连退避等',
+    '# 行为参数已固定为内置常量，写在本文件或环境变量里都不会生效。',
     '',
   ];
   for (const it of SCHEMA) {
@@ -222,4 +266,4 @@ function renderExampleYaml(): string {
   return lines.join('\n');
 }
 
-module.exports = { SCHEMA, defaults, loadClientConfig, renderExampleYaml };
+module.exports = { SCHEMA, FIXED, defaults, loadClientConfig, renderExampleYaml };
