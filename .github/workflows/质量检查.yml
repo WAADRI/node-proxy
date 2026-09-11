@@ -67,4 +67,4 @@ jobs:
       - name: 服务端单元测试
         run: npm test --prefix server
       - name: 客户端存活看门狗测试
-        run: bash client/test/healthcheck.test.sh
+        run: bash client/test/watchdog.test.sh
