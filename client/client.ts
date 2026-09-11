@@ -67,6 +67,35 @@ if (!persistentClientId) {
 }
 
 // =============================================================================
+// Out-of-process liveness beacon
+// =============================================================================
+// Written from its own interval, independent of the connection state, so the
+// beacon means exactly one thing: "this process is still running its event
+// loop". A blocked or stalled loop cannot keep it fresh, and an in-process
+// watchdog cannot notice such a stall (it runs on the very loop that is stuck).
+// That is how a node ends up silently offline: TCP still up, panel shows
+// disconnected, no logs, no reconnect, manual restart required.
+// client/healthcheck.sh (the container HEALTHCHECK) watches this file and
+// restarts the container when the beacon goes stale, so such a stall self-heals.
+const LIVENESS_FILE = process.env.LIVENESS_FILE || path.join(os.tmpdir(), 'node-proxy-liveness');
+const LIVENESS_INTERVAL_MS = 10000;
+
+function writeLivenessBeacon(): void {
+  try {
+    fs.writeFileSync(LIVENESS_FILE, String(Math.floor(Date.now() / 1000)));
+  } catch (_) {
+    // A failed beacon must never take the client down (e.g. read-only fs).
+  }
+}
+
+function startLivenessBeacon(): void {
+  writeLivenessBeacon();
+  const timer = setInterval(writeLivenessBeacon, LIVENESS_INTERVAL_MS);
+  // The beacon must never be the reason the process stays alive.
+  if (typeof timer.unref === 'function') timer.unref();
+}
+
+// =============================================================================
 // State
 // =============================================================================
 const activeRequests = new Map();
@@ -1089,5 +1118,9 @@ log('info', `  Concurrency: ${CONFIG.max_concurrent_requests}`);
 log('info', `  Region: ${CONFIG.region ? String(CONFIG.region) : '(not set)'}`);
 log('info', `  Tags: ${CONFIG.tags ? String(CONFIG.tags) : '(not set)'}`);
 log('info', '========================================');
+
+// Start the liveness beacon before connecting: the container health check uses
+// it to detect a stalled event loop, which no in-process watchdog can see.
+startLivenessBeacon();
 
 connect();
