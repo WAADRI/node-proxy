@@ -135,9 +135,24 @@ function defaults(): ConfigValues {
   return out;
 }
 
-function coerce(type: SchemaEntry['type'], raw: unknown): ConfigScalar {
-  if (type === 'number') return parseInt(raw as string, 10);
-  if (type === 'boolean') return raw === true || raw === 'true' || raw === 1 || raw === '1';
+// Returns null when the raw value must not be applied, so the caller keeps the
+// value it already has (the default, or a lower-precedence source). An unset
+// variable written as `${VAR:-}` in compose arrives as an empty string:
+// coercing that to a number yields NaN, and a NaN delay makes setInterval fire
+// continuously - so empty and unparsable values are rejected instead of
+// silently poisoning the config.
+function coerce(type: SchemaEntry['type'], raw: unknown): ConfigScalar | null {
+  if (raw === '' || raw === null || raw === undefined) return null;
+  if (type === 'number') {
+    const n = parseInt(String(raw), 10);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (type === 'boolean') {
+    const s = String(raw).toLowerCase();
+    if (s === 'true' || s === '1') return true;
+    if (s === 'false' || s === '0') return false;
+    return null;
+  }
   return String(raw);
 }
 
@@ -158,7 +173,8 @@ function loadClientConfig({ filePaths = [], env = process.env }: LoadClientConfi
         if (doc && typeof doc === 'object') {
           for (const it of SCHEMA) {
             if (doc[it.key] !== undefined && doc[it.key] !== null) {
-              config[it.key] = coerce(it.type, doc[it.key]);
+              const v = coerce(it.type, doc[it.key]);
+              if (v !== null) config[it.key] = v;
             }
           }
         }
@@ -167,13 +183,15 @@ function loadClientConfig({ filePaths = [], env = process.env }: LoadClientConfi
     }
   }
 
-  // 2) environment overrides
+  // 2) environment overrides (highest precedence; an empty or unparsable value
+  // is treated as "not set" so it cannot wipe out the default)
   for (const it of SCHEMA) {
     for (const envKey of it.env) {
-      if (env[envKey] !== undefined) {
-        config[it.key] = coerce(it.type, env[envKey]);
-        break;
-      }
+      if (env[envKey] === undefined) continue;
+      const v = coerce(it.type, env[envKey]);
+      if (v === null) continue; // try the next alias, else keep the default
+      config[it.key] = v;
+      break;
     }
   }
 
