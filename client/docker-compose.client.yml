@@ -42,17 +42,10 @@ services:
       - REGION=${REGION:-}
       - NODE_REGION=${NODE_REGION:-}
       - TAGS=${TAGS:-}
-      # 可选：行为调优（不设则用 config.yaml 或内置默认值；
-      # 留空等于未设置，不会被解析成 0 或 NaN）
-      - RECONNECT_DELAY=${RECONNECT_DELAY:-}
-      - MAX_RECONNECT_DELAY=${MAX_RECONNECT_DELAY:-}
-      - RECONNECT_JITTER=${RECONNECT_JITTER:-}
-      - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-}
-      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-}
-      - TUNNEL_TIMEOUT=${TUNNEL_TIMEOUT:-}
-      - MAX_CONCURRENT_REQUESTS=${MAX_CONCURRENT_REQUESTS:-}
-      - TLS_REJECT_UNAUTHORIZED=${TLS_REJECT_UNAUTHORIZED:-}
+      # 节点只允许配置以上几项（issue #53 第四条）：心跳、超时、并发、重连退避等
+      # 行为参数已固定为内置常量，这里不再透传，设了也不会生效。
     # 可选：挂载客户端配置文件（config.yaml，模板见同目录 config.yaml.example）
+    # 同样只读取上面几项，其余条目会被忽略并在启动日志中提示。
     volumes:
       - ./config.yaml:/app/config.yaml:ro
     logging:

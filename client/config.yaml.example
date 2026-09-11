@@ -6,13 +6,16 @@
 # 节点 UUID 走 CLIENT_ID 或 CLIENT_ID_FILE（缺省自动生成并持久化）；
 # region / tags 可选：面板没设置时显示这里的值，面板设置后以面板为准。
 # =============================================================================
+#
+# 节点只允许配置以下几项（issue #53 第四条）。心跳、超时、并发、重连退避等
+# 行为参数已固定为内置常量，写在本文件或环境变量里都不会生效。
 
-# 代理服务器 WebSocket 地址
+# 代理服务器 WebSocket 地址（端点）
 # 默认: "ws://127.0.0.1:3000/ws"
 # 环境变量: SERVER_URL
 server_url: ws://1.2.3.4:3000/ws
 
-# 认证令牌（须与服务端一致，默认值不安全，生产必改）
+# 鉴权凭据（须与服务端一致，默认值不安全，生产必改）
 # 默认: "node-proxy-default-token"（生产环境必改）
 # 环境变量: AUTH_TOKEN
 auth_token: my-secret-token
@@ -26,43 +29,3 @@ region: cn-guangzhou
 # 默认: ""
 # 环境变量: TAGS
 tags: cn,premium
-
-# 断线重连初始延迟（毫秒）
-# 默认: 3000
-# 环境变量: RECONNECT_DELAY
-reconnect_delay: 3000
-
-# 断线重连最大延迟（毫秒）
-# 默认: 30000
-# 环境变量: MAX_RECONNECT_DELAY
-max_reconnect_delay: 30000
-
-# 重连延迟随机抖动（毫秒）
-# 默认: 1000
-# 环境变量: RECONNECT_JITTER
-reconnect_jitter: 1000
-
-# 心跳间隔（毫秒）
-# 默认: 15000
-# 环境变量: HEARTBEAT_INTERVAL
-heartbeat_interval: 15000
-
-# HTTP 请求超时（毫秒）
-# 默认: 30000
-# 环境变量: REQUEST_TIMEOUT
-request_timeout: 30000
-
-# TCP 隧道建连超时（毫秒）
-# 默认: 30000
-# 环境变量: TUNNEL_TIMEOUT
-tunnel_timeout: 30000
-
-# 最大并发请求数
-# 默认: 100
-# 环境变量: MAX_CONCURRENT_REQUESTS
-max_concurrent_requests: 100
-
-# 是否校验证书（自签证书场景设 false）
-# 默认: false
-# 环境变量: TLS_REJECT_UNAUTHORIZED
-tls_reject_unauthorized: false
