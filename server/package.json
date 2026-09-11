@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.ts",
     "dev": "node --watch server.ts --logging-pretty",
-    "test": "node --test test/",
+    "test": "node --test \"test/**/*.test.ts\"",
     "gen-cert": "node lib/tls.ts --generate",
     "docker:build": "docker build -t node-proxy-server .",
     "docker:run": "docker-compose up -d"

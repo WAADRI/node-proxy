@@ -1,5 +1,5 @@
 name: 质量检查
-# Issue #42 (Phase 0)：TypeScript 编译检查 / ESLint（禁 any）/ OpenAPI 校验骨架。
+# Issue #42 (Phase 0)：TypeScript 编译检查 / ESLint（禁 any）/ OpenAPI 校验骨架 / 单元测试。
 # 规则只作用于新增 .ts 文件与 OpenAPI 文档；存量 JS 在迁移完成前不被硬性拦截。
 on:
   pull_request:
@@ -51,3 +51,20 @@ jobs:
         run: npm ci
       - name: OpenAPI 规范校验
         run: npm run openapi:validate
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: 安装根工具依赖
+        run: npm ci
+      - name: 安装 server 运行依赖（测试需要 ws）
+        run: npm install --prefix server --no-audit --no-fund
+      - name: 服务端单元测试
+        run: npm test --prefix server
+      - name: 客户端存活看门狗测试
+        run: bash client/test/watchdog.test.sh
