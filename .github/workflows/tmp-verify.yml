@@ -21,6 +21,7 @@ jobs:
       - name: 安装 server 运行依赖（测试需要 ws）
         run: npm install --prefix server --no-audit --no-fund
       - name: 服务端单元测试
-        run: npm test --prefix server
+        run: node --test "test/**/*.test.ts"
+        working-directory: server
       - name: 客户端存活看门狗测试
         run: bash client/test/watchdog.test.sh
