@@ -1,5 +1,5 @@
 <script setup>
-import { computed, h, onMounted, ref } from 'vue';
+import { computed, h, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   NConfigProvider,
@@ -87,6 +87,17 @@ const navItems = [
 // Header menu ----------------------------------------------------------------
 const showBroadcast = ref(false);
 const showKickAllConfirm = ref(false);
+
+// Mobile navigation (issue #98): below the layout breakpoint the sidebar becomes
+// an off-canvas drawer, so it must be closable and must not stay open across a
+// navigation.
+const navOpen = ref(false);
+watch(
+  () => route.fullPath,
+  () => {
+    navOpen.value = false;
+  }
+);
 
 const menuOptions = computed(() => [
   { key: 'refresh', label: '刷新数据', icon: () => h(AppIcon, { name: 'refresh', size: 15 }) },
@@ -177,8 +188,11 @@ onMounted(() => {
       <NDialogProvider>
         <MessageBridge />
         <div class="np-app">
+          <!-- Mobile drawer backdrop (issue #98): on narrow screens the sidebar
+               slides in below the header instead of squeezing the content. -->
+          <div v-if="navOpen" class="np-backdrop" @click="navOpen = false"></div>
           <!-- Left side nav -->
-          <aside class="np-side">
+          <aside class="np-side" :class="{ open: navOpen }">
             <div class="np-brand">
               <div class="np-brand-mark">NP</div>
               <div class="np-brand-text">
@@ -207,11 +221,31 @@ onMounted(() => {
           <!-- Right content -->
           <div class="np-main">
             <header class="np-top">
+              <button
+                class="np-icon-btn np-burger"
+                :aria-expanded="navOpen ? 'true' : 'false'"
+                :title="navOpen ? '收起菜单' : '展开菜单'"
+                aria-label="导航菜单"
+                @click="navOpen = !navOpen"
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  aria-hidden="true"
+                >
+                  <path d="M3 6h18M3 12h18M3 18h18" />
+                </svg>
+              </button>
               <div class="np-top-title">{{ route.meta.title || '' }}</div>
               <div class="np-top-right">
                 <span class="np-conn">
                   <i class="np-dot" :class="store.wsState === 'connected' ? 'alive' : 'dead'"></i>
-                  {{ connText }}
+                  <span class="np-conn-text">{{ connText }}</span>
                 </span>
                 <span class="np-updated" title="最后更新时间">{{ lastUpdateText }}</span>
                 <button
@@ -349,12 +383,27 @@ onMounted(() => {
   top: 0;
   z-index: 50;
 }
-.np-top-title { font-size: 15px; font-weight: 700; }
+.np-top-title {
+  font-size: 15px;
+  font-weight: 700;
+  /* Take the free space so the actions stay pinned right, and truncate instead
+     of pushing the header wider than the viewport (issue #98). */
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .np-top-right {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex: none;
 }
+/* Hamburger: only rendered visibly below the layout breakpoint. The compound
+   selector is required - `.np-icon-btn` is declared later with the same
+   specificity and would otherwise win. */
+.np-icon-btn.np-burger { display: none; }
 .np-conn {
   display: inline-flex;
   align-items: center;
@@ -390,5 +439,66 @@ onMounted(() => {
   flex: 1;
   padding: 18px 22px 30px;
   min-width: 0;
+}
+
+/* ===========================================================================
+ * Responsive layout (issue #98)
+ * ---------------------------------------------------------------------------
+ * Below 900px the fixed 200px sidebar would eat more than half of a phone
+ * screen (it left 189px of content on a 390px viewport), so it becomes a
+ * drawer: off-canvas until the hamburger opens it, above a backdrop, and below
+ * the header so the header stays usable. Page-level horizontal overflow is
+ * deliberately NOT hidden - it is fixed at the source, because hiding it would
+ * also hide regressions.
+ * =========================================================================== */
+@media (max-width: 900px) {
+  .np-icon-btn.np-burger { display: inline-flex; }
+  .np-side {
+    position: fixed;
+    top: 54px;
+    left: 0;
+    bottom: 0;
+    height: auto;
+    width: min(260px, 78vw);
+    z-index: 110;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    overflow-y: auto;
+  }
+  .np-side.open { transform: translateX(0); }
+  .np-backdrop {
+    position: fixed;
+    top: 54px;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 100;
+    background: rgba(0, 0, 0, 0.45);
+  }
+  .np-top {
+    z-index: 130;
+    padding: 0 12px;
+    gap: 8px;
+  }
+  /* The full status sentence does not fit next to the actions: keep the dot. */
+  .np-conn { padding: 4px 8px; }
+  .np-conn-text { display: none; }
+  .np-updated { display: none; }
+  .np-content { padding: 12px 12px 24px; }
+  /* Touch targets: the desktop sizes (38px nav row, 32px icon button) are below
+     the ~44px that is comfortable to tap. */
+  .np-nav-item { padding: 12px 10px; font-size: 14px; }
+  .np-icon-btn { width: 36px; height: 36px; }
+}
+
+@media (max-width: 600px) {
+  .np-top { height: 50px; padding: 0 10px; }
+  .np-side,
+  .np-backdrop { top: 50px; }
+  .np-top-title { font-size: 14px; }
+  .np-top-right { gap: 6px; }
+  .np-content { padding: 10px 10px 20px; }
+  .np-side-foot { padding: 10px 14px; }
 }
 </style>
