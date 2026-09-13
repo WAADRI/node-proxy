@@ -454,9 +454,13 @@ function handleConnect(
   const timeout = setTimeout(() => {
     clientManager.pendingTunnels.delete(tunnelId);
     client.pendingTunnels.delete(tunnelId);
-    // NOTE: not feeding the circuit breaker here — a tunnel_timeout is a
-    // target-level failure, not a node-health signal.  Feeding the breaker
-    // also made SOCKS5 unreachable via this client (same breaker).
+    // The node never confirmed the tunnel in time. With client.tunnel_timeout
+    // kept above the client's own connect timeout this cannot be a slow target:
+    // the node answers target-level failures itself (tunnel_error) and that path
+    // clears this timer. So it is node-level, and it is recorded exactly like the
+    // SOCKS5 path does - the heartbeat health check removes a node that stops
+    // heartbeating, this keeps an unresponsive one out of rotation meanwhile.
+    clientManager.trackError(client.id, 'tunnel_timeout');
     if (!socket.destroyed) {
       socket.end('HTTP/1.1 504 Gateway Timeout\r\n\r\n');
     }

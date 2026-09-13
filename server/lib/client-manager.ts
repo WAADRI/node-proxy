@@ -686,8 +686,18 @@ export class ClientManager {
     if (client) client.stats.errors++;
     this.metrics?.recordError(type, clientId);
 
-    // Circuit breaker: record failure (classified by type for observability)
-    if (this.circuitBreaker && clientId) {
+    // Circuit breaker: only NODE-level failures count. A target-level failure
+    // describes the request, not the node:
+    //   - upstream_*  the target answered with its own status (404/502/...)
+    //   - timeout     the request/response took too long
+    // Feeding these opened the breaker on healthy nodes once a crawler hit
+    // unreachable or slow destinations, which then rejected ALL targets on that
+    // node ("SOCKS5 又无法连接了"). tunnelling that the node never answered is
+    // node-level, but only because the server waits longer than the client's own
+    // connect timeout - see tunnel_timeout in config.ts and tunnel_timeout in
+    // client/lib/config-schema.ts, which must stay in that order.
+    // The failure is still counted above (metrics/observability are unchanged).
+    if (this.circuitBreaker && clientId && isNodeFailure(type)) {
       this.circuitBreaker.onFailure(clientId, type);
       if (this.metrics) {
         this.metrics.updateCircuitBreakerGauge(clientId, this.circuitBreaker.getState(clientId));
@@ -703,6 +713,18 @@ export class ClientManager {
       }
     }
   }
+}
+
+// A failure is node-level unless it merely reports what the target did.
+// `upstream_*` is the target's own status code, `timeout` is a slow request or
+// response - neither says anything about node health, and treating them as node
+// failures is what made a single slow/blocked destination take a whole node out
+// of rotation for every other destination.
+const TARGET_LEVEL_FAILURES = new Set(['timeout']);
+
+function isNodeFailure(type: string): boolean {
+  if (type.startsWith('upstream_')) return false;
+  return !TARGET_LEVEL_FAILURES.has(type);
 }
 
 function encodeSocks5Reply(replyCode: number): Buffer {

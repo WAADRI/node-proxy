@@ -578,7 +578,7 @@ function handleTunnelClose(clientManager: ClientManager, stream: MuxStreamLike, 
   if (p.client) p.client.pendingTunnels.delete(msgId);
 }
 
-function handleTunnelError(clientManager: ClientManager, stream: MuxStreamLike, _logger: AppLogger) {
+function handleTunnelError(clientManager: ClientManager, stream: MuxStreamLike, logger: AppLogger) {
   const headers = asRecord(stream.headers);
   const msgId = asString(headers.id) || String(stream.id);
 
@@ -586,13 +586,30 @@ function handleTunnelError(clientManager: ClientManager, stream: MuxStreamLike, 
   if (!p) return;
   if (p.timeout) clearTimeout(p.timeout);
 
-  // tunnel_error is NOT a node health failure: the node is alive and answered
+  // Tunnel errors are NOT a node health failure: the node is alive and answered
   // (it explicitly reported the connect failure / refused / timed out on the
-  // target, or is at capacity). Feeding the circuit breaker here makes a
-  // busy crawler that touches unreachable/refused targets open the breaker on
-  // healthy nodes, rejecting every later tunnel with reply 0x01. Node health
-  // is signaled by tunnel_timeout (the node never answered at all) instead.
+  // target, or is at capacity). Feeding the breaker here made a busy crawler
+  // that touches unreachable/refused targets open the breaker on healthy nodes,
+  // rejecting every later tunnel with reply 0x01. Node health is signalled by
+  // the heartbeat health check, and by a tunnel the node never answered within
+  // client.tunnel_timeout (which must stay above the client's own connect
+  // timeout - see config.ts).
   const established = !!p.ready;
+
+  // Record the node's own reason. Without it a failed request is invisible in
+  // the server log: the SOCKS5/HTTP client only sees reply 0x01 / 502 and the
+  // cause (DNS failure, refused, target timeout, capacity) stays on the node.
+  logger.warn(
+    {
+      clientId: p.client?.id,
+      target: p.host ? `${p.host}:${p.port}` : undefined,
+      tunnel: msgId,
+      reason: asString(headers.message) || undefined,
+      code: asString(headers.code) || undefined,
+      established,
+    },
+    'Tunnel failed on node'
+  );
 
   if (p.socket && !p.socket.destroyed) {
     try {
@@ -759,15 +776,28 @@ function handleTunnelCloseLegacy(clientManager: ClientManager, msg: ClientMessag
   if (p.client) p.client.pendingTunnels.delete(id);
 }
 
-function handleTunnelErrorLegacy(clientManager: ClientManager, msg: ClientMessage, _logger: AppLogger) {
+function handleTunnelErrorLegacy(clientManager: ClientManager, msg: ClientMessage, logger: AppLogger) {
   const id = asString(msg.id);
   const p = clientManager.pendingTunnels.get(id);
   if (!p) return;
   if (p.timeout) clearTimeout(p.timeout);
 
-  // tunnel_error is not a node health failure — see handleTunnelError. The
-  // node answered; only unresponsiveness (tunnel_timeout) feeds the breaker.
+  // See handleTunnelError: the node answered, so this is a target-level result,
+  // not node health. Only a tunnel the node never answered within
+  // client.tunnel_timeout (above the client's own connect timeout) is node-level.
   const established = !!p.ready;
+
+  logger.warn(
+    {
+      clientId: p.client?.id,
+      target: p.host ? `${p.host}:${p.port}` : undefined,
+      tunnel: id,
+      reason: asString(msg.message) || undefined,
+      code: asString(msg.code) || undefined,
+      established,
+    },
+    'Tunnel failed on node'
+  );
 
   if (p.socket && !p.socket.destroyed) {
     try {
