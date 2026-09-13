@@ -96,8 +96,11 @@ health_check:
 client:
   # HTTP request timeout (milliseconds)
   request_timeout: 30000
-  # TCP tunnel establishment timeout (milliseconds)
-  tunnel_timeout: 15000
+  # TCP tunnel establishment timeout (milliseconds). Keep this ABOVE the client's
+  # own target-connect timeout (client tunnel_timeout, 12s): if the server gives
+  # up first, every slow or blocked destination is misread as an unresponsive
+  # node and trips that node's circuit breaker for all destinations.
+  tunnel_timeout: 35000
   # Idle tunnel reclamation (milliseconds): close tunnels with no traffic in
   # either direction after this long (0 disables), so orphaned tunnels from
   # clients that died without closing TCP do not accumulate.

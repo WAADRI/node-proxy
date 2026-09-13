@@ -200,7 +200,12 @@ export const DEFAULTS: ServerConfig = {
   },
   client: {
     request_timeout: 30000,
-    tunnel_timeout: 15000,
+    // How long the server waits for a node to confirm a tunnel. This MUST stay
+    // above the client's own target-connect timeout (client/lib/config-schema.ts
+    // tunnel_timeout, currently 12s, formerly 30s): when the server gave up
+    // first, every slow/blocked destination looked like an unresponsive node and
+    // tripped that node's circuit breaker for ALL destinations.
+    tunnel_timeout: 35000,
     tunnel_idle_timeout: 60000,
     max_concurrent: 100,
   },

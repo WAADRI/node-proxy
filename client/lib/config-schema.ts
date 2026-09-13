@@ -123,7 +123,11 @@ const FIXED: SchemaEntry[] = [
     key: 'tunnel_timeout',
     env: ['TUNNEL_TIMEOUT'],
     type: 'number',
-    default: 30000,
+    // Target-connect timeout. Keep it below the server's tunnel wait
+    // (server/lib/config.ts client.tunnel_timeout, 35s): the node must answer
+    // first, otherwise the server's own timeout is misread as "node
+    // unresponsive" and trips that node's circuit breaker for every target.
+    default: 12000,
     desc: 'TCP 隧道建连超时（毫秒，固定值）',
   },
   {
