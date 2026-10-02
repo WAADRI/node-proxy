@@ -99,6 +99,10 @@ export interface PendingRecord {
   host?: string;
   port?: number;
   head?: Buffer;
+  // SNI of the TLS ClientHello on a CONNECT/SOCKS5 tunnel (issue #107): what the
+  // client is really visiting, which the CONNECT target alone cannot express when
+  // it is a literal IP. Null until (or unless) the handshake is observed.
+  sni?: string | null;
   client?: ClientNode | null;
   clientId?: string | null;
   ready?: boolean;

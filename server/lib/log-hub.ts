@@ -22,6 +22,8 @@ interface LogEntryInput {
   url?: string;
   status?: number;
   ms?: number;
+  // TLS SNI observed on a tunnel (issue #107); '' when unknown.
+  sni?: string;
 }
 
 interface LogEntry {
@@ -33,6 +35,7 @@ interface LogEntry {
   url: string;
   status: number;
   ms: number;
+  sni: string;
 }
 
 type LogListener = (entry: LogEntry) => void;
@@ -63,6 +66,7 @@ class LogHub {
       url: entry.url || '',
       status: entry.status || 0,
       ms: entry.ms || 0,
+      sni: entry.sni || '',
     };
     this.entries.push(e);
     if (this.entries.length > this.maxEntries) {

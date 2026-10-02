@@ -438,6 +438,9 @@ function recordTunnelLog(clientManager: ClientManager, p: PendingRecord) {
       url: (p.host || '') + (p.port ? ':' + p.port : ''),
       status: 0,
       ms: Math.max(0, endTs - (p.startTime || endTs)),
+      // Issue #107: the CONNECT target is often a literal IP, which says nothing
+      // about what the session was for. The SNI from the ClientHello does.
+      sni: p.sni || '',
     });
   } catch (_) {
     // ignore

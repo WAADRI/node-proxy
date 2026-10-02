@@ -9,7 +9,8 @@ import http from 'http';
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { Socket as NetSocket } from 'net';
 import { v4 as uuidv4 } from 'uuid';
-import type { ClientManager } from './client-manager.ts';
+import type { ClientManager, PendingRecord } from './client-manager.ts';
+import { watchSni } from './tls-sni.ts';
 import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
 import type { DomainRouter } from './domain-router.ts';
@@ -466,7 +467,7 @@ function handleConnect(
     }
   }, config.client.tunnel_timeout);
 
-  clientManager.pendingTunnels.set(tunnelId, {
+  const pending: PendingRecord = {
     type: 'http',
     socket: socket as unknown as NetSocket,
     client,
@@ -476,9 +477,24 @@ function handleConnect(
     ip: clientIp(req),
     host,
     port,
-  });
+    sni: null,
+  };
+
+  clientManager.pendingTunnels.set(tunnelId, pending);
   client.pendingTunnels.add(tunnelId);
   clientManager.trackTunnel(client.id);
+
+  // Issue #107: HTTPS is opaque past CONNECT, so observe the ClientHello for the
+  // SNI and let the request log name the site. This only adds a 'data' listener
+  // (every listener sees the same chunks, so the tunnel receives all of them) and
+  // the record is written when the tunnel closes, so nothing here delays it.
+  watchSni(
+    socket as unknown as Parameters<typeof watchSni>[0],
+    (name: string) => {
+      pending.sni = name;
+    },
+    Buffer.isBuffer(head) ? head : null
+  );
 
   client.ws.send(JSON.stringify(requestMsg), (err) => {
     if (err) {

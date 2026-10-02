@@ -88,6 +88,15 @@ const columns = [
     render: (row) => prettyUrl(row.url),
   },
   {
+    // Issue #107: an HTTPS session shows only the CONNECT target above, which is
+    // a bare IP for many clients. The SNI from the TLS handshake names the site.
+    title: 'SNI（TLS 域名）',
+    key: 'sni',
+    minWidth: 200,
+    ellipsis: { tooltip: true },
+    render: (row) => row.sni || '-',
+  },
+  {
     title: '状态',
     key: 'status',
     width: 80,
@@ -143,7 +152,7 @@ onMounted(() => {
       :loading="loading"
       size="small"
       :max-height="620"
-      :scroll-x="900"
+      :scroll-x="1120"
       :row-key="(row) => row.seq"
     >
       <template #empty>
