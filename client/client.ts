@@ -437,6 +437,9 @@ function startHeartbeat() {
           memoryUsage: process.memoryUsage().heapUsed,
           activeRequests: activeRequests.size,
           activeTunnels: activeTunnels.size,
+          // The node's own limit, so the server can stop dispatching work this
+          // node will refuse ("Client busy") and can size admission against it.
+          maxConcurrentRequests: CONFIG.max_concurrent_requests,
         },
       }));
     } catch (err) {
