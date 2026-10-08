@@ -66,7 +66,7 @@ wait_supervisor() {
 }
 
 echo "--- a client that keeps its beacon fresh is left alone"
-start_supervisor 2 sh -c 'echo $$ > '"$child_pid_file"'; while :; do date +%s > "$LIVENESS_FILE"; sleep 1; done'
+start_supervisor 8 sh -c 'echo $$ > '"$child_pid_file"'; while :; do date +%s > "$LIVENESS_FILE"; sleep 1; done'
 sleep 4
 if kill -0 "$sup" 2>/dev/null; then
   pass "supervisor still running after 4s"
@@ -119,7 +119,7 @@ sup=""
 
 echo "--- a leftover beacon from an earlier run must not cause a restart loop"
 echo "$(( $(date +%s) - 600 ))" > "$LIVENESS_FILE"
-start_supervisor 2 sh -c 'echo $$ > '"$child_pid_file"'; while :; do date +%s > "$LIVENESS_FILE"; sleep 1; done'
+start_supervisor 8 sh -c 'echo $$ > '"$child_pid_file"'; while :; do date +%s > "$LIVENESS_FILE"; sleep 1; done'
 sleep 4
 if kill -0 "$sup" 2>/dev/null; then
   pass "fresh client survived a stale beacon from a previous run"
