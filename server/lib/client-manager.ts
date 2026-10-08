@@ -696,6 +696,32 @@ export class ClientManager {
     this.storage?.recordTraffic(clientId, sent, received);
   }
 
+  // The per-node concurrency limit the server admits against, and pushes to the
+  // nodes. It is a server-side setting (the panel owns it; issue #53 took node
+  // configuration off the node), so a change must reach the fleet without a new
+  // client image.
+  currentMaxConcurrent(): number {
+    return this.config.client?.max_concurrent || 100;
+  }
+
+  // Send the current limit to every connected node: they apply it live and
+  // report the effective value back in their stats.
+  pushConcurrencyLimit(): number {
+    const limit = this.currentMaxConcurrent();
+    let sent = 0;
+    for (const c of this.clients.values()) {
+      if (c.ws.readyState !== 1) continue;
+      try {
+        c.ws.send(JSON.stringify({ type: 'limits', maxConcurrentRequests: limit }));
+        sent++;
+      } catch (_) {
+        // ignore: a socket dying here is handled by its close handler
+      }
+    }
+    if (sent > 0) this.log.info({ limit, nodes: sent }, 'Pushed concurrency limit to nodes');
+    return sent;
+  }
+
   // Capacity / occupancy for admission. Both proxy paths used to compare only
   // their own pending count against the configured limit, which cannot see a
   // node that is full for reasons of its own (leaked slots, a lower limit than

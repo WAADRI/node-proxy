@@ -308,6 +308,9 @@ function createWebServer(
       return;
     }
     logger.info({ group, values: body, admin: req.user }, 'Runtime settings updated via panel');
+    // The per-node concurrency limit is owned here, so a change has to reach the
+    // nodes that are already connected (new connections get it on auth_ok).
+    if (group === 'client') clientManager.pushConcurrencyLimit();
     res.json({ success: true, ...settingsManager.list() });
   });
 
@@ -331,6 +334,7 @@ function createWebServer(
       return;
     }
     logger.info({ group, admin: req.user }, 'Runtime settings reset to defaults');
+    if (group === 'client') clientManager.pushConcurrencyLimit();
     res.json({ success: true, ...settingsManager.list() });
   });
 

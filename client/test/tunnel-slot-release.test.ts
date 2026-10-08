@@ -80,9 +80,9 @@ test('a tunnel that errors releases its slot', () => {
 });
 
 test('a full pool is reported instead of refusing silently', () => {
-  const start = mux.indexOf('if (activeTunnels.size >= CONFIG.max_concurrent_requests)');
-  assert.ok(start >= 0, 'the capacity check was not found');
-  const body = mux.slice(start, start + 600);
+  const start = mux.indexOf('if (activeTunnels.size >= maxConcurrent())');
+  assert.ok(start >= 0, 'the capacity check was not found (it must use the live limit, see concurrency-limit-push)');
+  const body = mux.slice(start, start + 700);
   assert.ok(body.includes("'Client busy'"), 'the rejection must still be sent');
   assert.ok(body.includes('Client busy (active'), 'the rejection must be logged with the current occupancy');
 });

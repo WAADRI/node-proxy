@@ -163,6 +163,10 @@ export function setupClientWebSocket(
             if (authManager.validateClientToken(asString(msg.token))) {
               authenticated = true;
               ws.send(JSON.stringify({ type: 'auth_ok' }));
+              // The per-node concurrency limit lives on the server (the panel
+              // owns it), so send it on connect as well as on every change:
+              // nodes apply it live and report the effective value in stats.
+              ws.send(JSON.stringify({ type: 'limits', maxConcurrentRequests: clientManager.currentMaxConcurrent() }));
             } else {
               logger.warn({ ip: clientIp }, 'Client auth failed - invalid token');
               ws.send(JSON.stringify({ type: 'auth_error', message: 'Invalid token' }));
