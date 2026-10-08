@@ -23,8 +23,39 @@ const STRATEGY_LABELS = {
 const stats = {
   total: () => (store.status ? store.status.total || 0 : 0),
   clients: () => (store.status ? store.status.clients || [] : []),
-  pendingReqs: () => (store.status ? store.status.clients.reduce((s, c) => s + (c.pendingRequestsCount || 0), 0) : 0),
-  tunnels: () => (store.status ? store.status.clients.reduce((s, c) => s + (c.pendingTunnelsCount || 0), 0) : 0),
+  // Occupancy as the NODE reports it, with the server's own count as a floor.
+  // The server only knows about the work it dispatched and tore down, so during
+  // the 2026-10 tunnel-slot leak this card read 8 while the nodes sat at their
+  // limit and refused everything. See clientLoad on the server.
+  pendingReqs: () =>
+    store.status
+      ? store.status.clients.reduce(
+          (s, c) => s + Math.max(Number(c.clientStats?.activeRequests) || 0, c.pendingRequestsCount || 0),
+          0
+        )
+      : 0,
+  tunnels: () =>
+    store.status
+      ? store.status.clients.reduce(
+          (s, c) => s + Math.max(Number(c.clientStats?.activeTunnels) || 0, c.pendingTunnelsCount || 0),
+          0
+        )
+      : 0,
+  // Sum of what the nodes will accept, so the card above can be judged against it.
+  capacity: () =>
+    store.status
+      ? store.status.clients.reduce((s, c) => s + (Number(c.clientStats?.maxConcurrentRequests) || 0), 0)
+      : 0,
+  // A node running an older client reports no capacity; say nothing rather than
+  // claiming a limit of 0.
+  tunnelsUnit: () => {
+    const cap = stats.capacity();
+    return cap > 0 ? `条 / 上限 ${cap} 条` : '条';
+  },
+  tunnelsHint: () =>
+    stats.capacity() > 0
+      ? '节点自报的活跃隧道数；上限为各节点上报的并发上限之和'
+      : '节点自报的活跃隧道数（旧版客户端不上报容量）',
   uptime: () => (store.status && store.status.server && store.status.server.uptime ? store.status.server.uptime : null),
   failed: () => (store.status && store.status.server ? store.status.server.failedRequests || 0 : 0),
   trafficBytes: () =>
@@ -134,7 +165,7 @@ onUnmounted(() => {
     <div class="wb-cards">
       <StatCard label="在线节点" :value="stats.total()" />
       <StatCard label="总请求数" :value="stats.pendingReqs()" unit="待处理" />
-      <StatCard label="活跃隧道" :value="stats.tunnels()" unit="条" />
+      <StatCard :label="'活跃隧道'" :value="stats.tunnels()" :unit="stats.tunnelsUnit()" :hint="stats.tunnelsHint()" />
       <StatCard label="服务器运行时间" :value="stats.uptime() ? formatUptime(stats.uptime()) : '-'" />
     </div>
 
