@@ -10,7 +10,7 @@ import type { ClientNode } from './client-manager.ts';
 // Value import: client-manager does not import Router at runtime, so there is
 // no import cycle. clientEffectiveTags keeps tag matching in sync with group
 // membership (issue #53: group name = implicit tag).
-import { clientEffectiveTags } from './client-manager.ts';
+import { clientEffectiveTags, clientLoad } from './client-manager.ts';
 
 export type RoutingStrategy = 'random' | 'least-loaded' | 'fastest-response' | 'weighted';
 
@@ -101,7 +101,10 @@ export class Router {
     let best = candidates[0];
     let minLoad = Infinity;
     for (const c of candidates) {
-      const load = (c.pendingRequests?.size || 0) + (c.pendingTunnels?.size || 0);
+      // The node's own report, not the server's bookkeeping: the server's count
+      // cannot see a node that is full for its own reasons (leaked slots, or a
+      // lower limit than the server's), and this strategy exists to spread work.
+      const load = clientLoad(c, 'tunnel') + clientLoad(c, 'request');
       if (load < minLoad) {
         minLoad = load;
         best = c;

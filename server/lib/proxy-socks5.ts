@@ -290,9 +290,15 @@ function handleTCPConnect(
     return;
   }
 
-  if (client.pendingTunnels.size >= (config.client?.max_concurrent || 100)) {
+  // Admission uses what the node itself reports (its limit and its occupancy),
+  // not only the server's own pending count - see ClientManager.isSaturated.
+  if (clientManager.isSaturated(client.id, 'tunnel')) {
     logger.warn(
-      { clientId: client.id, pending: client.pendingTunnels.size, limit: config.client?.max_concurrent || 100 },
+      {
+        clientId: client.id,
+        load: clientManager.loadOf(client.id, 'tunnel'),
+        capacity: clientManager.capacityOf(client.id),
+      },
       'SOCKS5 CONNECT rejected: client at tunnel capacity'
     );
     socket.write(encodeReply(0x01));

@@ -237,8 +237,8 @@ function handleHttpRequest(
     return;
   }
 
-  // Check slot
-  if (client.pendingRequests.size >= (config.client?.max_concurrent || 100)) {
+  // Check slot (node-reported occupancy + capacity, see ClientManager.isSaturated)
+  if (clientManager.isSaturated(client.id, 'request')) {
     res.writeHead(503, { 'Content-Type': 'text/plain' });
     res.end('Client busy');
     return;
@@ -441,8 +441,8 @@ function handleConnect(
     return;
   }
 
-  // Check slot
-  if (client.pendingTunnels.size >= (config.client?.max_concurrent || 100)) {
+  // Check slot (node-reported occupancy + capacity, see ClientManager.isSaturated)
+  if (clientManager.isSaturated(client.id, 'tunnel')) {
     socket.end('HTTP/1.1 503 Service Unavailable\r\nClient busy\r\n\r\n');
     return;
   }

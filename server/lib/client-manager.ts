@@ -122,6 +122,12 @@ export interface ClientStatsEntry {
   errors: number;
   responseTimeSum: number;
   responseTimeCount: number;
+  // Reported by the node itself on every heartbeat; 0 means "not reported"
+  // (an older node), in which case admission falls back to the server's own
+  // bookkeeping. See clientLoad / clientCapacity.
+  activeRequests: number;
+  activeTunnels: number;
+  maxConcurrentRequests: number;
 }
 
 export interface ClientNode {
@@ -288,6 +294,12 @@ export class ClientManager {
         errors: 0,
         responseTimeSum: 0,
         responseTimeCount: 0,
+        // Reported by the node on every heartbeat ('stats' message). 0 means the
+        // node has not told us yet - an older node never will, and admission then
+        // falls back to the server's own bookkeeping.
+        activeRequests: 0,
+        activeTunnels: 0,
+        maxConcurrentRequests: 0,
       },
       lastActivity: Date.now(),
     };
@@ -684,6 +696,22 @@ export class ClientManager {
     this.storage?.recordTraffic(clientId, sent, received);
   }
 
+  // Capacity / occupancy for admission. Both proxy paths used to compare only
+  // their own pending count against the configured limit, which cannot see a
+  // node that is full for reasons of its own (leaked slots, a lower limit than
+  // the server's). See clientLoad / clientCapacity above.
+  loadOf(id: string, kind: LoadKind = 'tunnel'): number {
+    return clientLoad(this.clients.get(id), kind);
+  }
+
+  capacityOf(id: string): number {
+    return clientCapacity(this.clients.get(id), this.config.client?.max_concurrent || 100);
+  }
+
+  isSaturated(id: string, kind: LoadKind = 'tunnel'): boolean {
+    return this.loadOf(id, kind) >= this.capacityOf(id);
+  }
+
   trackError(clientId?: string | null, type = 'request') {
     this.stats.failedRequests++;
     const client = clientId ? this.clients.get(clientId) : undefined;
@@ -717,6 +745,35 @@ export class ClientManager {
       }
     }
   }
+}
+
+// Which pool of node work a limit applies to. The node keeps one counter per
+// kind (activeRequests / activeTunnels) against the same limit.
+export type LoadKind = 'tunnel' | 'request';
+
+// How much work a node is currently carrying, as the node itself reports it,
+// with the server's own bookkeeping as a floor.
+//
+// The reported value is the truth: the server only knows about the tunnels it
+// dispatched and removed. During the 2026-10 tunnel-slot leak the server's
+// counters read 8 while the node sat at its limit of 100 and refused everything
+// with "Client busy" - admission on the server's own numbers kept feeding a node
+// that could not take the work.
+export function clientLoad(client: ClientNode | null | undefined, kind: LoadKind = 'tunnel'): number {
+  const stats = client?.stats as unknown as Record<string, unknown> | undefined;
+  const reported = Number(kind === 'request' ? stats?.activeRequests : stats?.activeTunnels);
+  const own = kind === 'request' ? client?.pendingRequests?.size || 0 : client?.pendingTunnels?.size || 0;
+  return Math.max(Number.isFinite(reported) ? reported : 0, own);
+}
+
+// What a node will actually accept: its own reported limit, capped by the
+// server's policy. The node is the one answering "Client busy", so configuring
+// the server higher than the node only produces tunnels that get refused.
+export function clientCapacity(client: ClientNode | null | undefined, serverCap: number): number {
+  const stats = client?.stats as unknown as Record<string, unknown> | undefined;
+  const reported = Number(stats?.maxConcurrentRequests);
+  const cap = Number.isFinite(reported) && reported > 0 ? reported : serverCap;
+  return Math.min(cap, serverCap);
 }
 
 // A failure is node-level unless it merely reports what the target did.
