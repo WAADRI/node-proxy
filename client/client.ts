@@ -80,6 +80,17 @@ if (!persistentClientId) {
 const LIVENESS_FILE = process.env.LIVENESS_FILE || path.join(os.tmpdir(), 'node-proxy-liveness');
 const LIVENESS_INTERVAL_MS = 10000;
 
+// Live concurrency limit, owned by the server panel.
+//
+// issue #53 moved node configuration out of the node, which left this limit
+// compiled into the image: raising it for the fleet meant shipping a new client.
+// The server now pushes it on connect and whenever the panel changes it.
+let maxConcurrentOverride: number | null = null;
+
+function maxConcurrent(): number {
+  return maxConcurrentOverride ?? CONFIG.max_concurrent_requests;
+}
+
 function writeLivenessBeacon(): void {
   try {
     fs.writeFileSync(LIVENESS_FILE, String(Math.floor(Date.now() / 1000)));
@@ -171,6 +182,9 @@ interface MuxLike {
 // Message shapes pushed by the server (see server protocol docs)
 type ServerMsg =
   | { type: 'auth_ok' }
+  // Live concurrency limit, owned by the server panel: sent on connect and on
+  // every change, so the fleet's limit can move without a new client image.
+  | { type: 'limits'; maxConcurrentRequests?: number }
   | { type: 'auth_error'; message?: string }
   | { type: 'info_ok'; clientId?: string }
   | { type: 'request'; id: string; method?: string; url: string; headers?: Record<string, string>; body?: string }
@@ -439,7 +453,7 @@ function startHeartbeat() {
           activeTunnels: activeTunnels.size,
           // The node's own limit, so the server can stop dispatching work this
           // node will refuse ("Client busy") and can size admission against it.
-          maxConcurrentRequests: CONFIG.max_concurrent_requests,
+          maxConcurrentRequests: maxConcurrent(),
         },
       }));
     } catch (err) {
@@ -464,6 +478,27 @@ function handleMessage(msg: ServerMsg) {
       log('info', 'Authentication successful');
       if (ws) ws.send(JSON.stringify({ type: 'info', info: getSystemInfo() }));
       startHeartbeat();
+      break;
+    }
+
+    // Live concurrency limit from the panel (see maxConcurrent above). A bad
+    // value must not be able to paralyse the node (too low) or silently remove
+    // the limit (NaN / absurd), so validate before applying.
+    case 'limits': {
+      const requested = Number(msg.maxConcurrentRequests);
+      if (!Number.isFinite(requested) || requested < 1 || requested > 100000) {
+        log('warn', `Ignoring invalid concurrency limit from server: ${String(msg.maxConcurrentRequests)}`);
+        break;
+      }
+      const limit = Math.floor(requested);
+      if (limit !== maxConcurrentOverride) {
+        log(
+          'info',
+          `Concurrency limit set to ${limit} by the server` +
+            (maxConcurrentOverride === null ? ` (image default ${CONFIG.max_concurrent_requests})` : '')
+        );
+        maxConcurrentOverride = limit;
+      }
       break;
     }
 
@@ -581,7 +616,7 @@ function handleMuxStream(stream: MuxStreamLike) {
 function handleMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders) {
   const requestId = headers.id || stream.id;
 
-  if (activeRequests.size >= CONFIG.max_concurrent_requests) {
+  if (activeRequests.size >= maxConcurrent()) {
     stream.sendHeaders({ type: 'response', id: requestId, statusCode: 503, statusMessage: 'Service Unavailable', headers: { 'content-type': 'text/plain' } });
     stream.sendData(Buffer.from('Client busy'), true);
     return;
@@ -678,13 +713,13 @@ function handleMuxTunnel(stream: MuxStreamLike, headers: MuxStreamHeaders) {
   const host = headers.host || '';
   const port = headers.port || 0;
 
-  if (activeTunnels.size >= CONFIG.max_concurrent_requests) {
+  if (activeTunnels.size >= maxConcurrent()) {
     // This used to be silent, which made "the proxy stopped working" look like
     // a client that was happily idle: the server logged the node's refusal and
     // the node logged nothing at all.
     log(
       'warn',
-      `Tunnel ${tunnelId} rejected: Client busy (active ${activeTunnels.size}/${CONFIG.max_concurrent_requests})`
+      `Tunnel ${tunnelId} rejected: Client busy (active ${activeTunnels.size}/${maxConcurrent()})`
     );
     stream.sendHeaders({ type: 'tunnel_error', id: tunnelId, message: 'Client busy' });
     stream.close();
@@ -716,7 +751,7 @@ function handleMuxTunnel(stream: MuxStreamLike, headers: MuxStreamHeaders) {
       hardClose = null;
     }
     if (activeTunnels.delete(tunnelId)) {
-      log('debug', `Tunnel ${tunnelId} slot released (active ${activeTunnels.size}/${CONFIG.max_concurrent_requests})`);
+      log('debug', `Tunnel ${tunnelId} slot released (active ${activeTunnels.size}/${maxConcurrent()})`);
     }
   };
 
@@ -806,7 +841,7 @@ function handleRequest(msg: Extract<ServerMsg, { type: 'request' }>) {
   const headers = msg.headers || {};
   const body = msg.body;
 
-  if (activeRequests.size >= CONFIG.max_concurrent_requests) {
+  if (activeRequests.size >= maxConcurrent()) {
     sendResponse(id, 503, 'Service Unavailable', { 'content-type': 'text/plain' }, 'Client busy');
     return;
   }
@@ -886,7 +921,7 @@ function handleTunnelOpen(msg: Extract<ServerMsg, { type: 'tunnel_open' }>) {
   const host = msg.host;
   const port = msg.port;
 
-  if (activeTunnels.size >= CONFIG.max_concurrent_requests) {
+  if (activeTunnels.size >= maxConcurrent()) {
     if (ws) ws.send(JSON.stringify({ type: 'tunnel_error', id, message: 'Client busy' }));
     return;
   }
@@ -1152,7 +1187,7 @@ log('info', '========================================');
 log('info', `  Server: ${CONFIG.server_url}`);
 log('info', `  Hostname: ${os.hostname()}`);
 log('info', `  Platform: ${os.platform()} ${os.arch()}`);
-log('info', `  Concurrency: ${CONFIG.max_concurrent_requests}`);
+log('info', `  Concurrency: ${maxConcurrent()}`);
 // Surface the optional node-side identity so a config that the server will not
 // display (region/tags) is visible in the startup log.
 log('info', `  Region: ${CONFIG.region ? String(CONFIG.region) : '(not set)'}`);
