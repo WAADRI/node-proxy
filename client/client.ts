@@ -676,6 +676,13 @@ function handleMuxTunnel(stream: MuxStreamLike, headers: MuxStreamHeaders) {
   const port = headers.port || 0;
 
   if (activeTunnels.size >= CONFIG.max_concurrent_requests) {
+    // This used to be silent, which made "the proxy stopped working" look like
+    // a client that was happily idle: the server logged the node's refusal and
+    // the node logged nothing at all.
+    log(
+      'warn',
+      `Tunnel ${tunnelId} rejected: Client busy (active ${activeTunnels.size}/${CONFIG.max_concurrent_requests})`
+    );
     stream.sendHeaders({ type: 'tunnel_error', id: tunnelId, message: 'Client busy' });
     stream.close();
     return;
@@ -691,12 +698,31 @@ function handleMuxTunnel(stream: MuxStreamLike, headers: MuxStreamHeaders) {
   // already reported tunnel_ready, so the server would only treat it as noise.
   let established = false;
   let reported = false;
+  let hardClose: ReturnType<typeof setTimeout> | null = null;
+
+  // Release the slot on EVERY way a tunnel can end, not just when the target
+  // closes. Binding it to the target socket's 'close' leaked slots permanently:
+  // the server ends tunnels itself (idle reclaim, or its client socket going
+  // away) and a target is free to keep its half of the connection open forever
+  // after our FIN - which keep-alive endpoints do. After a day under load all
+  // 100 slots were leaked, every tunnel was answered "Client busy" while the
+  // server still saw only a handful active.
+  const releaseSlot = () => {
+    if (hardClose) {
+      clearTimeout(hardClose);
+      hardClose = null;
+    }
+    if (activeTunnels.delete(tunnelId)) {
+      log('debug', `Tunnel ${tunnelId} slot released (active ${activeTunnels.size}/${CONFIG.max_concurrent_requests})`);
+    }
+  };
+
   const failTunnel = (message: string, code?: string) => {
     if (reported) return;
     reported = true;
     stream.sendHeaders({ type: 'tunnel_error', id: tunnelId, message, code: code || '' });
     stream.close();
-    activeTunnels.delete(tunnelId);
+    releaseSlot();
   };
 
   const timeout = setTimeout(() => {
@@ -739,7 +765,7 @@ function handleMuxTunnel(stream: MuxStreamLike, headers: MuxStreamHeaders) {
     clearTimeout(timeout);
     log('debug', `Tunnel ${tunnelId} closed`);
     stream.close();
-    activeTunnels.delete(tunnelId);
+    releaseSlot();
   });
 
   // Forward stream data to the socket
@@ -747,9 +773,20 @@ function handleMuxTunnel(stream: MuxStreamLike, headers: MuxStreamHeaders) {
     if (!socket.destroyed) socket.write(chunk);
   };
   stream._onEnd = () => {
+    // The server ended the tunnel: the slot is free now, regardless of whether
+    // the target ever closes its side.
+    releaseSlot();
     if (!socket.destroyed) socket.end();
+    // Flush what we already handed to the socket, then make sure it dies: a
+    // keep-alive target can hold its half open indefinitely after our FIN, and
+    // those sockets were the other half of the leak (fds, not just slots).
+    if (!hardClose) hardClose = setTimeout(() => {
+      hardClose = null;
+      if (!socket.destroyed) socket.destroy();
+    }, 5000);
   };
   stream._onError = () => {
+    releaseSlot();
     if (!socket.destroyed) socket.destroy();
   };
 
