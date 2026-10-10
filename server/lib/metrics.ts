@@ -12,6 +12,15 @@ import type { ClientManager } from './client-manager.ts';
 
 const CIRCUIT_STATE_MAP: Record<string, number> = { closed: 0, open: 1, half_open: 2 };
 
+// Node-reported labels are attacker-controlled: any registered node can send a new
+// hostname on every heartbeat, and each distinct label value becomes a PERMANENT
+// time series - a node could balloon the registry (and every scrape) that way.
+// Cap length and charset before a value becomes a label (issue #122).
+function safeLabel(value: unknown, max = 64): string {
+  const s = typeof value === 'string' && value ? value : 'unknown';
+  const cleaned = s.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, max);
+  return cleaned || 'unknown';
+}
 export class MetricsManager {
   config: ServerConfig;
   log: AppLogger;
@@ -152,7 +161,7 @@ export class MetricsManager {
 
   recordBytes(direction: string, clientId: string | null | undefined, bytes: number) {
     if (!this.enabled) return;
-    this.bytesTotal.inc({ direction, client_id: clientId || 'unknown' }, bytes);
+    this.bytesTotal.inc({ direction, client_id: safeLabel(clientId, 8) }, bytes);
     this.responseSize.observe({ type: direction }, bytes);
   }
 
@@ -163,7 +172,7 @@ export class MetricsManager {
 
   recordError(type: string, clientId?: string | null) {
     if (!this.enabled) return;
-    this.errorsTotal.inc({ type, client_id: clientId || 'unknown' });
+    this.errorsTotal.inc({ type, client_id: safeLabel(clientId, 8) });
   }
 
   // ===========================================================================
@@ -182,7 +191,7 @@ export class MetricsManager {
       this.clientLoad.set(
         {
           client_id: c.id.substring(0, 8),
-          hostname: c.info?.hostname || 'unknown',
+          hostname: safeLabel(c.info?.hostname, 32),
         },
         c.pendingRequestsCount + c.pendingTunnelsCount
       );
