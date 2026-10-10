@@ -202,7 +202,16 @@ class ACMEManager {
       // ignore
     }
     fs.writeFileSync(path.join(this.certDir, `${domain}.pem`), toStringable(cert).toString());
-    fs.writeFileSync(path.join(this.certDir, `${domain}-key.pem`), toStringable(key).toString());
+    const keyPath = path.join(this.certDir, `${domain}-key.pem`);
+    // The certificate is public, the PRIVATE KEY is not: with no mode it landed with
+    // the umask default (0644 = readable by any local user) (issue #122). mode only
+    // applies on creation, so chmod too - an existing key must be tightened.
+    fs.writeFileSync(keyPath, toStringable(key).toString(), { mode: 0o600 });
+    try {
+      fs.chmodSync(keyPath, 0o600);
+    } catch (_) {
+      // best effort: some filesystems have no POSIX modes
+    }
 
     this.log.info(
       { domain, certPath: path.join(this.certDir, `${domain}.pem`) },
