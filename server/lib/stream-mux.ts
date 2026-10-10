@@ -666,7 +666,9 @@ export class StreamMux {
     while (offset < buf.length) {
       if (offset + 13 > buf.length) break;
       const length = buf.readUInt32BE(offset);
-      if (offset + 13 + length > buf.length) break;
+      // Same rule as the single-frame path: a declared length that cannot fit is
+      // a malformed frame, not something to slice past the end of the buffer.
+      if (length > MAX_FRAME_SIZE || offset + 13 + length > buf.length) break;
       const type = buf[offset + 4];
       const streamId = buf.readUInt32BE(offset + 5);
       const flags = buf.readUInt32BE(offset + 9);
@@ -706,27 +708,48 @@ export class StreamMux {
         return;
       }
 
-      // Check if it's a batch (multiple frames)
-      // Batch format: [2 bytes count][frame][frame]...
-      // Single frame: [4 bytes length][type][stream_id][flags][payload]
-      if (buf.length >= 2) {
-        const count = buf.readUInt16BE(0);
-        if (count >= 2) {
-          // Multiple frames batched together - count field at offset 0
-          const frames = this._decodeBatch(buf);
-          for (const frame of frames) {
-            this._handleFrame(frame);
+      // Frame layout:       [4B length][1B type][4B stream id][4B flags][payload]
+      // Batch layout:       [2B count][frame][frame]...
+      //
+      // These bytes come straight off the wire BEFORE authentication (the mux is
+      // wired up as soon as the socket opens, see ws-server), so a truncated
+      // frame must be dropped instead of parsed: an out-of-range read throws
+      // ERR_OUT_OF_RANGE, and the process-level uncaughtException handler treats
+      // anything that is not a transient network errno as fatal and exits - one
+      // two-byte binary frame from an unauthenticated peer killed the server.
+      try {
+        if (buf.length >= 2) {
+          const count = buf.readUInt16BE(0);
+          if (count >= 2) {
+            // Multiple frames batched together - count field at offset 0
+            const frames = this._decodeBatch(buf);
+            for (const frame of frames) {
+              this._handleFrame(frame);
+            }
+          } else if (buf.length >= 13) {
+            // Single frame
+            const firstFrameLen = buf.readUInt32BE(0);
+            if (firstFrameLen > MAX_FRAME_SIZE || 13 + firstFrameLen > buf.length) {
+              this.logger?.warn({ declared: firstFrameLen, received: buf.length }, 'Dropping malformed mux frame');
+              return;
+            }
+            this._handleFrame({
+              type: buf[4],
+              streamId: buf.readUInt32BE(5),
+              flags: buf.readUInt32BE(9),
+              payload: buf.slice(13, 13 + firstFrameLen),
+            });
+          } else {
+            this.logger?.warn({ received: buf.length }, 'Dropping truncated mux frame');
           }
-        } else {
-          // Single frame
-          const firstFrameLen = buf.readUInt32BE(0);
-          this._handleFrame({
-            type: buf[4],
-            streamId: buf.readUInt32BE(5),
-            flags: buf.readUInt32BE(9),
-            payload: buf.slice(13, 13 + firstFrameLen),
-          });
         }
+      } catch (err) {
+        // Never let a parse error reach the process handler, which exits: drop
+        // the frame and keep the connection alive.
+        this.logger?.warn(
+          { error: err instanceof Error ? err.message : String(err) },
+          'Malformed mux frame ignored'
+        );
       }
     });
 
@@ -790,7 +813,16 @@ export class StreamMux {
   }
 
   _handleConnectionFrame(type: number, payload: Buffer): void {
-    const p = JSON.parse(payload.toString('utf8')) as { time?: number; lastStreamId?: number; increment?: number };
+    // Connection-level frames arrive before authentication, so a payload that is
+    // not JSON (an empty one is enough) must not throw: the SyntaxError would
+    // reach the process-level handler, which exits. Drop the frame instead.
+    let p: { time?: number; lastStreamId?: number; increment?: number };
+    try {
+      p = JSON.parse(payload.toString('utf8')) as { time?: number; lastStreamId?: number; increment?: number };
+    } catch (_) {
+      this.logger?.warn({ type, bytes: payload.length }, 'Dropping connection frame with invalid payload');
+      return;
+    }
 
     if (type === FRAME_TYPE.PING) {
       // Respond with PONG
