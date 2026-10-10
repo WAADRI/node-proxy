@@ -245,10 +245,17 @@ class NetworkTestManager {
     const task = this.tasks.get(String(msg.taskId || ''));
     if (!task || task.state !== 'running') return;
     const clientLabel = this._labelOf(task, clientId);
+    const index = Number(msg.index) || 0;
+    // Two problems with pushing blindly (issue #122): a node that reports the same
+    // index twice inflates results.length, which is ALSO the completion counter - so
+    // a duplicate could mark the task done early; and a hostile node could grow the
+    // array without bound. Dedupe on (client, index) and cap at the expected count.
+    if (task.results.some((r) => r.clientId === clientId && r.index === index)) return;
+    if (task.results.length >= Math.max(task.expect, 1)) return;
     task.results.push({
       clientId,
       clientLabel,
-      index: Number(msg.index) || 0,
+      index,
       target: msg.target == null ? undefined : String(msg.target),
       ok: !!msg.ok,
       ms: msg.ms,
