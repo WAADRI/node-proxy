@@ -95,3 +95,19 @@ test('port ranges are validated instead of coerced', () => {
   assert.deepEqual(m._parsePortRange('80,443-445'), [{ start: 80, end: 80 }, { start: 443, end: 445 }]);
   assert.equal(m.addRule({ action: 'deny', match: { targetPort: '80-' } }), false, 'a bad port rule is rejected');
 });
+
+test('a port condition actually constrains the UDP path', () => {
+  // The UDP caller used to pass no port at all (check() defaulted it to 0) and the
+  // condition was a truthiness test, so a port-constrained rule was skipped
+  // entirely: `deny udp port 53` denied nothing in particular and `allow udp port
+  // 53` allowed every UDP port. check() now takes an optional port and the caller
+  // passes the one it parsed from the request.
+  const m = manager() as Manager & {
+    check(client: unknown, host: string, protocol?: string, port?: number): boolean;
+  };
+  assert.equal(m.addRule({ action: 'deny', match: { protocol: 'udp', targetPort: '53' } }), true);
+
+  assert.equal(m.check(null, 'example.com', 'udp', 53), false, 'port 53 is denied by the rule');
+  assert.equal(m.check(null, 'example.com', 'udp', 5353), true, 'another port is not covered');
+  assert.equal(m.check(null, 'example.com', 'http', 53), true, 'other protocols are unaffected');
+});

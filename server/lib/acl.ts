@@ -232,7 +232,7 @@ class ACLManager {
    * @param {string} sourceIp - Source IP address
    * @returns {boolean} true if allowed, false if denied
    */
-  check(client: AclClientContext | null, targetHost: string, protocol = 'http', targetPort = 0, sourceIp = ''): boolean {
+  check(client: AclClientContext | null, targetHost: string, protocol = 'http', targetPort?: number, sourceIp = ''): boolean {
     if (!this.rules.length) return true; // No rules = allow all
     if (!this.enabled) return true;
 
@@ -277,7 +277,10 @@ class ACLManager {
       }
 
       // Check target port
-      if (match.targetPort && targetPort) {
+      // Explicit undefined checks: the old truthiness test could not tell a caller that
+    // passed no port from one that passed a real port, and the UDP path never passed
+    // one at all - so `deny udp port 53` silently stopped constraining anything (#116).
+    if (match.targetPort !== undefined && targetPort !== undefined) {
         if (!this._isInPortRange(targetPort, rule._portRange)) continue;
       }
 
