@@ -94,7 +94,12 @@ function createWebServer(
   const app = express();
 
   // Trust the first upstream proxy (nginx) so req.ip reads X-Forwarded-For
-  app.set('trust proxy', 1);
+  // Do NOT trust proxy headers by default. With `trust proxy = 1` express took
+  // req.ip from the RIGHT-most X-Forwarded-For entry, so anyone connecting to the
+  // panel directly could pick their own address - and that value is what the login
+  // audit logs, and what any future IP-based defence would key on (issue #117).
+  // A deployment behind a trusted reverse proxy can opt in explicitly.
+  app.set('trust proxy', false);
 
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true }));
