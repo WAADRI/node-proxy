@@ -469,7 +469,10 @@ class Storage {
     if (!this.available || !this.db) return;
     try {
       this.db.run('DELETE FROM config_overrides WHERE key = ?', [key]);
-      this._save();
+      // Batching: _save() exports and rewrites the WHOLE database synchronously, so
+      // doing it on every metadata edit blocked the event loop as the DB grew (issue
+      // #122). Mark it dirty; the periodic writer persists it within its interval.
+      this._dirty = true;
     } catch (_) {
       // ignore
     }
@@ -512,7 +515,10 @@ class Storage {
           now,
         ]
       );
-      this._save();
+      // Batching: _save() exports and rewrites the WHOLE database synchronously, so
+      // doing it on every metadata edit blocked the event loop as the DB grew (issue
+      // #122). Mark it dirty; the periodic writer persists it within its interval.
+      this._dirty = true;
     } catch (_) {
       // ignore
     }
