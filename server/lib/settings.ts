@@ -210,9 +210,9 @@ class SettingsManager {
         if (!this.modules.router.setStrategy(strategy)) {
           return { ok: false, error: 'Router rejected strategy: ' + strategy };
         }
-        // routing section exists whenever a routing change can be applied (same
-        // unconditional write as the original JS)
-        this.config.routing!.strategy = strategy;
+        // routing may be absent entirely when the server is configured through
+        // environment variables only, so the section is created on demand here.
+        this.config.routing = { ...(this.config.routing || {}), strategy };
         this._persist(group, strategy);
         break;
       }
@@ -275,7 +275,7 @@ class SettingsManager {
         if (this.modules.router) {
           this.modules.router.setStrategy(base.routing?.strategy || 'random');
         }
-        this.config.routing!.strategy = base.routing?.strategy || 'random';
+        this.config.routing = { ...(this.config.routing || {}), strategy: base.routing?.strategy || 'random' };
         break;
       case 'circuit_breaker':
         if (this.modules.circuitBreaker) {
