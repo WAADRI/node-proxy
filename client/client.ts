@@ -117,6 +117,13 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let currentClientId: string | null = null;
 let intentionalClose = false;
+
+// Set once the server has accepted our token. Nothing the server sends may be
+// acted on before that (see handleMessage): the client used to execute requests,
+// open tunnels and run net_test probes for whoever the socket was pointed at -
+// a MITM on a plain ws:// control connection, or simply a wrong server_url - with
+// no credential checked at all (issue #118). Reset on every connect attempt.
+let authenticated = false;
 // When the socket last entered the CONNECTING state (0 = not connecting).
 // Bounds a handshake that never completes so the watchdog can force a retry.
 let connectingSince = 0;
@@ -292,6 +299,7 @@ function connect() {
     log('info', 'Connected to server');
     reconnectAttempt = 0;
     intentionalClose = false;
+    authenticated = false;
     missedPongs = 0;
     connectingSince = 0;
     sock.send(JSON.stringify({ type: 'auth', token: CONFIG.auth_token }));
@@ -473,8 +481,16 @@ function stopHeartbeat() {
 // Message Handler
 // =============================================================================
 function handleMessage(msg: ServerMsg) {
+  // Only the authentication handshake may arrive before the token is accepted.
+  // Everything else (request, tunnel_open, tunnel_data, udp_data, net_test,
+  // limits, broadcast) is a command and requires an authenticated session.
+  if (!authenticated && msg.type !== 'auth_ok' && msg.type !== 'auth_error') {
+    log('warn', `Ignoring ${msg.type} received before authentication`);
+    return;
+  }
   switch (msg.type) {
     case 'auth_ok': {
+      authenticated = true;
       log('info', 'Authentication successful');
       if (ws) ws.send(JSON.stringify({ type: 'info', info: getSystemInfo() }));
       startHeartbeat();
@@ -504,9 +520,14 @@ function handleMessage(msg: ServerMsg) {
 
     case 'auth_error':
       log('error', 'Authentication failed: ' + (msg.message || 'Invalid token'));
-      intentionalClose = true;
+      authenticated = false;
+      // Do NOT exit. A protocol message must not be able to kill the process: a
+      // MITM - or any server that rejects a stale token - could otherwise put the
+      // node into a restart loop under docker's restart policy. Leaving
+      // intentionalClose false lets the normal close path back off and retry,
+      // and the error above tells the operator what to fix.
+      intentionalClose = false;
       if (ws) ws.close();
-      process.exit(1);
       break;
 
     case 'info_ok':
