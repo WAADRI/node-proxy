@@ -39,16 +39,19 @@ export function createLogger(opts: LoggerOptions = {}): AppLogger {
     // ignore - pino will surface real permission errors later
   }
 
-  // File transport with rotation
-  const fileTransport = pino.transport({
-    target: 'pino/file',
-    options: {
-      destination: logFile,
-      mkdir: true,
-    },
+  // Main-thread destination (SonicBoom) rather than pino.transport(): a transport
+  // runs in a worker thread holding its own file descriptor, so rotating by rename
+  // left this process writing into the RENAMED file - the size limit never took
+  // effect, disk usage kept growing and fresh lines landed in the rotated file
+  // (verified: after rename the .ROTATED file grew while server.log stayed gone).
+  // pino.destination() exposes reopen(), which is what rotation actually needs.
+  const fileStream: pino.DestinationStream & { reopen?: () => void } = pino.destination({
+    dest: logFile,
+    mkdir: true,
+    sync: false,
   });
 
-  const targets: pino.DestinationStream[] = [fileTransport];
+  const targets: pino.DestinationStream[] = [fileStream];
 
   if (pretty) {
     // Pretty print for development
@@ -71,7 +74,19 @@ export function createLogger(opts: LoggerOptions = {}): AppLogger {
         if (stats.size > maxSize) {
           const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
           const rotated = `${logFile}.${timestamp}`;
+          // Flush, rename, then REOPEN the original path: the next write goes to a
+          // fresh server.log while the rotated file keeps what was already written.
+          try {
+            (fileStream as { flushSync?: () => void }).flushSync?.();
+          } catch (_) {
+            // nothing buffered
+          }
           fs.renameSync(logFile, rotated);
+          try {
+            fileStream.reopen?.();
+          } catch (_) {
+            // the next write recreates the file anyway
+          }
 
           // Keep only maxFiles recent rotated files
           const dir = path.dirname(logFile);
@@ -96,6 +111,17 @@ export function createLogger(opts: LoggerOptions = {}): AppLogger {
     }
   };
 
+  // Close the file destination (and flush it) - used by shutdown and by tests,
+  // so an idle logger cannot keep the event loop alive.
+  const close = (): void => {
+    try {
+      (fileStream as { flushSync?: () => void }).flushSync?.();
+      (fileStream as { end?: () => void }).end?.();
+    } catch (_) {
+      // already closed
+    }
+  };
+
   const inst = Object.assign(
     pino(
       {
@@ -108,19 +134,21 @@ export function createLogger(opts: LoggerOptions = {}): AppLogger {
       },
       pino.multistream(targets)
     ),
-    { rotate }
+    { rotate, close }
   ) as AppLogger;
 
   loggerInstance = inst;
 
   // Check rotation periodically
-  setInterval(() => {
+  // unref: housekeeping must not be a reason for the process to stay alive.
+  const rotateTimer = setInterval(() => {
     try {
       if (loggerInstance) loggerInstance.rotate();
     } catch (_) {
       // ignore
     }
   }, 60000);
+  rotateTimer.unref?.();
 
   return inst;
 }
