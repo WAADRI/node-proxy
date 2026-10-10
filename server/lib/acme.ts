@@ -112,7 +112,11 @@ class ACMEManager {
     }
 
     this.email = acmeConfig.email;
-    const staging = acmeConfig.staging !== false;
+    // Default to PRODUCTION. `staging !== false` meant an operator who enabled ACME
+    // without mentioning staging silently got certificates from the staging directory,
+    // which no browser trusts - the feature looked broken with nothing in the logs to
+    // say why (issue #122). Staging is now opt-in, and the choice is always logged.
+    const staging = acmeConfig.staging === true;
     this.directoryUrl = staging
       ? 'https://acme-staging-v02.api.letsencrypt.org/directory'
       : 'https://acme-v02.api.letsencrypt.org/directory';
