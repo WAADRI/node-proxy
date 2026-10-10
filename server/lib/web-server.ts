@@ -207,6 +207,14 @@ function createWebServer(
   });
 
   api.post('/network-test', (req: WebRequest, res: HttpResponse) => {
+    // Probing arbitrary targets from this server and from every online node is a
+    // privileged action (issue #115): it used to be reachable by ANY logged-in
+    // user, viewer included, which turned the panel into an SSRF pivot
+    // (169.254.169.254, internal hosts, ...). nettest:run is admin/operator only.
+    if (!authManager.hasPermission(str(req.user), 'nettest:run')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const nt = clientManager.netTest;
     if (!nt) {
       res.status(501).json({ success: false, message: 'Network test manager not available' });
@@ -230,6 +238,13 @@ function createWebServer(
   });
 
   api.get('/network-test/:id', (req: WebRequest, res: HttpResponse) => {
+    // Results of a probe (targets, per-node results) are as sensitive as running
+    // one - they describe internal reachability - so the read-back needs the same
+    // permission (issue #115).
+    if (!authManager.hasPermission(str(req.user), 'nettest:run')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const nt = clientManager.netTest;
     if (!nt) {
       res.status(501).json({ success: false, message: 'Network test manager not available' });
