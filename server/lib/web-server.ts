@@ -684,14 +684,27 @@ function createWebServer(
   });
 
   api.get('/client/:id/events', (req: WebRequest, res: HttpResponse) => {
+    // Whitelist the id like every other /client/:id route does. The value ends up
+    // as a SQL parameter in storage, and this was the one place (with /traffic
+    // below) that passed a caller-controlled string straight through (issue #122).
+    const client = clientManager.getById(pstr(req.params.id));
+    if (!client) {
+      res.status(404).json({ success: false, message: 'Client not found' });
+      return;
+    }
     const limit = parseInt(str(req.query.limit), 10) || 50;
-    const events = clientManager.storage?.getClientEvents(pstr(req.params.id), limit) || [];
+    const events = clientManager.storage?.getClientEvents(client.id, limit) || [];
     res.json({ events });
   });
 
   api.get('/client/:id/traffic', (req: WebRequest, res: HttpResponse) => {
+    const client = clientManager.getById(pstr(req.params.id));
+    if (!client) {
+      res.status(404).json({ success: false, message: 'Client not found' });
+      return;
+    }
     const since = parseInt(str(req.query.since), 10) || Date.now() - 86400000;
-    const stats = clientManager.storage?.getTrafficStats(pstr(req.params.id), since) || {};
+    const stats = clientManager.storage?.getTrafficStats(client.id, since) || {};
     res.json(stats);
   });
 
