@@ -63,7 +63,10 @@ export class RequestCache {
     this.config = config;
     this.log = logger;
     this.enabled = config.cache?.enabled !== false;
-    this.defaultTTL = config.cache?.default_ttl || 5000; // 5 seconds
+    // Be defensive: an undefined/zero/non-numeric default_ttl must not silently
+    // disable expiry for every entry (see settings.ts, issue #122).
+    const configuredTTL = Number(config.cache?.default_ttl);
+    this.defaultTTL = Number.isFinite(configuredTTL) && configuredTTL > 0 ? configuredTTL : 5000; // 5 seconds
     this.maxSize = config.cache?.max_size || 5000;
     this.maxBodySize = config.cache?.max_body_size || 1024 * 1024; // 1MB max cached body
 

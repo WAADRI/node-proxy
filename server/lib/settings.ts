@@ -250,6 +250,11 @@ class SettingsManager {
       case 'cache': {
         const num = this._numFields(v, ['default_ttl'], 0);
         if (num.error) return num;
+        // An empty body used to slip through (_numFields only complains when it was
+        // given fields to parse) and wrote undefined into the live cache, which
+        // DISABLED expiry entirely - every cached response stayed valid forever
+        // (issue #122). Require the field, like the client group does above.
+        if (num.values!.default_ttl === undefined) return { ok: false, error: 'default_ttl is required' };
         if (this.modules.cache) this.modules.cache.defaultTTL = num.values!.default_ttl;
         this.config.cache = { ...(this.config.cache || {}), ...num.values };
         this._persist(group, num.values);
@@ -291,7 +296,10 @@ class SettingsManager {
         this.config.client = { ...(base.client || {}) };
         break;
       case 'cache':
-        if (this.modules.cache) this.modules.cache.defaultTTL = base.cache?.default_ttl;
+        // Fall back to the documented default: base.cache may not exist at all when
+        // the server is configured through environment variables, and assigning
+        // undefined here disabled cache expiry (issue #122).
+        if (this.modules.cache) this.modules.cache.defaultTTL = base.cache?.default_ttl ?? 5000;
         this.config.cache = { ...(base.cache || {}) };
         break;
       default:
