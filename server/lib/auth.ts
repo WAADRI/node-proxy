@@ -273,8 +273,13 @@ export class AuthManager {
 
       if (!token) {
         // Public endpoints that don't require auth
+        // /metrics carries the whole registry (topology, client ids, traffic), so it
+        // is token-free only for a LOOPBACK scraper; any other source must
+        // authenticate. It used to be public for everyone (issue #117).
+        const peer = (req as { socket?: { remoteAddress?: string } }).socket?.remoteAddress;
+        const fromLoopback = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1';
         if (
-          req.path === '/metrics' ||
+          (req.path === '/metrics' && fromLoopback) ||
           req.path.startsWith('/public/') ||
           req.path === '/api/swagger.json' ||
           req.path === '/api/docs'
