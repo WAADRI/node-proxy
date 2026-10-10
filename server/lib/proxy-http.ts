@@ -231,7 +231,9 @@ function handleHttpRequest(
   // Check bandwidth limit (per selected client + global)
   const estimateSize = parseInt((req.headers['content-length'] as string) || '0', 10) + 2048;
   const bw = clientManager.bandwidthLimiter;
-  if (bw && (!bw.check(client.id, estimateSize) || !bw.check('global', estimateSize))) {
+  // check() already consumes the global bucket itself, so calling it a second time
+  // charged every request twice - the configured global rate behaved like half (#122).
+  if (bw && !bw.check(client.id, estimateSize)) {
     res.writeHead(429, { 'Content-Type': 'text/plain', 'Retry-After': '5' });
     res.end('Rate limited: bandwidth exceeded');
     return;
