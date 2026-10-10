@@ -14,7 +14,8 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-const http = require('http');
+// Plain http is deliberately not imported any more: update metadata and the
+// archive itself must come over https (see checkForUpdate / _downloadUpdate).
 const crypto = require('crypto');
 // NOTE: original JS also destructured an unused `spawn` from 'child_process';
 // that binding was dead code and is omitted (execSync is still required lazily
@@ -121,7 +122,13 @@ class AutoUpdater {
 
     try {
       const url = new URL(this.updateUrl);
-      const client: UpdateFetchClient = url.protocol === 'https:' ? (https as UpdateFetchClient) : http;
+      // Update metadata is executable policy (it can name a post-update script and
+      // the archive to install), so it must not travel in the clear: over plain
+      // http anyone on the path could swap the version, download URL and checksum.
+      if (url.protocol !== 'https:') {
+        throw new Error(`Refusing update check: ${url.protocol} is not allowed, use https:`);
+      }
+      const client: UpdateFetchClient = https as UpdateFetchClient;
 
       const data = await new Promise<UpdateInfo>((resolve, reject) => {
         const req = client.get(url.href, {
@@ -132,7 +139,15 @@ class AutoUpdater {
           timeout: 10000,
         }, (res) => {
           let body = '';
-          res.on('data', chunk => body += chunk);
+          // Cap it: an endless (or hostile) response used to grow this string until
+          // the process ran out of memory. 1 MiB is far more than metadata needs.
+          res.on('data', chunk => {
+            body += chunk;
+            if (body.length > 1024 * 1024) {
+              req.destroy();
+              reject(new Error('Update metadata too large'));
+            }
+          });
           res.on('end', () => {
             if (res.statusCode === 200) {
               try { resolve(JSON.parse(body)); } catch (_) { reject(new Error('Invalid JSON')); }
@@ -180,7 +195,12 @@ class AutoUpdater {
       // the assertion is type-only and matches the original JS exactly.
       const downloadUrl = data.download_url as string;
       const url = new URL(downloadUrl);
-      const client: UpdateFetchClient = url.protocol === 'https:' ? (https as UpdateFetchClient) : http;
+      // Same rule as the metadata: a plain-http archive URL let anyone on the path
+      // swap the bytes (the checksum comes from the same tamperable metadata).
+      if (url.protocol !== 'https:') {
+        throw new Error(`Refusing download: ${url.protocol} is not allowed, use https:`);
+      }
+      const client: UpdateFetchClient = https as UpdateFetchClient;
       const filename = `node-proxy-${this._safeVersion(data.version)}.zip`;
       const filepath = this._insideDir(this.updateDir, filename);
 
@@ -188,24 +208,55 @@ class AutoUpdater {
 
       await new Promise<void>((resolve, reject) => {
         const file = fs.createWriteStream(filepath);
+        const limit = 512 * 1024 * 1024; // 512 MiB: an update archive is never bigger
+        let received = 0;
+        let settled = false;
+        const fail = (err: Error, req: { destroy(): void }) => {
+          if (settled) return;
+          settled = true;
+          // Destroy both handles BEFORE unlinking: with the stream still open the
+          // unlink failed (routinely on Windows) and left a partial file behind.
+          req.destroy();
+          file.destroy();
+          fs.unlink(filepath, () => {});
+          reject(err);
+        };
         const req = client.get(url.href, { timeout: 300000 }, (res) => {
           if (res.statusCode !== 200) {
-            reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+            res.resume();
+            fail(new Error(`Download failed: HTTP ${res.statusCode}`), req);
             return;
           }
+          const declared = Number(res.headers['content-length'] || 0);
+          if (declared > limit) {
+            res.resume();
+            fail(new Error(`Download too large: ${declared} bytes`), req);
+            return;
+          }
+          res.on('data', (chunk: Buffer) => {
+            received += chunk.length;
+            if (received > limit) fail(new Error('Download exceeded the size limit'), req);
+          });
           res.pipe(file);
           file.on('finish', () => {
+            if (settled) return;
+            settled = true;
             file.close();
             resolve();
           });
         });
-        req.on('error', (err) => { fs.unlink(filepath, () => {}); reject(err); });
-        req.on('timeout', () => { req.destroy(); fs.unlink(filepath, () => {}); reject(new Error('Download timeout')); });
+        req.on('error', (err) => fail(err, req));
+        req.on('timeout', () => fail(new Error('Download timeout'), req));
       });
 
-      // Verify checksum if provided
+      // The archive must be pinned: without a checksum these bytes are simply
+      // whatever the download URL returned.
       const expectedSha256 = data.sha256;
-      if (expectedSha256) {
+      if (!expectedSha256 || typeof expectedSha256 !== 'string') {
+        fs.unlink(filepath, () => {});
+        throw new Error('Refusing update: metadata carries no sha256');
+      }
+      {
         const hash = await this._hashFile(filepath);
         if (hash !== expectedSha256.toLowerCase()) {
           fs.unlink(filepath, () => {});

@@ -59,6 +59,35 @@ test('the post-update script can only come from inside the archive', () => {
   );
 });
 
+test('metadata and archive must come over https, and be pinned', () => {
+  const checks = src.match(/protocol !== 'https:'/g) || [];
+  assert.ok(checks.length >= 2, 'both the metadata check and the download must refuse non-https');
+  assert.ok(!src.includes("require('http')"), 'plain http must not even be imported');
+  assert.ok(
+    src.includes('metadata carries no sha256'),
+    'a missing checksum must refuse the update instead of installing unverified bytes'
+  );
+  assert.ok(/if \(!expectedSha256 \|\| typeof expectedSha256 !== 'string'\)/.test(src), 'the check must reject empty values');
+});
+
+test('the download is bounded and cleans up its handles', () => {
+  assert.ok(src.includes('content-length'), 'the declared size must be checked before streaming');
+  assert.ok(src.includes('512 * 1024 * 1024'), 'a hard byte limit must exist');
+  assert.ok(src.includes('received += chunk.length'), 'the streamed size must be counted too');
+  // Both handles are destroyed before the file is unlinked. (A window, not a
+  // slice to the next marker: 'client.get(url.href' also appears in the metadata
+  // fetch, which comes earlier in the file.)
+  const failStart = src.indexOf('const fail = (err: Error');
+  assert.ok(failStart > 0, 'the download failure helper was not found');
+  const failBlock = src.slice(failStart, failStart + 500);
+  assert.ok(failBlock.includes('req.destroy()'), 'the request must be destroyed');
+  assert.ok(failBlock.includes('file.destroy()'), 'the write stream must be destroyed');
+  assert.ok(
+    failBlock.indexOf('file.destroy()') < failBlock.indexOf('fs.unlink('),
+    'destroy before unlink, otherwise the unlink fails (routinely on Windows)'
+  );
+});
+
 test('the shell is not used to interpolate the archive paths', () => {
   // Extract commands still use the platform tools, but the interpolated paths are
   // now built from the validated version only (see the first test). Comments are
