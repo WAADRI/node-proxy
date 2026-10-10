@@ -628,14 +628,24 @@ function handleMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders) {
     bodyChunks.push(chunk);
   };
 
-  stream._onEnd = () => {
-    const body = Buffer.concat(bodyChunks).toString('base64');
+  // Dispatch at most once. The response path closes the stream to release it, and
+  // Stream.close() calls _onEnd AGAIN when the state is half_closed_local - and
+  // _onEnd is this dispatcher, so every mux request was executed twice (issue #125
+  // review). A replayed HEADERS frame lands in the same guard (issue #123).
+  let dispatched = false;
+  const dispatchOnce = (body: string) => {
+    if (dispatched) return;
+    dispatched = true;
     executeMuxRequest(stream, headers, body);
+  };
+
+  stream._onEnd = () => {
+    dispatchOnce(Buffer.concat(bodyChunks).toString('base64'));
   };
 
   // If the request had no body (END_STREAM on headers), handle it now
   if (stream.state === 'half_closed_remote' || stream.state === 'closed') {
-    executeMuxRequest(stream, headers, '');
+    dispatchOnce('');
   }
 }
 
