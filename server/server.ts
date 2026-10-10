@@ -341,7 +341,7 @@ function shutdown(signal: string) {
   storage.close();
   auditLogger.shutdown();
   autoUpdater.shutdown();
-  if (acmeManager.enabled) acmeManager.stop();
+  if (acmeManager.enabled) acmeManager.destroy(); // stop() never existed (issue #122)
   setTimeout(() => {
     logger.info('Goodbye');
     process.exit(0);
