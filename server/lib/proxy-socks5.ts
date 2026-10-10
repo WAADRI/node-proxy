@@ -41,6 +41,25 @@ function safeWrite(socket: NetSocket, data: Buffer): boolean {
   }
 }
 
+// The SOCKS5 UDP relay belongs to the peer that opened the TCP control
+// connection. Without that check the relay port accepted datagrams from anyone -
+// an unauthenticated open relay: a third party could push traffic through the
+// node and receive the replies (issue #114).
+function normalizeIp(ip: string): string {
+  const lower = (ip || '').toLowerCase();
+  return lower.startsWith('::ffff:') ? lower.slice(7) : lower;
+}
+
+export function isRelayPeer(source: string, controlPeer: string): boolean {
+  const a = normalizeIp(source);
+  const b = normalizeIp(controlPeer);
+  if (!a || !b) return false;
+  // A dual-stack listener may report the control peer as ::1 while the datagram
+  // from the same host arrives as 127.0.0.1 (or the other way round).
+  const loop = (x: string) => x === '::1' || x === '127.0.0.1';
+  if (loop(a) && loop(b)) return true;
+  return a === b;
+}
 export function createSocks5Proxy(
   clientManager: ClientManager,
   authManager: AuthManagerLike,
@@ -80,6 +99,21 @@ export function createSocks5Proxy(
           // ignore
         }
         cleanupState.udpSocket = null;
+      }
+      // Release this connection's UDP relay association (if any). handleUDPAssociate
+      // registers it in clientManager.udpAssociations and cannot reach this closure,
+      // so it is found by the control socket it belongs to. Without this the relay
+      // socket stayed bound and kept relaying after the client disconnected (issue #114).
+      if (clientManager.udpAssociations) {
+        for (const [assocId, assoc] of clientManager.udpAssociations) {
+          if (assoc.socket !== socket) continue;
+          try {
+            (assoc.udpServer as dgram.Socket).close();
+          } catch (_) {
+            // ignore: already closed
+          }
+          clientManager.udpAssociations.delete(assocId);
+        }
       }
     }
 
@@ -428,6 +462,11 @@ function handleUDPAssociate(
   const udpClients = new Map<string, { rinfo: RemoteInfo; client: ClientNode }>();
 
   udpServer.on('message', (msg: Buffer, rinfo: RemoteInfo) => {
+    // Only the peer that owns this control connection may relay: see isRelayPeer.
+    if (!isRelayPeer(rinfo.address, clientHost)) {
+      logger.debug({ from: rinfo.address, expected: clientHost }, 'SOCKS5 UDP datagram from unexpected source dropped');
+      return;
+    }
     // Parse SOCKS5 UDP datagram header (RFC 1928 Section 7)
     if (msg.length < 4) return;
 
