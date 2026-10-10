@@ -463,8 +463,14 @@ function handleUDPAssociate(
 
   udpServer.on('message', (msg: Buffer, rinfo: RemoteInfo) => {
     // Only the peer that owns this control connection may relay: see isRelayPeer.
-    if (!isRelayPeer(rinfo.address, clientHost)) {
-      logger.debug({ from: rinfo.address, expected: clientHost }, 'SOCKS5 UDP datagram from unexpected source dropped');
+    // Compare against the CONTROL CONNECTION peer, NOT the DST.ADDR declared in the
+    // request: RFC 1928 section 7 has clients fill 0.0.0.0 when they cannot know their
+    // own source address (curl does exactly that), so keying on the declared address
+    // dropped EVERY standard client datagram - the security fix broke the feature it
+    // was protecting (issue #126 review). The declared address is advisory only.
+    const relayPeer = socket.remoteAddress || '';
+    if (!isRelayPeer(rinfo.address, relayPeer)) {
+      logger.debug({ from: rinfo.address, expected: relayPeer }, 'SOCKS5 UDP datagram from unexpected source dropped');
       return;
     }
     // Parse SOCKS5 UDP datagram header (RFC 1928 Section 7)

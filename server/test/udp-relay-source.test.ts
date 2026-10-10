@@ -49,9 +49,11 @@ test('the relay handler drops datagrams from other sources', () => {
   const start = src.indexOf("udpServer.on('message'");
   assert.ok(start > 0, 'the relay message handler was not found');
   const handler = src.slice(start, start + 900);
+  // Keyed on the CONTROL CONNECTION peer: the declared DST.ADDR is 0.0.0.0 for
+  // standard clients (RFC 1928 section 7), so it cannot be the comparison target.
   assert.ok(
-    handler.includes('isRelayPeer(rinfo.address, clientHost)'),
-    'the handler must validate the datagram source before relaying anything'
+    handler.includes('isRelayPeer(rinfo.address, relayPeer)'),
+    'the handler must validate the datagram source against the control peer'
   );
   assert.ok(/if \(!isRelayPeer[\s\S]{0,400}return;/.test(handler), 'a non-peer source must return early');
 });
