@@ -104,6 +104,14 @@ export class RequestCache {
     if (!this.enabled || !key) return null;
     const entry = this.cache.get(key);
     if (!entry) return null;
+    // Check the TTL here rather than only in the periodic cleanup: an expired entry
+    // used to be served for up to a whole cleanup interval, so a 5s TTL could be
+    // served for ~35s (issue #122).
+    const ttl = entry.ttl || this.defaultTTL;
+    if (ttl > 0 && Date.now() - entry.createdAt > ttl) {
+      this.cache.delete(key);
+      return null;
+    }
     entry.hits++;
     return {
       hit: true,
