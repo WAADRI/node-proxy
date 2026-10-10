@@ -181,8 +181,8 @@ class AutoUpdater {
       const downloadUrl = data.download_url as string;
       const url = new URL(downloadUrl);
       const client: UpdateFetchClient = url.protocol === 'https:' ? (https as UpdateFetchClient) : http;
-      const filename = `node-proxy-${data.version}.zip`;
-      const filepath = path.join(this.updateDir, filename);
+      const filename = `node-proxy-${this._safeVersion(data.version)}.zip`;
+      const filepath = this._insideDir(this.updateDir, filename);
 
       this.log.info({ url: downloadUrl, file: filename }, 'Downloading update');
 
@@ -229,6 +229,26 @@ class AutoUpdater {
     }
   }
 
+  // A version string ends up in a file name, a directory name and (indirectly)
+  // in shell commands, so validate it before use: anything but a plain dotted
+  // version allows path traversal or shell injection (issue #120).
+  private _safeVersion(version: unknown): string {
+    const v = typeof version === 'string' ? version.trim() : '';
+    if (!/^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$/.test(v) || v.includes('..')) {
+      throw new Error(`Refusing update: unsafe version ${JSON.stringify(String(version)).slice(0, 60)}`);
+    }
+    return v;
+  }
+
+  // Resolve a path inside a directory, refusing anything that escapes it.
+  private _insideDir(dir: string, candidate: string): string {
+    const base = path.resolve(dir);
+    const resolved = path.resolve(base, candidate);
+    if (resolved !== base && !resolved.startsWith(base + path.sep)) {
+      throw new Error(`Refusing update: path escapes ${base}`);
+    }
+    return resolved;
+  }
   /**
    * Apply the downloaded update
    */
@@ -240,7 +260,7 @@ class AutoUpdater {
 
     try {
       const { execSync } = require('child_process');
-      const extractDir = path.join(this.updateDir, `node-proxy-${this._downloadVersion}`);
+      const extractDir = this._insideDir(this.updateDir, `node-proxy-${this._safeVersion(this._downloadVersion)}`);
 
       // Extract
       if (downloadedPath.endsWith('.zip')) {
@@ -260,14 +280,28 @@ class AutoUpdater {
       this.log.info({ dir: extractDir }, 'Update extracted');
 
       // Run post-update script if provided
+      // Only a script that ships INSIDE the archive may run. The metadata value
+      // used to be executed verbatim (execSync(postUpdateScript)), so anyone able
+      // to tamper with the update source - or the metadata channel - got arbitrary
+      // command execution as the service account (issue #120).
       const postUpdateScript = data.post_update_script;
       if (postUpdateScript) {
-        this.log.info('Running post-update script');
-        execSync(postUpdateScript, {
-          cwd: extractDir,
-          timeout: 60000,
-          stdio: 'pipe',
-        });
+        if (typeof postUpdateScript !== 'string' || path.isAbsolute(postUpdateScript)) {
+          throw new Error('Refusing update: post_update_script must be a relative path inside the archive');
+        }
+        const scriptPath = this._insideDir(extractDir, postUpdateScript);
+        if (!fs.existsSync(scriptPath)) {
+          throw new Error(`Refusing update: post_update_script not found in the archive: ${postUpdateScript}`);
+        }
+        this.log.info({ script: postUpdateScript }, 'Running post-update script from the archive');
+        // execFileSync, not execSync: no shell, so the validated path is an
+        // argument rather than a string to be re-parsed.
+        const { execFileSync } = require('child_process');
+        if (process.platform === 'win32') {
+          execFileSync('powershell', ['-NoProfile', '-File', scriptPath], { cwd: extractDir, timeout: 60000, stdio: 'pipe' });
+        } else {
+          execFileSync('sh', [scriptPath], { cwd: extractDir, timeout: 60000, stdio: 'pipe' });
+        }
       }
 
       // Create update marker for restart
