@@ -302,6 +302,29 @@ export class AuthManager {
         return;
       }
 
+      // A token lives for 24h and carries a role snapshot, so the user store has to be
+      // consulted on EVERY request: otherwise disabling or deleting an account left its
+      // already-issued tokens working until they expired (issue #117). Same idiom as
+      // hasPermission: missing user or enabled === false means no access.
+      // result.username is optional in the payload type; narrow it before the lookup.
+      const liveUsername = result.username;
+      if (!liveUsername) {
+        if (req.path.startsWith('/api/')) {
+          res.status(401).json({ error: 'Unauthorized', message: 'Account is disabled or no longer exists' });
+        } else {
+          res.redirect('/login');
+        }
+        return;
+      }
+      const liveUser = this.users.get(liveUsername);
+      if (!liveUser || !liveUser.enabled) {
+        if (req.path.startsWith('/api/')) {
+          res.status(401).json({ error: 'Unauthorized', message: 'Account is disabled or no longer exists' });
+        } else {
+          res.redirect('/login');
+        }
+        return;
+      }
       req.user = result.username;
       req.role = result.role;
 
