@@ -303,7 +303,7 @@ class Storage {
 
       // Check if row exists
       const existing = this.db.exec(
-        `SELECT id FROM traffic_stats WHERE client_id = '${clientId.replace(/'/g, "''")}' AND period_start = ${periodStart}`
+        `SELECT id FROM traffic_stats WHERE client_id = '${clientId.replace(/'/g, "''")}' AND period_start = ${Number(periodStart) || 0}`
       );
       if (existing.length > 0 && existing[0].values.length > 0) {
         this.db.run(
@@ -326,7 +326,7 @@ class Storage {
     if (!this.available || !this.db) return { bytesSent: 0, bytesReceived: 0, requests: 0 };
     try {
       const result = this.db.exec(
-        `SELECT COALESCE(SUM(bytes_sent),0) as bs, COALESCE(SUM(bytes_received),0) as br, COALESCE(SUM(requests_count),0) as rc FROM traffic_stats WHERE client_id = '${clientId.replace(/'/g, "''")}' AND period_start >= ${since || 0}`
+        `SELECT COALESCE(SUM(bytes_sent),0) as bs, COALESCE(SUM(bytes_received),0) as br, COALESCE(SUM(requests_count),0) as rc FROM traffic_stats WHERE client_id = '${clientId.replace(/'/g, "''")}' AND period_start >= ${Number(since) || 0}`
       );
       if (result.length > 0 && result[0].values.length > 0) {
         const vals = result[0].values[0];
@@ -350,8 +350,8 @@ class Storage {
     const since = startOfToday - (safeDays - 1) * 86400000;
     try {
       const where = clientId
-        ? `WHERE client_id = '${clientId.replace(/'/g, "''")}' AND period_start >= ${since}`
-        : `WHERE period_start >= ${since}`;
+        ? `WHERE client_id = '${clientId.replace(/'/g, "''")}' AND period_start >= ${Number(since) || 0}`
+        : `WHERE period_start >= ${Number(since) || 0}`;
       const result = this.db.exec(
         `SELECT period_start, bytes_sent, bytes_received FROM traffic_stats ${where}`
       );
