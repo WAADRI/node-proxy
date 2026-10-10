@@ -483,7 +483,7 @@ function handleUDPAssociate(
     if (!client) return;
 
     // Check ACL (legacy first arg is the client object, not an id)
-    if (clientManager.acl && !clientManager.acl.check(client, host, 'udp')) {
+    if (clientManager.acl && !clientManager.acl.check(client, host, 'udp', port)) {
       return;
     }
 
