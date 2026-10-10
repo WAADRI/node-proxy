@@ -30,10 +30,12 @@ test('the web middleware re-checks the user on every request', () => {
   const start = src.indexOf('webAuthMiddleware(requiredPermission');
   assert.ok(start > 0, 'webAuthMiddleware was not found');
   const body = src.slice(start, start + 2600);
-  assert.ok(/this\.users\.get\(result\.username\)/.test(body), 'the live user must be looked up');
+  assert.ok(/const liveUsername = result\.username;/.test(body), 'the optional username must be narrowed');
+  assert.ok(/this\.users\.get\(liveUsername\)/.test(body), 'the live user must be looked up');
   assert.ok(/if \(!liveUser \|\| !liveUser\.enabled\)/.test(body), 'a missing or disabled account must be refused');
+  // Compare absolute positions: the guard pushed the assignment beyond the slice above.
   assert.ok(
-    body.indexOf('liveUser.enabled') < body.indexOf('req.user = result.username'),
+    src.indexOf('liveUser.enabled') < src.indexOf('req.user = result.username'),
     'the check must run BEFORE the request is authenticated as that user'
   );
   assert.ok(body.includes("message: 'Account is disabled or no longer exists'"), 'and the API must say so');
