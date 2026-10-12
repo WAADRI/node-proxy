@@ -761,7 +761,16 @@ function executeMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders, bod
     if (body) req.write(Buffer.from(body, 'base64'));
     req.end();
 
-    activeRequests.set(requestId, { req });
+    // The id comes from the peer. Overwriting an in-flight entry would orphan the
+  // first request: its response could never be matched, and the cleanup handlers
+  // (which delete by id) would drop the wrong req. Peer ids are expected to be
+  // unique, so refuse the duplicate and drop it instead (issue #123).
+  if (activeRequests.has(requestId)) {
+    log('warn', `Duplicate request id ${requestId} ignored`);
+    try { req.destroy(); } catch (_) { /* ignore */ }
+    return;
+  }
+  activeRequests.set(requestId, { req });
   } catch (err) {
     stream.sendHeaders({ type: 'response', id: requestId, statusCode: 400, statusMessage: 'Bad Request', headers: { 'content-type': 'text/plain' } });
     stream.sendData(Buffer.from('Invalid request: ' + (err instanceof Error ? err.message : String(err))), true);
@@ -962,7 +971,16 @@ function handleRequest(msg: Extract<ServerMsg, { type: 'request' }>) {
     if (body) req.write(Buffer.from(body, 'base64'));
     req.end();
 
-    activeRequests.set(id, { req });
+    // The id comes from the peer. Overwriting an in-flight entry would orphan the
+  // first request: its response could never be matched, and the cleanup handlers
+  // (which delete by id) would drop the wrong req. Peer ids are expected to be
+  // unique, so refuse the duplicate and drop it instead (issue #123).
+  if (activeRequests.has(id)) {
+    log('warn', `Duplicate request id ${id} ignored`);
+    try { req.destroy(); } catch (_) { /* ignore */ }
+    return;
+  }
+  activeRequests.set(id, { req });
   } catch (err) {
     sendResponse(id, 400, 'Bad Request', { 'content-type': 'text/plain' }, 'Invalid request: ' + (err instanceof Error ? err.message : String(err)));
   }
