@@ -41,6 +41,18 @@ type ConfigValues = Record<string, ConfigScalar>;
 // environment). Everything a node legitimately needs to differ on lives here.
 const SCHEMA: SchemaEntry[] = [
   {
+    // Certificate verification is CONFIGURABLE and ON by default. It used to live in FIXED
+    // with default false: FIXED keys accept neither config.yaml nor environment values, so a
+    // node that could not validate the server certificate had no way to opt out the other way
+    // round - and, far worse, every node accepted ANY certificate. Being in FIXED also meant
+    // the documented TLS_REJECT_UNAUTHORIZED had no effect at all (issue #118).
+    key: 'tls_reject_unauthorized',
+    env: ['TLS_REJECT_UNAUTHORIZED'],
+    type: 'boolean',
+    default: true,
+    desc: '是否校验服务端证书（默认 true；自签证书场景需显式设为 false）',
+  },
+  {
     key: 'server_url',
     env: ['SERVER_URL'],
     type: 'string',
@@ -137,13 +149,7 @@ const FIXED: SchemaEntry[] = [
     default: 100,
     desc: '最大并发请求数（固定值）',
   },
-  {
-    key: 'tls_reject_unauthorized',
-    env: ['TLS_REJECT_UNAUTHORIZED'],
-    type: 'boolean',
-    default: false,
-    desc: '是否校验证书（固定值，自签证书场景保持 false）',
-  },
+
 ];
 
 function defaults(): ConfigValues {

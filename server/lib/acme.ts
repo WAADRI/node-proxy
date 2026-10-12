@@ -59,6 +59,20 @@ interface CertificatePair {
   key: string;
 }
 
+// A domain from configuration is interpolated into file paths under cert_dir, so it must
+// not be able to escape that directory ("../x") or smuggle separators (issue #122). Only
+// DNS-name characters are allowed - which is all a certificate domain can be - so
+// validating the value protects every path built from it.
+function assertSafeDomain(domain: string): void {
+  const value = String(domain || "").trim();
+  if (!value || value.length > 253) {
+    throw new Error("Invalid domain: " + JSON.stringify(domain));
+  }
+  if (!/^[A-Za-z0-9.-]+$/.test(value) || value.includes("..") || value.startsWith(".") || value.endsWith(".")) {
+    throw new Error("Invalid domain: " + value);
+  }
+}
+
 class ACMEManager {
   config: Record<string, unknown>;
   log: {
@@ -112,7 +126,11 @@ class ACMEManager {
     }
 
     this.email = acmeConfig.email;
-    const staging = acmeConfig.staging !== false;
+    // Default to PRODUCTION. `staging !== false` meant an operator who enabled ACME
+    // without mentioning staging silently got certificates from the staging directory,
+    // which no browser trusts - the feature looked broken with nothing in the logs to
+    // say why (issue #122). Staging is now opt-in, and the choice is always logged.
+    const staging = acmeConfig.staging === true;
     this.directoryUrl = staging
       ? 'https://acme-staging-v02.api.letsencrypt.org/directory'
       : 'https://acme-v02.api.letsencrypt.org/directory';
@@ -128,6 +146,7 @@ class ACMEManager {
 
   private async _checkRenewal() {
     for (const domain of this.domains) {
+      assertSafeDomain(domain);
       const certPath = path.join(this.certDir, `${domain}.pem`);
       const keyPath = path.join(this.certDir, `${domain}-key.pem`);
 
@@ -168,7 +187,7 @@ class ACMEManager {
 
     const client = new acme.Client({
       directoryUrl: this.directoryUrl,
-      accountKey: await acme.forge.createPrivateKey(),
+      accountKey: await this._accountKey(acme),
     });
 
     // Create CSR
@@ -201,8 +220,18 @@ class ACMEManager {
     } catch (_) {
       // ignore
     }
+    assertSafeDomain(domain);
     fs.writeFileSync(path.join(this.certDir, `${domain}.pem`), toStringable(cert).toString());
-    fs.writeFileSync(path.join(this.certDir, `${domain}-key.pem`), toStringable(key).toString());
+    const keyPath = path.join(this.certDir, `${domain}-key.pem`);
+    // The certificate is public, the PRIVATE KEY is not: with no mode it landed with
+    // the umask default (0644 = readable by any local user) (issue #122). mode only
+    // applies on creation, so chmod too - an existing key must be tightened.
+    fs.writeFileSync(keyPath, toStringable(key).toString(), { mode: 0o600 });
+    try {
+      fs.chmodSync(keyPath, 0o600);
+    } catch (_) {
+      // best effort: some filesystems have no POSIX modes
+    }
 
     this.log.info(
       { domain, certPath: path.join(this.certDir, `${domain}.pem`) },
@@ -211,6 +240,30 @@ class ACMEManager {
   }
 
   // Handle HTTP-01 challenge requests
+  // Reuse ONE ACME account across issuances. A fresh key per order created a new account
+  // every time, which burns the CA's new-account/new-order rate limits and makes the
+  // "account" meaningless (issue #122). The key is stored next to the certificates with
+  // mode 0600 - the same treatment the certificate key itself got.
+  protected async _accountKey(acme: AcmeLibrary): Promise<string> {
+    const file = path.join(this.certDir, 'acme-account-key.pem');
+    try {
+      const existing = fs.readFileSync(file, 'utf8').trim();
+      if (existing) return existing;
+    } catch (_) {
+      // No key on disk yet: create one below.
+    }
+    const created = toStringable(await acme.forge.createPrivateKey()).toString();
+    try {
+      fs.mkdirSync(this.certDir, { recursive: true });
+      fs.writeFileSync(file, created, { mode: 0o600 });
+      fs.chmodSync(file, 0o600);
+    } catch (_) {
+      // Best effort: a read-only key store must not stop issuance; the key still works
+      // for this process, it just will not be reused after a restart.
+    }
+    return created;
+  }
+
   handleChallenge(req: IncomingMessage, res: ServerResponse): boolean {
     const pathname = req.url || '';
     if (!pathname.startsWith('/.well-known/acme-challenge/')) {
@@ -226,6 +279,7 @@ class ACMEManager {
   }
 
   getCertificate(domain: string): CertificatePair | null {
+    assertSafeDomain(domain);
     const certPath = path.join(this.certDir, `${domain}.pem`);
     const keyPath = path.join(this.certDir, `${domain}-key.pem`);
     if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
