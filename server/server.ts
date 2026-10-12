@@ -154,6 +154,35 @@ authManager.setClientIdResolver((password: string) => {
     process.exit(1);
   }
 }
+
+// Same idea for the SHIPPED credential defaults (issues #121/#118): `admin123` for the panel
+// and `proxy-pass` for the proxy are both in this repository, and the panel requires login by
+// default, so a deployment that never changed them is open to anyone who reads the README.
+// Checked only when the feature is actually enabled, so a deployment that turned proxy auth
+// off is not nagged about a password it does not use.
+{
+  const shipped: Array<[string, string]> = [
+    ['auth.web.password', 'admin123'],
+    ['auth.proxy.password', 'proxy-pass'],
+  ];
+  const allowed =
+    process.env.ALLOW_DEFAULT_CREDENTIALS === '1' || process.env.ALLOW_DEFAULT_TOKEN === '1';
+  const offenders: string[] = [];
+  for (const [path, value] of shipped) {
+    const [section, key] = path.split('.');
+    const group = (config as Record<string, Record<string, Record<string, unknown>>>).auth?.[section];
+    if (group && group.enabled !== false && String(group[key] ?? '') === value) offenders.push(path + ' = ' + value);
+  }
+  if (offenders.length > 0 && !allowed) {
+    logger.error(
+      'Shipped default credentials are still in use: ' + offenders.join(', ') +
+        '. Set your own in config.yaml (auth.web.password / auth.proxy.password), or set ' +
+        'ALLOW_DEFAULT_CREDENTIALS=1 to override for a throwaway setup.'
+    );
+    process.exit(1);
+  }
+}
+
 const app = createWebServer(clientManager, authManager, config, logger, metricsManager, domainRouter, cache, pluginManager, aclManager, auditLogger, autoUpdater, settingsManager, passwordManager);
 const httpServer = http.createServer(app);
 
