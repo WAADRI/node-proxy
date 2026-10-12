@@ -55,4 +55,16 @@ client/slow-server.js
 client/route-server.js
 client/timeout-test.js
 
+# Local ad-hoc probe/test scripts from field debugging. They are NOT part of the project and
+# some contain live credentials for a real deployment, so an accidental `git add -A` must not
+# pick them up. Kept out of the tree on purpose - the files themselves stay on disk.
+probe_current.py
+probe_httpbin.py
+probe_shot.js
+probe_sni.js
+probe_socks5.py
+test_baidu.py
+test_httpbin.py
+test_socks5h.py
+
 server/openapi/generated.json
