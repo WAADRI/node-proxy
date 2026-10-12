@@ -67,6 +67,11 @@ const MAX_FRAME_SIZE = 16384; // 16KB max frame payload
 // stream ends, so an endless opener grows this.streams AND _priorityQueue until the
 // process dies (issue #119). 512 is far above any legitimate concurrency.
 const MAX_CONCURRENT_STREAMS = 512;
+// A WINDOW_UPDATE increment must be positive and sane: the old code did
+// `sendWindow += p.increment || 0`, so a NEGATIVE increment drove the window to a huge
+// negative value and stalled the stream forever - a cheap way for one peer to freeze a
+// connection (issue #119). 16 MiB is far above any legitimate increment.
+const MAX_WINDOW_INCREMENT = 16 * 1024 * 1024;
 const DEFAULT_PRIORITY = 128;
 
 // =============================================================================
@@ -293,7 +298,10 @@ class Stream {
 
     if (type === FRAME_TYPE.WINDOW_UPDATE) {
       const p = payload as { increment?: number };
-      this.sendWindow += p.increment || 0;
+      const sendWindowInc = Number(p.increment);
+      if (Number.isInteger(sendWindowInc) && sendWindowInc > 0 && sendWindowInc <= MAX_WINDOW_INCREMENT) {
+        this.sendWindow += sendWindowInc;
+      }
       // Flush buffered data
       this._flushBuffered();
       return;
@@ -837,7 +845,12 @@ class StreamMux {
     }
 
     if (type === FRAME_TYPE.WINDOW_UPDATE) {
-      this.connectionSendWindow += p.increment || 0;
+      const connectionSendWindowInc = Number(p.increment);
+      if (Number.isInteger(connectionSendWindowInc) && connectionSendWindowInc > 0 && connectionSendWindowInc <= MAX_WINDOW_INCREMENT) {
+        this.connectionSendWindow += connectionSendWindowInc;
+      } else {
+        this.logger?.debug({ increment: p.increment }, 'Ignoring invalid WINDOW_UPDATE increment');
+      }
       return;
     }
   }
