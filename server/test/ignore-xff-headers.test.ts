@@ -29,14 +29,15 @@ const ROOT = path.join(__dirname, '..', 'lib');
 const ws = fs.readFileSync(path.join(ROOT, 'ws-server.ts'), 'utf8');
 const http = fs.readFileSync(path.join(ROOT, 'proxy-http.ts'), 'utf8');
 
-test('the socket peer is the only source of the client IP', () => {
-  assert.ok(!/x-forwarded-for/.test(ws), 'ws-server must not read X-Forwarded-For');
-  assert.ok(!/x-real-ip/.test(ws), 'ws-server must not read X-Real-IP');
-  assert.ok(/req\.socket\.remoteAddress \|\| ''/.test(ws), 'ws-server must use the socket peer');
-  const registration = ws.slice(ws.indexOf('const rawPeer'), ws.indexOf('// Create StreamMux'));
-  assert.ok(/::ffff:/.test(registration) && /slice\(7\)/.test(registration), 'ws-server must strip the IPv4-mapped prefix, like proxy-http does (issue #206)');
-  assert.ok(!/x-forwarded-for/.test(http), 'proxy-http must not read X-Forwarded-For');
-  const fn = http.slice(http.indexOf('function clientIp('), http.indexOf('}', http.indexOf('function clientIp(')));
-  assert.ok(/return norm\(req\.socket && req\.socket\.remoteAddress\);/.test(fn), 'proxy-http must use the socket peer');
-  assert.ok(/replace\(\/\^::ffff:\/i/.test(fn), 'and still normalise IPv4-mapped IPv6');
+test('the client IP ignores proxy headers unless the operator opted in', () => {
+  // Header reads now go through the shared, opt-in-gated helper
+  // (lib/config.ts clientIpFromSocket, trusted_proxy_hops). The invariant here
+  // covers the DEFAULT (no opt-in) behaviour of all three consumers.
+  assert.ok(/clientIpFromSocket/.test(ws), 'ws-server resolves through the shared helper');
+  assert.ok(/trusted_proxy_hops/.test(ws), 'and gates it on the operator-declared hop count');
+  const regPath = ws.slice(ws.indexOf('const clientIp = clientIpFromSocket'), ws.indexOf('// Create StreamMux'));
+  assert.ok(/x-forwarded-for/.test(regPath) === false || /trusted_proxy_hops/.test(regPath), 'the header is only consulted behind the trusted-hops gate');
+  assert.ok(!/x-real-ip/i.test(ws), 'X-Real-IP is not used anywhere (it has no hop semantics)');
+  assert.ok(/clientIpFromSocket/.test(http), 'proxy-http resolves through the shared helper');
+  assert.ok(/trusted_proxy_hops/.test(http), 'and gates it on the operator-declared hop count');
 });

@@ -201,6 +201,16 @@ export class CircuitBreaker {
     this.log.info({ clientId }, 'Circuit breaker: manually reset');
   }
 
+  // Drop the stored state for a node that just re-registered. Used by
+  // ClientManager.add(): the failures that opened the breaker belonged to the
+  // previous (now dead) connection, and a reconnect proves the transport is
+  // back. Quiet on purpose - a restart loop would otherwise spam the log line
+  // below on every reconnect.
+  resetForReconnect(clientId: string) {
+    if (!this.states.has(clientId)) return;
+    this.states.delete(clientId);
+  }
+
   // Hot-update threshold parameters (used by the web settings panel)
   updateConfig(partial: Partial<CircuitBreakerDefaults> = {}): CircuitBreakerDefaults {
     const merged = { ...this._defaults, ...partial };

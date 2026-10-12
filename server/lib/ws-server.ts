@@ -11,6 +11,7 @@ import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { StreamMux, type MuxStreamLike } from './stream-mux.ts';
 import type { ClientManager, ClientInfo, PendingRecord } from './client-manager.ts';
 import type { ServerConfig } from './config.ts';
+import { clientIpFromSocket } from './config.ts';
 import type { AppLogger } from './logger.ts';
 
 interface AuthManagerLike {
@@ -96,17 +97,18 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 }
     const ws = rawWs as WsWithMux;
     let clientId: string | null = null;
     let authenticated = false;
-    // The client IP is the RAW TCP peer, never a client-supplied header. Trusting
-    // X-Forwarded-For / X-Real-IP unconditionally let any client choose the address
-    // recorded for it (and shown in the panel) by sending a header, and it
-    // contradicted the panel own `trust proxy = false` (issue #117). A deployment
-    // that really sits behind a reverse proxy needs an explicit opt-in, not a guess.
-    // The IPv4-mapped prefix is stripped for display: not doing this made the panel
-    // show ::ffff:127.0.0.1 on every dual-stack listener - the same normalization the
-    // proxy paths apply to their remoteAddress reads (issue #206 / regression of #162).
-    // A pure IPv6 peer keeps its original form.
-    const rawPeer = req.socket.remoteAddress || '';
-    const clientIp = rawPeer.toLowerCase().startsWith('::ffff:') ? rawPeer.slice(7) : rawPeer;
+    // The client IP starts from the RAW TCP peer, never a client-supplied header:
+    // trusting X-Forwarded-For unconditionally let any client choose
+    // the address recorded for it (and shown in the panel), and contradicted the
+    // panel own `trust proxy = false` (issue #117). An operator who really sits
+    // behind a reverse proxy opts in with server.trusted_proxy_hops; the shared
+    // helper then picks the untrusted-hop entry of X-Forwarded-For (#162 follow-up)
+    // and strips the IPv4-mapped prefix for display (issue #206).
+    const clientIp = clientIpFromSocket(
+      req.socket,
+      req.headers['x-forwarded-for'],
+      config.server?.trusted_proxy_hops || 0
+    );
 
     // Create StreamMux for this client
     const mux = new StreamMux(ws, {

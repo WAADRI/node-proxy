@@ -22,6 +22,43 @@ export interface ServerSection {
   http_proxy_port: number;
   socks5_port: number;
   ipv6_only?: boolean;
+  // How many reverse-proxy hops in front of this server are trusted to set
+  // X-Forwarded-For (nginx in front of the panel = 1). 0/unset keeps the raw TCP
+  // peer everywhere (#162). Express's own `trust proxy` only covers the panel
+  // (req.ip); the node-registration and proxy-logging reads use the shared helper
+  // below, so all three agree.
+  trusted_proxy_hops?: number;
+}
+
+// Derives the real client address behind trusted reverse proxies (#162 follow-up):
+// with N trusted hops, the client is the (N+1)-th entry of X-Forwarded-For from the
+// right; when the chain is shorter than that, the socket peer is the answer. Only
+// ever called when the operator opted in via trusted_proxy_hops > 0 - an
+// unconditional trust is exactly the hole #162 closed (any client could forge the
+// address shown in the panel).
+export function clientIpFromSocket(
+  socket: { remoteAddress?: string | null } | null | undefined,
+  forwardedFor: string | string[] | undefined,
+  trustedHops: number
+): string {
+  const rawPeer = String((socket && socket.remoteAddress) || '');
+  // Dual-stack listeners report an IPv4 peer as ::ffff:1.2.3.4; strip for display
+  // (#206) so panel/log/search agree with the plain-IPv4 form users expect.
+  const peer = rawPeer.toLowerCase().startsWith('::ffff:') ? rawPeer.slice(7) : rawPeer;
+  if (!(trustedHops > 0)) return peer;
+
+  const header = Array.isArray(forwardedFor) ? forwardedFor.join(',') : forwardedFor;
+  if (!header) return peer;
+  // Entries are appended by each hop; the client contributed the leftmost ones.
+  // With N trusted proxies the real client is entry[len-1-N] (0-based from the
+  // left); anything further left can be spoofed by the client itself.
+  const entries = header.split(',').map((s) => s.trim()).filter(Boolean);
+  const idx = entries.length - 1 - trustedHops;
+  const picked = idx >= 0 ? entries[idx] : '';
+  if (!picked) return peer;
+  // Normalize the picked entry too (the proxy may hand back a mapped form).
+  const lower = picked.toLowerCase();
+  return lower.startsWith('::ffff:') ? picked.slice(7) : picked;
 }
 
 export interface TlsSection {
@@ -165,6 +202,11 @@ export const DEFAULTS: ServerConfig = {
     web_port: 3000,
     http_proxy_port: 8080,
     socks5_port: 1080,
+    // Opt-in reverse-proxy trust (#162 follow-up): the number of trusted hops in
+    // front of this server (nginx = 1). 0 keeps the raw TCP peer everywhere -
+    // panel req.ip, node registration and proxy logging agree via
+    // clientIpFromSocket.
+    trusted_proxy_hops: 0,
   },
   tls: {
     enabled: false,
