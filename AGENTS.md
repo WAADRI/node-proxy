@@ -62,6 +62,29 @@ CI 失败或 review 需修改时：在**同一分支**补最小 commit 并 push�
 - 尽量对提交启用签名：**优先 GPG 签名**（`git config commit.gpgsign true`），其次 **SSH 私钥签名**（`git config gpg.format ssh` + 配置 `user.signingkey`）。
 - 签名为“尽量”项，**不签名也允许提交**；不要因签名失败而阻塞提交流程。
 
+## 自动化身份（GitHub App bot）
+
+- 维护方自动化代理以 GitHub App **`WAADRI-DeepSeek-bot`**（App ID `5282039`）身份发言与提交：
+  - 评论 / Review：作者为 `waadri-deepseek-bot[bot]`。
+  - 提交：`name = waadri-deepseek-bot[bot]`，
+    `email = 341290468+waadri-deepseek-bot[bot]@users.noreply.github.com`。
+  - 人工维护方账号为 `WAADRI`，第三方复核使用其自身账号；**三者不得混用同一身份**。
+
+- 凭据规则：
+  - 私钥**只能**存放于仓库目录之外；**禁止**提交、粘贴，或写入 issue / PR / 日志。
+  - installation token **仅**通过环境变量注入单条命令；**禁止**写入 `.git/config`、remote URL
+    或任何持久化（用户级 / 系统级）环境变量。
+  - 令牌按需铸造、短期有效；`gh` 的写操作必须显式使用该令牌。
+
+- 提交身份规则：
+  - 以 bot 身份提交时，除 `-c user.name` / `-c user.email` 外**必须**加 `-c commit.gpgsign=false`
+    （本仓库 `commit.gpgsign = true`，否则会用人工密钥签名，或直接导致提交失败）。
+  - 若需 bot 签名，须为 bot **单独**配置密钥；**禁止**复用人工密钥。
+  - 推送被拒（non-fast-forward）时**禁止** force-push，应先合并远端后重推。
+
+- 并行操作规则：
+  - 同一工作树**禁止**并行 checkout / 修改；多身份并行作业须用 `git worktree add` 另开工作树。
+
 ## 分支命名
 
 ```text
