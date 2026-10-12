@@ -93,7 +93,20 @@ function maxConcurrent(): number {
 
 function writeLivenessBeacon(): void {
   try {
-    fs.writeFileSync(LIVENESS_FILE, String(Math.floor(Date.now() / 1000)));
+    // The beacon path is predictable and sits in a world-writable directory, so a
+    // local user could pre-create it as a symlink and have this process - root on a
+    // bare-metal install - truncate and overwrite whatever it points at, every 10s
+    // (issue #123). Open with O_NOFOLLOW instead, and create it 0600.
+    // `?? 0` matters: where the flag does not exist (Windows) it must degrade to a
+    // no-op rather than poison the flags and kill the beacon entirely.
+    const flags =
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW ?? 0);
+    const fd = fs.openSync(LIVENESS_FILE, flags, 0o600);
+    try {
+      fs.writeSync(fd, String(Math.floor(Date.now() / 1000)));
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch (_) {
     // A failed beacon must never take the client down (e.g. read-only fs).
   }
