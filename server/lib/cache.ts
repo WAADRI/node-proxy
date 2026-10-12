@@ -63,7 +63,10 @@ export class RequestCache {
     this.config = config;
     this.log = logger;
     this.enabled = config.cache?.enabled !== false;
-    this.defaultTTL = config.cache?.default_ttl || 5000; // 5 seconds
+    // Be defensive: an undefined/zero/non-numeric default_ttl must not silently
+    // disable expiry for every entry (see settings.ts, issue #122).
+    const configuredTTL = Number(config.cache?.default_ttl);
+    this.defaultTTL = Number.isFinite(configuredTTL) && configuredTTL > 0 ? configuredTTL : 5000; // 5 seconds
     this.maxSize = config.cache?.max_size || 5000;
     this.maxBodySize = config.cache?.max_body_size || 1024 * 1024; // 1MB max cached body
 
@@ -104,7 +107,20 @@ export class RequestCache {
     if (!this.enabled || !key) return null;
     const entry = this.cache.get(key);
     if (!entry) return null;
+    // Check the TTL here rather than only in the periodic cleanup: an expired entry
+    // used to be served for up to a whole cleanup interval, so a 5s TTL could be
+    // served for ~35s (issue #122).
+    const ttl = entry.ttl || this.defaultTTL;
+    if (ttl > 0 && Date.now() - entry.createdAt > ttl) {
+      this.cache.delete(key);
+      return null;
+    }
     entry.hits++;
+    // Re-insert so Map order becomes ACCESS order, which makes _evictOne() a true O(1)
+    // LRU instead of a full scan of every entry on every insert once the cache is full
+    // (issue #122). Same object, so hits/createdAt are preserved.
+    this.cache.delete(key);
+    this.cache.set(key, entry);
     return {
       hit: true,
       data: entry.data,
@@ -264,16 +280,12 @@ export class RequestCache {
   }
 
   private _evictOne() {
-    // Evict oldest entry or least accessed
-    let oldest: StoredCacheEntry | null = null;
-    let oldestKey: string | null = null;
-    for (const [key, entry] of this.cache) {
-      if (!oldest || entry.createdAt < oldest.createdAt) {
-        oldest = entry;
-        oldestKey = key;
-      }
-    }
-    if (oldestKey) this.cache.delete(oldestKey);
+    // O(1) LRU: Map iterates in insertion order and get() re-inserts every hit, so the
+    // FIRST key is the least recently used. The previous version scanned every entry to
+    // find the smallest createdAt - on every insert once full - and never looked at
+    // `hits` at all, despite claiming to evict the least accessed (issue #122).
+    const lru = this.cache.keys().next();
+    if (!lru.done) this.cache.delete(lru.value);
   }
 
   destroy() {

@@ -154,12 +154,12 @@ authManager.setClientIdResolver((password: string) => {
     process.exit(1);
   }
 }
-
 // Same idea for the SHIPPED credential defaults (issues #121/#118): `admin123` for the panel
 // and `proxy-pass` for the proxy are both in this repository, and the panel requires login by
 // default, so a deployment that never changed them is open to anyone who reads the README.
 // Checked only when the feature is actually enabled, so a deployment that turned proxy auth
-// off is not nagged about a password it does not use.
+// off is not nagged about a password it does not use. One variable covers both guards: the
+// credentials guard also accepts ALLOW_DEFAULT_TOKEN.
 {
   const shipped: Array<[string, string]> = [
     ['auth.web.password', 'admin123'],
@@ -182,16 +182,25 @@ authManager.setClientIdResolver((password: string) => {
     process.exit(1);
   }
 }
-
 const app = createWebServer(clientManager, authManager, config, logger, metricsManager, domainRouter, cache, pluginManager, aclManager, auditLogger, autoUpdater, settingsManager, passwordManager);
-const httpServer = http.createServer(app);
+const httpServer = http.createServer((req: import('http').IncomingMessage, res: import('http').ServerResponse) => {
+  // ACME HTTP-01 must be served WITHOUT authentication: the certificate authority fetches
+  // the token over plain HTTP, and handleChallenge() had no caller at all - so the token
+  // was never served and issuance could never complete (issue #122). It is tried before
+  // express, so the challenge bypasses the auth middleware; every other request falls
+  // through untouched. Serving it on this port means a reverse proxy in front can forward
+  // /.well-known/acme-challenge/ here; a direct :80 listener is a separate, config-gated
+  // change (see the PR).
+  if (acmeManager.enabled && acmeManager.handleChallenge(req, res)) return;
+  app(req, res);
+});
 
 // Setup WebSocket servers
 const clientWss = setupClientWebSocket(httpServer, clientManager, authManager, config, logger);
 
 // Web UI WebSocket for live updates
 const { WebSocketServer } = require('ws');
-const webWss = new WebSocketServer({ noServer: true });
+const webWss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
 
 webWss.on('connection', (ws: WebSocketLike) => {
   try {
@@ -254,7 +263,6 @@ httpServer.on('upgrade', (request: IncomingMessage, socket: import('stream').Dup
 
 function extractToken(req: IncomingMessage): string | null {
   const urlObj = url.parse(req.url as string, true);
-  if (urlObj.query && urlObj.query.token) return urlObj.query.token as string;
   const auth = req.headers['authorization'];
   if (auth && auth.startsWith('Bearer ')) return auth.slice(7);
   const cookie = req.headers['cookie'];
@@ -262,6 +270,11 @@ function extractToken(req: IncomingMessage): string | null {
     const match = cookie.match(/token=([^;]+)/);
     if (match) return match[1];
   }
+  // TRANSITIONAL fallback, and deliberately LAST: the token used to be read from the
+  // URL first, which put it into access logs and browser history (issue #117). The
+  // browser sends the cookie automatically on a same-origin WebSocket upgrade, so
+  // the panel needs no change - the query form only keeps older clients working.
+  if (urlObj.query && urlObj.query.token) return urlObj.query.token as string;
   return null;
 }
 
@@ -302,6 +315,31 @@ if (tlsCreds) {
   httpServer.listen(config.server.web_port, config.server.host, () => {
     logger.info({ port: config.server.web_port, tls: false }, 'Web server (HTTP) started');
   });
+}
+
+// Optional ACME HTTP-01 listener on its own port (usually 80). The certificate authority
+// validates over plain HTTP on port 80 while the panel normally listens elsewhere, so an
+// operator who cannot put a reverse proxy in front can opt in with ACME_HTTP_PORT=80. It
+// serves ONLY the challenge path and answers 404 to everything else, so it adds no
+// unauthenticated surface beyond what the CA needs. Binding :80 needs privileges (root or
+// CAP_NET_BIND_SERVICE) and the port may be taken: a failure is logged and ignored, never
+// fatal - a certificate feature must not take the proxy down (issue #122).
+let acmeHttpServer: import('http').Server | null = null;
+const acmeHttpPort = Number(process.env.ACME_HTTP_PORT || 0);
+if (acmeManager.enabled && acmeHttpPort > 0) {
+  const listener = http.createServer((req: import('http').IncomingMessage, res: import('http').ServerResponse) => {
+    if (acmeManager.handleChallenge(req, res)) return;
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not found');
+  });
+  listener.on('error', (err: Error) => {
+    logger.error({ error: err.message, port: acmeHttpPort }, 'ACME HTTP-01 listener failed; continuing without it');
+    if (acmeHttpServer === listener) acmeHttpServer = null;
+  });
+  listener.listen(acmeHttpPort, () => {
+    logger.info({ port: acmeHttpPort }, 'ACME HTTP-01 listener started (challenge path only)');
+  });
+  acmeHttpServer = listener;
 }
 
 // =============================================================================
@@ -386,7 +424,10 @@ function shutdown(signal: string) {
   storage.close();
   auditLogger.shutdown();
   autoUpdater.shutdown();
-  if (acmeManager.enabled) acmeManager.stop();
+  if (acmeManager.enabled) acmeManager.destroy(); // stop() never existed (issue #122)
+  if (acmeHttpServer) {
+    try { acmeHttpServer.close(); } catch (_) { /* shutdown must not throw */ }
+  }
   setTimeout(() => {
     logger.info('Goodbye');
     process.exit(0);

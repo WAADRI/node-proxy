@@ -84,17 +84,13 @@ function checkProxyAuth(
   return result.route || {};
 }
 
-// Best-effort real client IP: honour X-Forwarded-For when a reverse proxy
-// (e.g. nginx) terminates the client connection, otherwise use the socket.
+// The client IP is the RAW TCP peer: client-supplied headers (X-Forwarded-For /
+// X-Real-IP) are ignored. Honouring them unconditionally let any client choose the
+// address written to the audit log and used in ACL checks (issue #117).
 // IPv4-mapped IPv6 form (::ffff:1.2.3.4) from dual-stack listening is
 // normalised back to plain IPv4 for display.
 function clientIp(req: IncomingMessage): string {
   const norm = (v: string | undefined | null): string => String(v || '').replace(/^::ffff:/i, '');
-  const xff = req.headers && req.headers['x-forwarded-for'];
-  if (xff) {
-    const first = String(xff).split(',')[0].trim();
-    if (first) return norm(first);
-  }
   return norm(req.socket && req.socket.remoteAddress);
 }
 
@@ -231,7 +227,9 @@ function handleHttpRequest(
   // Check bandwidth limit (per selected client + global)
   const estimateSize = parseInt((req.headers['content-length'] as string) || '0', 10) + 2048;
   const bw = clientManager.bandwidthLimiter;
-  if (bw && (!bw.check(client.id, estimateSize) || !bw.check('global', estimateSize))) {
+  // check() already consumes the global bucket itself, so calling it a second time
+  // charged every request twice - the configured global rate behaved like half (#122).
+  if (bw && !bw.check(client.id, estimateSize)) {
     res.writeHead(429, { 'Content-Type': 'text/plain', 'Retry-After': '5' });
     res.end('Rate limited: bandwidth exceeded');
     return;
@@ -245,10 +243,31 @@ function handleHttpRequest(
   }
 
   const requestId = uuidv4();
+  // Maximum request body this proxy will buffer and forward. The body is held in full before
+  // forwarding (then base64ed, so ~1.33x in memory) and NOTHING bounded it: one client could
+  // ask the process to hold an arbitrarily large upload and exhaust it (issue #119). 64 MiB is
+  // generous for normal API traffic; it is also the largest body this proxy forwards, which is
+  // the deliberate trade - previously that limit simply did not exist.
+  const MAX_PROXY_BODY_BYTES = 64 * 1024 * 1024;
   const chunks: Buffer[] = [];
+  let bodyBytes = 0;
+  let tooLarge = false;
   const startTime = Date.now();
 
-  req.on('data', (chunk: Buffer) => chunks.push(chunk));
+  req.on('data', (chunk: Buffer) => {
+    if (tooLarge) return;
+    bodyBytes += chunk.length;
+    if (bodyBytes > MAX_PROXY_BODY_BYTES) {
+      tooLarge = true;
+      chunks.length = 0; // release what we buffered; this request is going away
+      logger.warn({ bytes: bodyBytes, limit: MAX_PROXY_BODY_BYTES }, 'Proxy request body too large');
+      res.writeHead(413, { 'Content-Type': 'text/plain' });
+      res.end('Request body too large');
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
   req.on('end', () => {
     const body = Buffer.concat(chunks).toString('base64');
     let targetUrl2 = req.url || '';

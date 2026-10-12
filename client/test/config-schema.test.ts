@@ -47,7 +47,8 @@ interface ConfigModule {
 
 const { SCHEMA, FIXED, loadClientConfig, renderExampleYaml }: ConfigModule = require('../lib/config-schema.ts');
 
-const CONFIGURABLE = ['server_url', 'auth_token', 'region', 'tags'];
+const CONFIGURABLE = ['tls_reject_unauthorized',
+  'server_url', 'auth_token', 'region', 'tags'];
 
 function writeTempConfig(body: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'np-client-config-'));
@@ -108,13 +109,21 @@ test('fixed internals cannot be set through config.yaml', () => {
 
 test('an ignored setting is reported instead of dropped silently', () => {
   const warnings: string[] = [];
-  loadClientConfig({
+  const cfg = loadClientConfig({
     env: { HEARTBEAT_INTERVAL: '1000', TLS_REJECT_UNAUTHORIZED: 'true' },
     warn: (message: string) => warnings.push(message),
   });
-  assert.equal(warnings.length, 2, warnings.join(' | '));
+  // heartbeat_interval is still a fixed internal and must be reported as ignored.
+  assert.equal(warnings.length, 1, warnings.join(' | '));
   assert.ok(warnings.every((w: string) => w.includes('不再可配置')));
   assert.ok(warnings.some((w: string) => w.includes('HEARTBEAT_INTERVAL')));
+  // tls_reject_unauthorized is NOT ignored any more: it is configurable, so the environment
+  // value must both take effect and stop being reported (issue #118 / PR #186).
+  assert.ok(
+    !warnings.some((w: string) => w.includes('TLS_REJECT_UNAUTHORIZED')),
+    'a configurable key must not be reported as ignored'
+  );
+  assert.equal(cfg.tls_reject_unauthorized, true, 'and its environment value must actually apply');
 });
 
 test('configurable keys still come from the file and the environment', () => {
