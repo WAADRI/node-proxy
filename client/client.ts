@@ -807,6 +807,16 @@ function handleMuxTunnel(stream: MuxStreamLike, headers: MuxStreamHeaders) {
     failTunnel('Connection timeout', 'ETIMEDOUT');
   }, CONFIG.tunnel_timeout);
 
+  // net.connect throws synchronously on a port that is not an integer in
+  // 1..65535 (ERR_SOCKET_BAD_PORT) and on an empty host (which would silently
+  // mean localhost); that used to escape this function, so the server only ever
+  // saw its own timeout instead of a tunnel_error. Validate before connecting.
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+    if (!socket.destroyed) socket.destroy();
+    failTunnel(`Invalid target ${host}:${String(headers.port)}`, 'EBADTARGET');
+    return;
+  }
+
   socket.connect(port, host, () => {
     clearTimeout(timeout);
     established = true;
@@ -983,6 +993,12 @@ function handleTunnelOpen(msg: Extract<ServerMsg, { type: 'tunnel_open' }>) {
     log('warn', `Tunnel ${id} timeout to ${host}:${port}`);
     failTunnel('Connection timeout');
   }, CONFIG.tunnel_timeout);
+
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+    clearTimeout(timeout);
+    failTunnel(`Invalid target ${host}:${String(port)}`);
+    return;
+  }
 
   socket.connect(port, host, () => {
     clearTimeout(timeout);
