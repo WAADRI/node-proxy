@@ -82,3 +82,16 @@ test('server.ts actually consults the detection', () => {
     'the dotted-path parsing that made the guard dead code must not come back'
   );
 });
+
+test('the refusal path is visible even if the async log flush loses the race (issue #199)', () => {
+  // Non-blocking usability item: with pino's default batching, process.exit(1) right after
+  // logging could drop the guidance line (and on Windows surface a SonicBoom flush error), so
+  // the operator saw exit 1 with no explanation. Two things keep that from happening again:
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'lib', 'logger.ts'), 'utf8');
+  assert.ok(/minLength: 1,/.test(logger), 'the file destination must not batch writes');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.ts'), 'utf8');
+  const stderrWrites = (src.match(/process\.stderr\.write\('Node-Proxy: ' \+ message/g) || []).length;
+  assert.equal(stderrWrites, 2, 'both startup guards must echo their message to stderr');
+  // And the message must be built once, so the log line and the stderr line always agree.
+  assert.equal((src.match(/logger\.error\(message\)/g) || []).length, 2, 'both guards log the same variable');
+});

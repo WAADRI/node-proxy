@@ -49,6 +49,13 @@ export function createLogger(opts: LoggerOptions = {}): AppLogger {
     dest: logFile,
     mkdir: true,
     sync: false,
+    // Write each chunk as soon as it arrives instead of batching. With the default batching a
+    // process that calls process.exit() immediately after logging (the startup guards) could
+    // exit before the line was flushed: on Windows the pending flush then surfaced as a
+    // "sonic boom is not ready yet" error and the guidance line was lost entirely, leaving the
+    // operator with exit code 1 and no explanation. Near-synchronous writes cost a little
+    // throughput and remove that race (issue #199, non-blocking usability item).
+    minLength: 1,
   });
 
   const targets: pino.DestinationStream[] = [fileStream];
