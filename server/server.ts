@@ -209,7 +209,6 @@ httpServer.on('upgrade', (request: IncomingMessage, socket: import('stream').Dup
 
 function extractToken(req: IncomingMessage): string | null {
   const urlObj = url.parse(req.url as string, true);
-  if (urlObj.query && urlObj.query.token) return urlObj.query.token as string;
   const auth = req.headers['authorization'];
   if (auth && auth.startsWith('Bearer ')) return auth.slice(7);
   const cookie = req.headers['cookie'];
@@ -217,6 +216,11 @@ function extractToken(req: IncomingMessage): string | null {
     const match = cookie.match(/token=([^;]+)/);
     if (match) return match[1];
   }
+  // TRANSITIONAL fallback, and deliberately LAST: the token used to be read from the
+  // URL first, which put it into access logs and browser history (issue #117). The
+  // browser sends the cookie automatically on a same-origin WebSocket upgrade, so
+  // the panel needs no change - the query form only keeps older clients working.
+  if (urlObj.query && urlObj.query.token) return urlObj.query.token as string;
   return null;
 }
 
