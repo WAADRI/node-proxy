@@ -169,7 +169,10 @@ authManager.setClientIdResolver((password: string) => {
     process.env.ALLOW_DEFAULT_CREDENTIALS === '1' || process.env.ALLOW_DEFAULT_TOKEN === '1';
   const offenders: string[] = [];
   for (const [path, value] of shipped) {
-    const [section, key] = path.split('.');
+    // The path is 'auth.<section>.<key>', so the FIRST segment is the root we already index
+    // through - taking it as the section made config.auth['auth'] undefined and the guard
+    // silently never fired for ANY configuration (issue #199). Destructure the 2nd and 3rd.
+    const [, section, key] = path.split('.');
     const group = (config as Record<string, Record<string, Record<string, unknown>>>).auth?.[section];
     if (group && group.enabled !== false && String(group[key] ?? '') === value) offenders.push(path + ' = ' + value);
   }
