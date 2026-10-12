@@ -316,6 +316,15 @@ function connect() {
 
   // Handle multiplexed streams from the server (requests & tunnels)
   mux.onStream((stream: MuxStreamLike) => {
+    // SECOND entry point. The JSON gate in handleMessage only covers text frames,
+    // so before this check an unauthenticated peer could still open binary mux
+    // streams and reach request/tunnel_open here - node-side SSRF and pivoting into
+    // the node's network. Both entries must refuse equally (issue #129 review).
+    if (!authenticated) {
+      log('warn', `Refusing mux stream ${stream.id} before authentication`);
+      stream.close();
+      return;
+    }
     handleMuxStream(stream);
   });
 
