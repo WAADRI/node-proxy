@@ -161,21 +161,14 @@ authManager.setClientIdResolver((password: string) => {
 // off is not nagged about a password it does not use. One variable covers both guards: the
 // credentials guard also accepts ALLOW_DEFAULT_TOKEN.
 {
-  const shipped: Array<[string, string]> = [
-    ['auth.web.password', 'admin123'],
-    ['auth.proxy.password', 'proxy-pass'],
-  ];
   const allowed =
     process.env.ALLOW_DEFAULT_CREDENTIALS === '1' || process.env.ALLOW_DEFAULT_TOKEN === '1';
-  const offenders: string[] = [];
-  for (const [path, value] of shipped) {
-    // The path is 'auth.<section>.<key>', so the FIRST segment is the root we already index
-    // through - taking it as the section made config.auth['auth'] undefined and the guard
-    // silently never fired for ANY configuration (issue #199). Destructure the 2nd and 3rd.
-    const [, section, key] = path.split('.');
-    const group = (config as Record<string, Record<string, Record<string, unknown>>>).auth?.[section];
-    if (group && group.enabled !== false && String(group[key] ?? '') === value) offenders.push(path + ' = ' + value);
-  }
+  // Read the sections directly (no dotted-path parsing): the first version split the path and
+  // indexed by the wrong segment, which made the guard dead code for every configuration
+  // (issue #199). The detection itself lives in lib/default-credentials.ts and is covered by a
+  // behavioural test there.
+  const { findShippedCredentialDefaults } = require('./lib/default-credentials.ts');
+  const offenders = findShippedCredentialDefaults(config);
   if (offenders.length > 0 && !allowed) {
     logger.error(
       'Shipped default credentials are still in use: ' + offenders.join(', ') +
