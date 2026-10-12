@@ -138,6 +138,22 @@ authManager.setClientIdResolver((password: string) => {
 });
 
 // Create web app (pass all Phase 3 modules)
+// Refuse to start on the SHIPPED default node token. It is public in this repository, so
+// anyone can register a node or use the proxy with it - and because every node presents the
+// same shared secret, any real deployment that kept it is effectively open (issues #118 and
+// #121). Set auth.token in config.yaml, or NP_AUTH_TOKEN / --auth-token, to your own value.
+// ALLOW_DEFAULT_TOKEN=1 is an explicit, documented opt-out for throwaway local setups.
+{
+  const DEFAULT_TOKENS = ['node-proxy-default-token', 'change-me', 'changeme', 'secret'];
+  const configuredToken = String((config.auth && config.auth.token) || '');
+  if (DEFAULT_TOKENS.includes(configuredToken) && process.env.ALLOW_DEFAULT_TOKEN !== '1') {
+    logger.error(
+      'auth.token is still the shipped default (' + configuredToken + '). Set your own token in ' +
+        'config.yaml or via NP_AUTH_TOKEN/--auth-token; set ALLOW_DEFAULT_TOKEN=1 to override for a throwaway setup.'
+    );
+    process.exit(1);
+  }
+}
 const app = createWebServer(clientManager, authManager, config, logger, metricsManager, domainRouter, cache, pluginManager, aclManager, auditLogger, autoUpdater, settingsManager, passwordManager);
 const httpServer = http.createServer(app);
 
