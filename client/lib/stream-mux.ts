@@ -63,6 +63,10 @@ const STREAM_STATE = {
 const DEFAULT_INITIAL_WINDOW = 65536; // 64KB per stream
 const DEFAULT_CONNECTION_WINDOW = 1048576; // 1MB total
 const MAX_FRAME_SIZE = 16384; // 16KB max frame payload
+// A peer must not be able to open streams without limit: `streams` is only pruned when a
+// stream ends, so an endless opener grows this.streams AND _priorityQueue until the
+// process dies (issue #119). 512 is far above any legitimate concurrency.
+const MAX_CONCURRENT_STREAMS = 512;
 // A WINDOW_UPDATE increment must be positive and sane: the old code did
 // `sendWindow += p.increment || 0`, so a NEGATIVE increment drove the window to a huge
 // negative value and stalled the stream forever - a cheap way for one peer to freeze a
@@ -418,6 +422,10 @@ class StreamMux {
    */
   createStream(priority: number = DEFAULT_PRIORITY): Stream | null {
     if (this._closed) return null;
+    if (this.streams.size >= MAX_CONCURRENT_STREAMS) {
+      this.logger?.debug({ open: this.streams.size }, 'Refusing stream: too many open streams');
+      return null;
+    }
     const id = this._nextId;
     this._nextId += 2; // Client-initiated streams use odd IDs
 
@@ -661,7 +669,9 @@ class StreamMux {
     while (offset < buf.length) {
       if (offset + 13 > buf.length) break;
       const length = buf.readUInt32BE(offset);
-      if (offset + 13 + length > buf.length) break;
+      // A declared length that cannot fit (or exceeds the frame limit) is a
+      // malformed frame, not something to slice past the end of the buffer.
+      if (length > MAX_FRAME_SIZE || offset + 13 + length > buf.length) break;
       const type = buf[offset + 4];
       const streamId = buf.readUInt32BE(offset + 5);
       const flags = buf.readUInt32BE(offset + 9);
@@ -701,27 +711,45 @@ class StreamMux {
         return;
       }
 
-      // Check if it's a batch (multiple frames)
-      // Batch format: [2 bytes count][frame][frame]...
-      // Single frame: [4 bytes length][type][stream_id][flags][payload]
-      if (buf.length >= 2) {
-        const count = buf.readUInt16BE(0);
-        if (count >= 2) {
-          // Multiple frames batched together - count field at offset 0
-          const frames = this._decodeBatch(buf);
-          for (const frame of frames) {
-            this._handleFrame(frame);
+      // Frame layout: [4B length][1B type][4B stream id][4B flags][payload]
+      // Batch layout: [2B count][frame][frame]...
+      //
+      // These bytes come from the peer - a server, or whoever sits in the middle
+      // of a plain ws:// control connection - so a truncated frame must be dropped
+      // rather than parsed: the reads below would throw out of the 'message'
+      // listener. On the node that is not fatal (the process-level handler only
+      // logs and reconnects), but it aborts handling and floods the log.
+      try {
+        if (buf.length >= 2) {
+          const count = buf.readUInt16BE(0);
+          if (count >= 2) {
+            // Multiple frames batched together - count field at offset 0
+            const frames = this._decodeBatch(buf);
+            for (const frame of frames) {
+              this._handleFrame(frame);
+            }
+          } else if (buf.length >= 13) {
+            // Single frame
+            const firstFrameLen = buf.readUInt32BE(0);
+            if (firstFrameLen > MAX_FRAME_SIZE || 13 + firstFrameLen > buf.length) {
+              this.logger?.debug({ declared: firstFrameLen, received: buf.length }, 'Dropping malformed mux frame');
+              return;
+            }
+            this._handleFrame({
+              type: buf[4],
+              streamId: buf.readUInt32BE(5),
+              flags: buf.readUInt32BE(9),
+              payload: buf.slice(13, 13 + firstFrameLen),
+            });
+          } else {
+            this.logger?.debug({ received: buf.length }, 'Dropping truncated mux frame');
           }
-        } else {
-          // Single frame
-          const firstFrameLen = buf.readUInt32BE(0);
-          this._handleFrame({
-            type: buf[4],
-            streamId: buf.readUInt32BE(5),
-            flags: buf.readUInt32BE(9),
-            payload: buf.slice(13, 13 + firstFrameLen),
-          });
         }
+      } catch (err) {
+        this.logger?.debug(
+          { error: err instanceof Error ? err.message : String(err) },
+          'Malformed mux frame ignored'
+        );
       }
     });
 
@@ -785,7 +813,15 @@ class StreamMux {
   }
 
   _handleConnectionFrame(type: number, payload: Buffer): void {
-    const p = JSON.parse(payload.toString('utf8')) as { time?: number; lastStreamId?: number; increment?: number };
+    // The payload is parsed as JSON, so a non-JSON (an empty one is enough) must
+    // not throw: drop the frame instead of raising out of the message listener.
+    let p: { time?: number; lastStreamId?: number; increment?: number };
+    try {
+      p = JSON.parse(payload.toString('utf8')) as { time?: number; lastStreamId?: number; increment?: number };
+    } catch (_) {
+      this.logger?.debug({ type, bytes: payload.length }, 'Dropping connection frame with invalid payload');
+      return;
+    }
 
     if (type === FRAME_TYPE.PING) {
       // Respond with PONG
