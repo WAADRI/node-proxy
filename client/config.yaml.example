@@ -29,3 +29,9 @@ region: cn-guangzhou
 # 默认: ""
 # 环境变量: TAGS
 tags: cn,premium
+
+# TLS certificate verification (default: true). Keep it on unless the server uses a
+# certificate your machine cannot validate (self-signed). Turning it off means any host that
+# answers for server_url can impersonate the server and read your traffic and token.
+# 环境变量: TLS_REJECT_UNAUTHORIZED
+tls_reject_unauthorized: true
