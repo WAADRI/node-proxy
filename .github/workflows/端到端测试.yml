@@ -45,7 +45,12 @@ jobs:
 
           # --- 启动主服务器（默认 config.yaml：HTTP 代理 8080 / SOCKS5 1080 /
           #     WS+面板 3000；auth.proxy.enabled=false => 代理免鉴权）-----------
-          (cd server && node server.ts > "$RUNNER_TEMP/node-proxy-server.log" 2>&1) &
+          # The server refuses to start on the SHIPPED default token and credentials (PRs #182
+          # and #185), which is deliberate - this E2E uses the repo default config.yaml, so it
+          # opts out explicitly with the documented escape hatch. One variable covers both
+          # guards: the credentials guard also accepts ALLOW_DEFAULT_TOKEN. Setting it is
+          # harmless before those PRs land, so this fix stands on its own.
+          (cd server && ALLOW_DEFAULT_TOKEN=1 node server.ts > "$RUNNER_TEMP/node-proxy-server.log" 2>&1) &
           echo $! > "$RUNNER_TEMP/server.pid"
 
           # --- 启动客户端（令牌用默认值，与服务端 config.yaml 一致）----------
