@@ -65,6 +65,15 @@ export type StreamState = (typeof STREAM_STATE)[keyof typeof STREAM_STATE];
 export const DEFAULT_INITIAL_WINDOW = 65536; // 64KB per stream
 export const DEFAULT_CONNECTION_WINDOW = 1048576; // 1MB total
 export const MAX_FRAME_SIZE = 16384; // 16KB max frame payload
+// A peer must not be able to open streams without limit: `streams` is only pruned when a
+// stream ends, so an endless opener grows this.streams AND _priorityQueue until the
+// process dies (issue #119). 512 is far above any legitimate concurrency.
+export const MAX_CONCURRENT_STREAMS = 512;
+// A WINDOW_UPDATE increment must be positive and sane: the old code did
+// `sendWindow += p.increment || 0`, so a NEGATIVE increment drove the window to a huge
+// negative value and stalled the stream forever - a cheap way for one peer to freeze a
+// connection (issue #119). 16 MiB is far above any legitimate increment.
+export const MAX_WINDOW_INCREMENT = 16 * 1024 * 1024;
 export const DEFAULT_PRIORITY = 128;
 
 export interface Frame {
@@ -295,7 +304,10 @@ export class Stream implements MuxStreamLike {
 
     if (type === FRAME_TYPE.WINDOW_UPDATE) {
       const p = payload as { increment?: number };
-      this.sendWindow += p.increment || 0;
+      const sendWindowInc = Number(p.increment);
+      if (Number.isInteger(sendWindowInc) && sendWindowInc > 0 && sendWindowInc <= MAX_WINDOW_INCREMENT) {
+        this.sendWindow += sendWindowInc;
+      }
       // Flush buffered data
       this._flushBuffered();
       return;
@@ -410,6 +422,10 @@ export class StreamMux {
    */
   createStream(priority: number = DEFAULT_PRIORITY): Stream | null {
     if (this._closed) return null;
+    if (this.streams.size >= MAX_CONCURRENT_STREAMS) {
+      this.logger?.debug({ open: this.streams.size }, 'Refusing stream: too many open streams');
+      return null;
+    }
     const id = this._nextId;
     this._nextId += 2; // Client-initiated streams use odd IDs
 
@@ -666,7 +682,9 @@ export class StreamMux {
     while (offset < buf.length) {
       if (offset + 13 > buf.length) break;
       const length = buf.readUInt32BE(offset);
-      if (offset + 13 + length > buf.length) break;
+      // Same rule as the single-frame path: a declared length that cannot fit is
+      // a malformed frame, not something to slice past the end of the buffer.
+      if (length > MAX_FRAME_SIZE || offset + 13 + length > buf.length) break;
       const type = buf[offset + 4];
       const streamId = buf.readUInt32BE(offset + 5);
       const flags = buf.readUInt32BE(offset + 9);
@@ -706,27 +724,48 @@ export class StreamMux {
         return;
       }
 
-      // Check if it's a batch (multiple frames)
-      // Batch format: [2 bytes count][frame][frame]...
-      // Single frame: [4 bytes length][type][stream_id][flags][payload]
-      if (buf.length >= 2) {
-        const count = buf.readUInt16BE(0);
-        if (count >= 2) {
-          // Multiple frames batched together - count field at offset 0
-          const frames = this._decodeBatch(buf);
-          for (const frame of frames) {
-            this._handleFrame(frame);
+      // Frame layout:       [4B length][1B type][4B stream id][4B flags][payload]
+      // Batch layout:       [2B count][frame][frame]...
+      //
+      // These bytes come straight off the wire BEFORE authentication (the mux is
+      // wired up as soon as the socket opens, see ws-server), so a truncated
+      // frame must be dropped instead of parsed: an out-of-range read throws
+      // ERR_OUT_OF_RANGE, and the process-level uncaughtException handler treats
+      // anything that is not a transient network errno as fatal and exits - one
+      // two-byte binary frame from an unauthenticated peer killed the server.
+      try {
+        if (buf.length >= 2) {
+          const count = buf.readUInt16BE(0);
+          if (count >= 2) {
+            // Multiple frames batched together - count field at offset 0
+            const frames = this._decodeBatch(buf);
+            for (const frame of frames) {
+              this._handleFrame(frame);
+            }
+          } else if (buf.length >= 13) {
+            // Single frame
+            const firstFrameLen = buf.readUInt32BE(0);
+            if (firstFrameLen > MAX_FRAME_SIZE || 13 + firstFrameLen > buf.length) {
+              this.logger?.warn({ declared: firstFrameLen, received: buf.length }, 'Dropping malformed mux frame');
+              return;
+            }
+            this._handleFrame({
+              type: buf[4],
+              streamId: buf.readUInt32BE(5),
+              flags: buf.readUInt32BE(9),
+              payload: buf.slice(13, 13 + firstFrameLen),
+            });
+          } else {
+            this.logger?.warn({ received: buf.length }, 'Dropping truncated mux frame');
           }
-        } else {
-          // Single frame
-          const firstFrameLen = buf.readUInt32BE(0);
-          this._handleFrame({
-            type: buf[4],
-            streamId: buf.readUInt32BE(5),
-            flags: buf.readUInt32BE(9),
-            payload: buf.slice(13, 13 + firstFrameLen),
-          });
         }
+      } catch (err) {
+        // Never let a parse error reach the process handler, which exits: drop
+        // the frame and keep the connection alive.
+        this.logger?.warn(
+          { error: err instanceof Error ? err.message : String(err) },
+          'Malformed mux frame ignored'
+        );
       }
     });
 
@@ -790,7 +829,16 @@ export class StreamMux {
   }
 
   _handleConnectionFrame(type: number, payload: Buffer): void {
-    const p = JSON.parse(payload.toString('utf8')) as { time?: number; lastStreamId?: number; increment?: number };
+    // Connection-level frames arrive before authentication, so a payload that is
+    // not JSON (an empty one is enough) must not throw: the SyntaxError would
+    // reach the process-level handler, which exits. Drop the frame instead.
+    let p: { time?: number; lastStreamId?: number; increment?: number };
+    try {
+      p = JSON.parse(payload.toString('utf8')) as { time?: number; lastStreamId?: number; increment?: number };
+    } catch (_) {
+      this.logger?.warn({ type, bytes: payload.length }, 'Dropping connection frame with invalid payload');
+      return;
+    }
 
     if (type === FRAME_TYPE.PING) {
       // Respond with PONG
@@ -814,7 +862,12 @@ export class StreamMux {
     }
 
     if (type === FRAME_TYPE.WINDOW_UPDATE) {
-      this.connectionSendWindow += p.increment || 0;
+      const connectionSendWindowInc = Number(p.increment);
+      if (Number.isInteger(connectionSendWindowInc) && connectionSendWindowInc > 0 && connectionSendWindowInc <= MAX_WINDOW_INCREMENT) {
+        this.connectionSendWindow += connectionSendWindowInc;
+      } else {
+        this.logger?.debug({ increment: p.increment }, 'Ignoring invalid WINDOW_UPDATE increment');
+      }
       return;
     }
   }

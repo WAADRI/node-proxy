@@ -139,14 +139,24 @@ authManager.setClientIdResolver((password: string) => {
 
 // Create web app (pass all Phase 3 modules)
 const app = createWebServer(clientManager, authManager, config, logger, metricsManager, domainRouter, cache, pluginManager, aclManager, auditLogger, autoUpdater, settingsManager, passwordManager);
-const httpServer = http.createServer(app);
+const httpServer = http.createServer((req: import('http').IncomingMessage, res: import('http').ServerResponse) => {
+  // ACME HTTP-01 must be served WITHOUT authentication: the certificate authority fetches
+  // the token over plain HTTP, and handleChallenge() had no caller at all - so the token
+  // was never served and issuance could never complete (issue #122). It is tried before
+  // express, so the challenge bypasses the auth middleware; every other request falls
+  // through untouched. Serving it on this port means a reverse proxy in front can forward
+  // /.well-known/acme-challenge/ here; a direct :80 listener is a separate, config-gated
+  // change (see the PR).
+  if (acmeManager.enabled && acmeManager.handleChallenge(req, res)) return;
+  app(req, res);
+});
 
 // Setup WebSocket servers
 const clientWss = setupClientWebSocket(httpServer, clientManager, authManager, config, logger);
 
 // Web UI WebSocket for live updates
 const { WebSocketServer } = require('ws');
-const webWss = new WebSocketServer({ noServer: true });
+const webWss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
 
 webWss.on('connection', (ws: WebSocketLike) => {
   try {
@@ -209,7 +219,6 @@ httpServer.on('upgrade', (request: IncomingMessage, socket: import('stream').Dup
 
 function extractToken(req: IncomingMessage): string | null {
   const urlObj = url.parse(req.url as string, true);
-  if (urlObj.query && urlObj.query.token) return urlObj.query.token as string;
   const auth = req.headers['authorization'];
   if (auth && auth.startsWith('Bearer ')) return auth.slice(7);
   const cookie = req.headers['cookie'];
@@ -217,6 +226,11 @@ function extractToken(req: IncomingMessage): string | null {
     const match = cookie.match(/token=([^;]+)/);
     if (match) return match[1];
   }
+  // TRANSITIONAL fallback, and deliberately LAST: the token used to be read from the
+  // URL first, which put it into access logs and browser history (issue #117). The
+  // browser sends the cookie automatically on a same-origin WebSocket upgrade, so
+  // the panel needs no change - the query form only keeps older clients working.
+  if (urlObj.query && urlObj.query.token) return urlObj.query.token as string;
   return null;
 }
 

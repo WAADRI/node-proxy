@@ -94,7 +94,12 @@ function createWebServer(
   const app = express();
 
   // Trust the first upstream proxy (nginx) so req.ip reads X-Forwarded-For
-  app.set('trust proxy', 1);
+  // Do NOT trust proxy headers by default. With `trust proxy = 1` express took
+  // req.ip from the RIGHT-most X-Forwarded-For entry, so anyone connecting to the
+  // panel directly could pick their own address - and that value is what the login
+  // audit logs, and what any future IP-based defence would key on (issue #117).
+  // A deployment behind a trusted reverse proxy can opt in explicitly.
+  app.set('trust proxy', false);
 
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true }));
@@ -123,20 +128,77 @@ function createWebServer(
     res.sendFile(path.join(__dirname, '..', 'views', 'login.html'));
   });
 
+  // Login throttle. The panel had NO limit, so a password could be brute-forced at
+  // full request rate - and the route is public (registered before the auth
+  // middleware) (issue #117). Keyed by peer+username, cleared on success.
+  const LOGIN_MAX_FAILURES = 5;
+  const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+  const LOGIN_LOCK_MS = 15 * 60 * 1000;
+  const loginFailures = new Map<string, { count: number; first: number; until: number }>();
+  // Bound the map: otherwise a flood of random usernames is itself a memory leak
+  // (the same class of defect fixed in the audit buffer).
+  const trimLoginFailures = (now: number): void => {
+    for (const [k, v] of loginFailures) {
+      if (v.until !== 0 && v.until <= now) loginFailures.delete(k);
+    }
+    while (loginFailures.size > 1000) {
+      const oldest = loginFailures.keys().next();
+      if (oldest.done) break;
+      loginFailures.delete(oldest.value);
+    }
+  };
   app.post('/api/login', (req: WebRequest, res: HttpResponse) => {
     const { username, password } = (req.body || {}) as { username?: string; password?: string };
+    const loginKey = `${String(req.ip || '')}|${asString(username)}`;
+    const now = Date.now();
+    const record = loginFailures.get(loginKey);
+    if (record && record.until > now) {
+      logger.warn({ username, ip: req.ip }, 'Web login blocked (too many failures)');
+      res.status(429).json({ success: false, message: 'Too many failed attempts, try again later' });
+      return;
+    }
     if (authManager.validateWebLogin(asString(username), asString(password))) {
+    loginFailures.delete(loginKey);
       const token = authManager.generateWebToken(asString(username));
       const role = authManager.getRole(asString(username));
       logger.info({ username, role }, 'Web login success');
+      // Also set the token as an HttpOnly cookie. webAuthMiddleware already accepts
+      // req.cookies.token, but nothing ever SET one, which is why the panel (and its
+      // WebSocket) had to put the token in the URL - where it lands in access logs and
+      // history (issue #117). HttpOnly keeps it away from scripts, SameSite=Strict
+      // keeps it off cross-site requests. The JSON token is still returned, so no
+      // client changes are required by this step.
+      res.cookie('token', token, {
+        httpOnly: true,
+        sameSite: 'strict',
+        secure: Boolean(req.secure),
+        maxAge: 24 * 60 * 60 * 1000,
+        path: '/',
+      });
       res.json({ success: true, token, role, redirect: '/' });
     } else {
+      const within = record && now - record.first < LOGIN_WINDOW_MS;
+      const failures = (within ? record.count : 0) + 1;
+      loginFailures.set(loginKey, {
+        count: failures,
+        first: within ? record.first : now,
+        until: failures >= LOGIN_MAX_FAILURES ? now + LOGIN_LOCK_MS : 0,
+      });
+      trimLoginFailures(now);
       logger.warn({ username, ip: req.ip }, 'Web login failed');
       res.status(401).json({ success: false, message: 'Invalid username or password' });
     }
   });
 
   app.post('/api/logout', (_req: WebRequest, res: HttpResponse) => {
+    // The token is a stateless JWT, so this handler cannot revoke it: it clears the
+    // cookie that webAuthMiddleware also accepts (it reads req.cookies.token) and the
+    // panel drops its Authorization header. An already-issued token therefore stays
+    // valid until it expires - and since every request re-checks the account against
+    // the user store (see the JWT revocation fix), disabling the user is what actually
+    // takes effect immediately. Real token revocation would need a token epoch and is
+    // deliberately out of scope here (issue #117).
+    res.clearCookie('token');
     res.json({ success: true });
   });
 
@@ -178,12 +240,20 @@ function createWebServer(
   const api = express.Router();
 
   // --- Status ---
-  api.get('/status', (_req: WebRequest, res: HttpResponse) => {
+  api.get('/status', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'client:list')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     res.json(clientManager.getStats());
   });
 
   // --- Recent request log (for the panel "Request log" view) ---
   api.get('/logs', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'system:logs')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const limit = Math.min(parseInt(str(req.query.limit), 10) || 100, 500);
     const hub = clientManager.requestLog;
     if (!hub) {
@@ -207,6 +277,14 @@ function createWebServer(
   });
 
   api.post('/network-test', (req: WebRequest, res: HttpResponse) => {
+    // Probing arbitrary targets from this server and from every online node is a
+    // privileged action (issue #115): it used to be reachable by ANY logged-in
+    // user, viewer included, which turned the panel into an SSRF pivot
+    // (169.254.169.254, internal hosts, ...). nettest:run is admin/operator only.
+    if (!authManager.hasPermission(str(req.user), 'nettest:run')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const nt = clientManager.netTest;
     if (!nt) {
       res.status(501).json({ success: false, message: 'Network test manager not available' });
@@ -230,6 +308,13 @@ function createWebServer(
   });
 
   api.get('/network-test/:id', (req: WebRequest, res: HttpResponse) => {
+    // Results of a probe (targets, per-node results) are as sensitive as running
+    // one - they describe internal reachability - so the read-back needs the same
+    // permission (issue #115).
+    if (!authManager.hasPermission(str(req.user), 'nettest:run')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const nt = clientManager.netTest;
     if (!nt) {
       res.status(501).json({ success: false, message: 'Network test manager not available' });
@@ -243,7 +328,11 @@ function createWebServer(
     res.json(task);
   });
 
-  api.get('/config', (_req: WebRequest, res: HttpResponse) => {
+  api.get('/config', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'system:config')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const safeConfig = {
       server: config.server,
       auth: { web: { enabled: config.auth.web.enabled }, proxy: { enabled: config.auth.proxy.enabled } },
@@ -283,8 +372,17 @@ function createWebServer(
     }
     const data = settingsManager.list();
     const editable: Record<string, boolean> = {};
-    for (const g of Object.keys(SETTINGS_PERM)) editable[g] = canEditSettings(req.user, g);
-    res.json({ success: true, ...data, editable });
+    // Filter by the SAME predicate that gates edits: the response used to carry every
+    // group for every authenticated user, so a viewer could read the routing, circuit
+    // breaker, bandwidth, client and cache configuration (issue #117). A group the
+    // caller cannot act on is simply not theirs to read either.
+    const visible: Record<string, unknown> = { ...(data as Record<string, unknown>) };
+    for (const g of Object.keys(SETTINGS_PERM)) {
+      const allowed = canEditSettings(req.user, g);
+      editable[g] = allowed;
+      if (!allowed) delete visible[g];
+    }
+    res.json({ success: true, ...visible, editable });
   });
 
   api.post('/settings/:group', (req: WebRequest, res: HttpResponse) => {
@@ -675,21 +773,37 @@ function createWebServer(
     res.json({ success: true });
   });
 
-  api.get('/circuit-breaker/status', (_req: WebRequest, res: HttpResponse) => {
+  api.get('/circuit-breaker/status', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'circuit:view')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     res.json(clientManager.circuitBreaker?.getAllStatuses() || {});
   });
 
-  api.get('/bandwidth/stats', (_req: WebRequest, res: HttpResponse) => {
+  api.get('/bandwidth/stats', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'proxy:stats')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     res.json(clientManager.bandwidthLimiter?.getStats() || {});
   });
 
   api.get('/client/:id/events', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'client:events')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const limit = parseInt(str(req.query.limit), 10) || 50;
     const events = clientManager.storage?.getClientEvents(pstr(req.params.id), limit) || [];
     res.json({ events });
   });
 
   api.get('/client/:id/traffic', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'proxy:stats')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const since = parseInt(str(req.query.since), 10) || Date.now() - 86400000;
     const stats = clientManager.storage?.getTrafficStats(pstr(req.params.id), since) || {};
     res.json(stats);
@@ -698,6 +812,10 @@ function createWebServer(
   // Daily traffic aggregation (frp-style per-day stats).
   // GET /api/v1/traffic?days=7&client_id=<id>   (client_id optional = all clients)
   api.get('/traffic', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'proxy:stats')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const days = Math.max(1, Math.min(30, parseInt(str(req.query.days), 10) || 7));
     const clientId = str(req.query.client_id) || null;
     // Validate client exists when specified (avoid leaking arbitrary ids via SQL)
@@ -1019,7 +1137,11 @@ function createWebServer(
   // ===========================================================================
   // Phase 4: Stream Multiplexer Stats
   // ===========================================================================
-  api.get('/mux/stats', (_req: WebRequest, res: HttpResponse) => {
+  api.get('/mux/stats', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'client:list')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const stats: { clientId: string; tags: string[]; mux: Record<string, unknown> }[] = [];
     for (const [id, client] of clientManager.clients) {
       if (client.mux) {
