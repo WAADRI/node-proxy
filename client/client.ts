@@ -619,6 +619,7 @@ function handleMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders) {
   if (activeRequests.size >= maxConcurrent()) {
     stream.sendHeaders({ type: 'response', id: requestId, statusCode: 503, statusMessage: 'Service Unavailable', headers: { 'content-type': 'text/plain' } });
     stream.sendData(Buffer.from('Client busy'), true);
+    stream.close();
     return;
   }
 
@@ -676,6 +677,10 @@ function executeMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders, bod
         });
         stream.sendData(responseBody, true);
         activeRequests.delete(requestId);
+        // END_STREAM only half-closes the stream, so without this every proxied
+        // request leaves its Stream (headers + buffers) in the node's mux for the
+        // lifetime of the connection - measured ~1.1 KB per request.
+        stream.close();
       });
     });
 
@@ -686,6 +691,7 @@ function executeMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders, bod
       stream.sendHeaders({ type: 'response', id: requestId, statusCode: 502, statusMessage: 'Bad Gateway', headers: { 'content-type': 'text/plain' } });
       stream.sendData(Buffer.from(err.message), true);
       activeRequests.delete(requestId);
+      stream.close();
     });
 
     req.on('timeout', () => {
@@ -696,6 +702,7 @@ function executeMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders, bod
       req.destroy();
       stream.sendHeaders({ type: 'response', id: requestId, statusCode: 504, statusMessage: 'Gateway Timeout', headers: { 'content-type': 'text/plain' } });
       stream.sendData(Buffer.from('Request timeout'), true);
+      stream.close();
     });
 
     if (body) req.write(Buffer.from(body, 'base64'));
@@ -705,6 +712,7 @@ function executeMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders, bod
   } catch (err) {
     stream.sendHeaders({ type: 'response', id: requestId, statusCode: 400, statusMessage: 'Bad Request', headers: { 'content-type': 'text/plain' } });
     stream.sendData(Buffer.from('Invalid request: ' + (err instanceof Error ? err.message : String(err))), true);
+    stream.close();
   }
 }
 
