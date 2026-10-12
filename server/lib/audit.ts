@@ -321,8 +321,13 @@ class AuditLogger {
       fs.appendFileSync(this.logFile, output, 'utf8');
     } catch (err) {
       this.log.error({ error: errorMessage(err) }, 'Failed to write audit log');
-      // Put entries back in buffer
-      this.buffer.unshift(...entries);
+      // Put the entries back, but BOUNDED. The old code spread an ever-growing
+      // array: while writes keep failing the buffer doubles every 5s flush, and a
+      // spread that large throws RangeError (Maximum call stack size exceeded),
+      // which the process-level handler treats as fatal - exit(1). Keep the failed
+      // batch plus the newest entries and drop the oldest overflow instead.
+      const maxBuffered = Math.max(this.bufferSize * 10, 1000);
+      this.buffer = [...entries, ...this.buffer].slice(0, maxBuffered);
     }
   }
 
@@ -359,9 +364,26 @@ class AuditLogger {
   query(options: AuditQueryOptions = {}): AuditQueryResult {
     const { type, limit = 100, offset = 0, since, until, clientId, username } = options;
     try {
-      // Read from current log file
-      const data: string = fs.readFileSync(this.logFile, 'utf8');
-      const lines = data.trim().split('\n').filter(Boolean);
+      // Read the current file AND its rotated history, oldest file first. _rotate()
+      // renames audit.log to audit.1.log (shifting audit.N.log along), so after any
+      // rotation the older records were invisible to query() - the API silently
+      // reported only what fit in the newest file (issue #122).
+      const files: string[] = [];
+      for (let i = this.maxFiles; i >= 1; i--) {
+        const rotated = path.join(this.logDir, `audit.${i}.log`);
+        if (fs.existsSync(rotated)) files.push(rotated);
+      }
+      files.push(this.logFile);
+      const lines: string[] = [];
+      for (const file of files) {
+        try {
+          const part = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean);
+          // push one by one: spreading a large array would hit the argument limit.
+          for (const line of part) lines.push(line);
+        } catch (_) {
+          // a missing or unreadable file simply contributes nothing
+        }
+      }
       let entries = lines
         .map((line): AuditQueryRecord | null => {
           try {

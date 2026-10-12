@@ -501,18 +501,42 @@ class ClientNetTest {
           if (ttl > TRACEROUTE_MAX_HOPS) return done();
           const packet = Buffer.alloc(16);
           packet.writeUInt32BE(0xfeedface, 0);
-          packet.writeUInt16BE((ttl * 64 + Math.floor(Math.random() * 200)) & 0xffff, 4);
+          // Remember the per-hop token: it is what lets us recognise OUR probe inside
+          // the ICMP error (the quoted datagram carries the original IP header and 8
+          // UDP bytes). The magic alone is forgeable by any local sender.
+          const token = (ttl * 64 + Math.floor(Math.random() * 200)) & 0xffff;
+          packet.writeUInt16BE(token, 4);
           const started = Date.now();
           (udp as RawSocketLike).send(packet, 0, packet.length, basePort + ttl, destIp, { ttl }, (err?: Error) => {
             if (err) { cleanup(); return reject(new Error('发送失败: ' + err.message)); }
           });
-          const timer = setTimeout(() => probeNext(), perHopTimeout);
-          (icmp as RawSocketLike).once('message', (buffer: Buffer, source?: unknown) => {
-            const hopIp = this._bufToIp(source) || this._bufToIp(buffer);
-            const reached = buffer.length >= 8 && buffer.readUInt8(0) === 3 && buffer.readUInt8(1) === 3; // dest port unreachable
+          let handled = false;
+          const timer = setTimeout(() => { if (!handled) probeNext(); }, perHopTimeout);
+          (icmp as RawSocketLike).on('message', (buffer: Buffer, source?: unknown) => {
+            if (handled) return;
+            // Only count an ICMP error that quotes OUR datagram. The quoted payload is
+            // [ICMP header 8][original IP header][original UDP header 8], so validate the
+            // inner destination port, the magic and the per-hop token. Without this any
+            // unrelated ICMP message (another flow's time-exceeded, a stray reply) was
+            // attributed to the current hop - wrong hops, and a false 'reached' (issue
+            // #123). Non-matching messages are ignored and the hop keeps waiting.
+            if (buffer.length < 8 + 20) return;
+            const icmpType = buffer.readUInt8(0);
+            const icmpCode = buffer.readUInt8(1);
+            const isTimeExceeded = icmpType === 11;
+            const isPortUnreachable = icmpType === 3 && icmpCode === 3;
+            if (!isTimeExceeded && !isPortUnreachable) return;
+            const ihl = (buffer.readUInt8(8) & 0x0f) * 4;
+            const udpOff = 8 + ihl;
+            if (ihl < 20 || buffer.length < udpOff + 16) return;
+            if (buffer.readUInt16BE(udpOff + 2) !== basePort + ttl) return;
+            if (buffer.readUInt32BE(udpOff + 8) !== 0xfeedface) return;
+            if (buffer.readUInt16BE(udpOff + 12) !== token) return;
+            handled = true;
             clearTimeout(timer);
+            const hopIp = this._bufToIp(source) || this._bufToIp(buffer);
             hops.push({ ttl, ip: hopIp, ms: Math.round(Date.now() - started) });
-            if (reached || ttl >= TRACEROUTE_MAX_HOPS) return done();
+            if (isPortUnreachable || ttl >= TRACEROUTE_MAX_HOPS) return done();
             probeNext();
           });
         };

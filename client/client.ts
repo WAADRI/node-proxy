@@ -93,7 +93,20 @@ function maxConcurrent(): number {
 
 function writeLivenessBeacon(): void {
   try {
-    fs.writeFileSync(LIVENESS_FILE, String(Math.floor(Date.now() / 1000)));
+    // The beacon path is predictable and sits in a world-writable directory, so a
+    // local user could pre-create it as a symlink and have this process - root on a
+    // bare-metal install - truncate and overwrite whatever it points at, every 10s
+    // (issue #123). Open with O_NOFOLLOW instead, and create it 0600.
+    // `?? 0` matters: where the flag does not exist (Windows) it must degrade to a
+    // no-op rather than poison the flags and kill the beacon entirely.
+    const flags =
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW ?? 0);
+    const fd = fs.openSync(LIVENESS_FILE, flags, 0o600);
+    try {
+      fs.writeSync(fd, String(Math.floor(Date.now() / 1000)));
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch (_) {
     // A failed beacon must never take the client down (e.g. read-only fs).
   }
@@ -117,6 +130,13 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let currentClientId: string | null = null;
 let intentionalClose = false;
+
+// Set once the server has accepted our token. Nothing the server sends may be
+// acted on before that (see handleMessage): the client used to execute requests,
+// open tunnels and run net_test probes for whoever the socket was pointed at -
+// a MITM on a plain ws:// control connection, or simply a wrong server_url - with
+// no credential checked at all (issue #118). Reset on every connect attempt.
+let authenticated = false;
 // When the socket last entered the CONNECTING state (0 = not connecting).
 // Bounds a handshake that never completes so the watchdog can force a retry.
 let connectingSince = 0;
@@ -292,6 +312,7 @@ function connect() {
     log('info', 'Connected to server');
     reconnectAttempt = 0;
     intentionalClose = false;
+    authenticated = false;
     missedPongs = 0;
     connectingSince = 0;
     sock.send(JSON.stringify({ type: 'auth', token: CONFIG.auth_token }));
@@ -308,6 +329,15 @@ function connect() {
 
   // Handle multiplexed streams from the server (requests & tunnels)
   mux.onStream((stream: MuxStreamLike) => {
+    // SECOND entry point. The JSON gate in handleMessage only covers text frames,
+    // so before this check an unauthenticated peer could still open binary mux
+    // streams and reach request/tunnel_open here - node-side SSRF and pivoting into
+    // the node's network. Both entries must refuse equally (issue #129 review).
+    if (!authenticated) {
+      log('warn', `Refusing mux stream ${stream.id} before authentication`);
+      stream.close();
+      return;
+    }
     handleMuxStream(stream);
   });
 
@@ -473,8 +503,16 @@ function stopHeartbeat() {
 // Message Handler
 // =============================================================================
 function handleMessage(msg: ServerMsg) {
+  // Only the authentication handshake may arrive before the token is accepted.
+  // Everything else (request, tunnel_open, tunnel_data, udp_data, net_test,
+  // limits, broadcast) is a command and requires an authenticated session.
+  if (!authenticated && msg.type !== 'auth_ok' && msg.type !== 'auth_error') {
+    log('warn', `Ignoring ${msg.type} received before authentication`);
+    return;
+  }
   switch (msg.type) {
     case 'auth_ok': {
+      authenticated = true;
       log('info', 'Authentication successful');
       if (ws) ws.send(JSON.stringify({ type: 'info', info: getSystemInfo() }));
       startHeartbeat();
@@ -504,9 +542,14 @@ function handleMessage(msg: ServerMsg) {
 
     case 'auth_error':
       log('error', 'Authentication failed: ' + (msg.message || 'Invalid token'));
-      intentionalClose = true;
+      authenticated = false;
+      // Do NOT exit. A protocol message must not be able to kill the process: a
+      // MITM - or any server that rejects a stale token - could otherwise put the
+      // node into a restart loop under docker's restart policy. Leaving
+      // intentionalClose false lets the normal close path back off and retry,
+      // and the error above tells the operator what to fix.
+      intentionalClose = false;
       if (ws) ws.close();
-      process.exit(1);
       break;
 
     case 'info_ok':
@@ -619,6 +662,7 @@ function handleMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders) {
   if (activeRequests.size >= maxConcurrent()) {
     stream.sendHeaders({ type: 'response', id: requestId, statusCode: 503, statusMessage: 'Service Unavailable', headers: { 'content-type': 'text/plain' } });
     stream.sendData(Buffer.from('Client busy'), true);
+    stream.close();
     return;
   }
 
@@ -628,14 +672,24 @@ function handleMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders) {
     bodyChunks.push(chunk);
   };
 
-  stream._onEnd = () => {
-    const body = Buffer.concat(bodyChunks).toString('base64');
+  // Dispatch at most once. The response path closes the stream to release it, and
+  // Stream.close() calls _onEnd AGAIN when the state is half_closed_local - and
+  // _onEnd is this dispatcher, so every mux request was executed twice (issue #125
+  // review). A replayed HEADERS frame lands in the same guard (issue #123).
+  let dispatched = false;
+  const dispatchOnce = (body: string) => {
+    if (dispatched) return;
+    dispatched = true;
     executeMuxRequest(stream, headers, body);
+  };
+
+  stream._onEnd = () => {
+    dispatchOnce(Buffer.concat(bodyChunks).toString('base64'));
   };
 
   // If the request had no body (END_STREAM on headers), handle it now
   if (stream.state === 'half_closed_remote' || stream.state === 'closed') {
-    executeMuxRequest(stream, headers, '');
+    dispatchOnce('');
   }
 }
 
@@ -676,6 +730,10 @@ function executeMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders, bod
         });
         stream.sendData(responseBody, true);
         activeRequests.delete(requestId);
+        // END_STREAM only half-closes the stream, so without this every proxied
+        // request leaves its Stream (headers + buffers) in the node's mux for the
+        // lifetime of the connection - measured ~1.1 KB per request.
+        stream.close();
       });
     });
 
@@ -686,6 +744,7 @@ function executeMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders, bod
       stream.sendHeaders({ type: 'response', id: requestId, statusCode: 502, statusMessage: 'Bad Gateway', headers: { 'content-type': 'text/plain' } });
       stream.sendData(Buffer.from(err.message), true);
       activeRequests.delete(requestId);
+      stream.close();
     });
 
     req.on('timeout', () => {
@@ -696,15 +755,26 @@ function executeMuxRequest(stream: MuxStreamLike, headers: MuxStreamHeaders, bod
       req.destroy();
       stream.sendHeaders({ type: 'response', id: requestId, statusCode: 504, statusMessage: 'Gateway Timeout', headers: { 'content-type': 'text/plain' } });
       stream.sendData(Buffer.from('Request timeout'), true);
+      stream.close();
     });
 
     if (body) req.write(Buffer.from(body, 'base64'));
     req.end();
 
-    activeRequests.set(requestId, { req });
+    // The id comes from the peer. Overwriting an in-flight entry would orphan the
+  // first request: its response could never be matched, and the cleanup handlers
+  // (which delete by id) would drop the wrong req. Peer ids are expected to be
+  // unique, so refuse the duplicate and drop it instead (issue #123).
+  if (activeRequests.has(requestId)) {
+    log('warn', `Duplicate request id ${requestId} ignored`);
+    try { req.destroy(); } catch (_) { /* ignore */ }
+    return;
+  }
+  activeRequests.set(requestId, { req });
   } catch (err) {
     stream.sendHeaders({ type: 'response', id: requestId, statusCode: 400, statusMessage: 'Bad Request', headers: { 'content-type': 'text/plain' } });
     stream.sendData(Buffer.from('Invalid request: ' + (err instanceof Error ? err.message : String(err))), true);
+    stream.close();
   }
 }
 
@@ -768,6 +838,16 @@ function handleMuxTunnel(stream: MuxStreamLike, headers: MuxStreamHeaders) {
     socket.destroy();
     failTunnel('Connection timeout', 'ETIMEDOUT');
   }, CONFIG.tunnel_timeout);
+
+  // net.connect throws synchronously on a port that is not an integer in
+  // 1..65535 (ERR_SOCKET_BAD_PORT) and on an empty host (which would silently
+  // mean localhost); that used to escape this function, so the server only ever
+  // saw its own timeout instead of a tunnel_error. Validate before connecting.
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+    if (!socket.destroyed) socket.destroy();
+    failTunnel(`Invalid target ${host}:${String(headers.port)}`, 'EBADTARGET');
+    return;
+  }
 
   socket.connect(port, host, () => {
     clearTimeout(timeout);
@@ -891,7 +971,16 @@ function handleRequest(msg: Extract<ServerMsg, { type: 'request' }>) {
     if (body) req.write(Buffer.from(body, 'base64'));
     req.end();
 
-    activeRequests.set(id, { req });
+    // The id comes from the peer. Overwriting an in-flight entry would orphan the
+  // first request: its response could never be matched, and the cleanup handlers
+  // (which delete by id) would drop the wrong req. Peer ids are expected to be
+  // unique, so refuse the duplicate and drop it instead (issue #123).
+  if (activeRequests.has(id)) {
+    log('warn', `Duplicate request id ${id} ignored`);
+    try { req.destroy(); } catch (_) { /* ignore */ }
+    return;
+  }
+  activeRequests.set(id, { req });
   } catch (err) {
     sendResponse(id, 400, 'Bad Request', { 'content-type': 'text/plain' }, 'Invalid request: ' + (err instanceof Error ? err.message : String(err)));
   }
@@ -945,6 +1034,12 @@ function handleTunnelOpen(msg: Extract<ServerMsg, { type: 'tunnel_open' }>) {
     log('warn', `Tunnel ${id} timeout to ${host}:${port}`);
     failTunnel('Connection timeout');
   }, CONFIG.tunnel_timeout);
+
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+    clearTimeout(timeout);
+    failTunnel(`Invalid target ${host}:${String(port)}`);
+    return;
+  }
 
   socket.connect(port, host, () => {
     clearTimeout(timeout);
@@ -1123,6 +1218,14 @@ function handleUdpData(msg: Extract<ServerMsg, { type: 'udp_data' }>) {
 // Cleanup
 // =============================================================================
 function cleanupAll() {
+  // Cancel a pending reconnect. Only one exists at a time (connect() clears it before
+  // scheduling another), so this is not an accumulating leak - but without it a deliberate
+  // shutdown/logout leaves the timer pending: it keeps the event loop alive and, worse, it
+  // can reconnect a client that was just told to stop (issue #119).
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   stopHeartbeat();
   currentClientId = null;
 

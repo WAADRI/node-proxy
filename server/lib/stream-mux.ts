@@ -65,6 +65,18 @@ export type StreamState = (typeof STREAM_STATE)[keyof typeof STREAM_STATE];
 export const DEFAULT_INITIAL_WINDOW = 65536; // 64KB per stream
 export const DEFAULT_CONNECTION_WINDOW = 1048576; // 1MB total
 export const MAX_FRAME_SIZE = 16384; // 16KB max frame payload
+// A peer must not be able to open streams without limit: `streams` is only pruned when a
+// stream ends, so an endless opener grows this.streams AND _priorityQueue until the
+// process dies (issue #119). 512 is far above any legitimate concurrency.
+export const MAX_CONCURRENT_STREAMS = 512;
+// Frame header length as written by _sendFrame: length(4) + type(1) + stream_id(4) + flags(4).
+// One constant, so the flow-control accounting cannot drift from the encoder.
+const FRAME_HEADER_SIZE = 13;
+// A WINDOW_UPDATE increment must be positive and sane: the old code did
+// `sendWindow += p.increment || 0`, so a NEGATIVE increment drove the window to a huge
+// negative value and stalled the stream forever - a cheap way for one peer to freeze a
+// connection (issue #119). 16 MiB is far above any legitimate increment.
+export const MAX_WINDOW_INCREMENT = 16 * 1024 * 1024;
 // Outbound backpressure bounds. Every frame ends up in the ws library own send buffer and
 // nothing ever looked at how much is already queued, so a slow peer could make the process
 // hold an arbitrarily large pending buffer (issue #119). Above the high-water mark the flush
@@ -192,7 +204,13 @@ export class Stream implements MuxStreamLike {
     if (this.state === STREAM_STATE.CLOSED || this.state === STREAM_STATE.HALF_CLOSED_LOCAL) return false;
 
     const dataBuf = Buffer.isBuffer(data) ? data : Buffer.from(data as string, 'base64');
-    const maxChunk = Math.min(this.sendWindow, MAX_FRAME_SIZE);
+    // Also respect the CONNECTION-level window. The batch path gates on it, but this immediate
+    // path only looked at the stream window - so DATA could be sent while the connection window
+    // was exhausted, i.e. connection-level flow control did not apply here (issue #119).
+    // Clamp only while it has room: at <= 0 the behaviour is unchanged, because the batch path
+    // is the one that must stall then - a zero maxChunk here would risk empty sends.
+    const connWindow = this.mux.connectionSendWindow;
+    const maxChunk = Math.min(this.sendWindow, connWindow > 0 ? connWindow : MAX_FRAME_SIZE, MAX_FRAME_SIZE);
 
     if (dataBuf.length <= maxChunk) {
       // Can send immediately
@@ -304,7 +322,10 @@ export class Stream implements MuxStreamLike {
 
     if (type === FRAME_TYPE.WINDOW_UPDATE) {
       const p = payload as { increment?: number };
-      this.sendWindow += p.increment || 0;
+      const sendWindowInc = Number(p.increment);
+      if (Number.isInteger(sendWindowInc) && sendWindowInc > 0 && sendWindowInc <= MAX_WINDOW_INCREMENT) {
+        this.sendWindow += sendWindowInc;
+      }
       // Flush buffered data
       this._flushBuffered();
       return;
@@ -419,13 +440,17 @@ export class StreamMux {
    */
   createStream(priority: number = DEFAULT_PRIORITY): Stream | null {
     if (this._closed) return null;
+    if (this.streams.size >= MAX_CONCURRENT_STREAMS) {
+      this.logger?.debug({ open: this.streams.size }, 'Refusing stream: too many open streams');
+      return null;
+    }
     const id = this._nextId;
     this._nextId += 2; // Client-initiated streams use odd IDs
 
     const stream = new Stream(id, this);
     stream.priority = Math.max(0, Math.min(255, priority));
     this.streams.set(id, stream);
-    this._priorityQueue.push(id);
+    if (!this._priorityQueue.includes(id)) this._priorityQueue.push(id);
     this._reschedule();
 
     if (this.logger) {
@@ -601,7 +626,7 @@ export class StreamMux {
     }
 
     // Frame header: length(4) + type(1) + stream_id(4) + flags(4)
-    const header = Buffer.alloc(13);
+    const header = Buffer.alloc(FRAME_HEADER_SIZE);
     header.writeUInt32BE(payloadBuf.length, 0); // payload length
     header[4] = type; // frame type
     header.writeUInt32BE(streamId, 5); // stream ID
@@ -671,7 +696,17 @@ export class StreamMux {
         return;
       }
       this._deferrals = 0; // a pass that actually sends resets the budget
-      this.ws.send(sendData, { binary: true }, (err?: Error) => {
+
+      // Debit the connection window by the DATA payload about to go out. A sender window only
+      // means something if it shrinks as data is sent: before this it was credited by
+      // WINDOW_UPDATE and never debited, so the exhausted-window check above could never trip
+      // and the window was decorative (issue #119). Only DATA payloads are flow-controlled.
+      const dataBytes = batch.reduce(
+        (sum, f) => (f[4] === FRAME_TYPE.DATA ? sum + (f.length - FRAME_HEADER_SIZE) : sum),
+        0
+      );
+      if (dataBytes > 0) this.connectionSendWindow -= dataBytes;
+this.ws.send(sendData, { binary: true }, (err?: Error) => {
         if (err) {
           this.logger?.error({ error: err.message }, 'StreamMux send error');
           if (this._onError) this._onError(err);
@@ -700,7 +735,9 @@ export class StreamMux {
     while (offset < buf.length) {
       if (offset + 13 > buf.length) break;
       const length = buf.readUInt32BE(offset);
-      if (offset + 13 + length > buf.length) break;
+      // Same rule as the single-frame path: a declared length that cannot fit is
+      // a malformed frame, not something to slice past the end of the buffer.
+      if (length > MAX_FRAME_SIZE || offset + 13 + length > buf.length) break;
       const type = buf[offset + 4];
       const streamId = buf.readUInt32BE(offset + 5);
       const flags = buf.readUInt32BE(offset + 9);
@@ -740,27 +777,48 @@ export class StreamMux {
         return;
       }
 
-      // Check if it's a batch (multiple frames)
-      // Batch format: [2 bytes count][frame][frame]...
-      // Single frame: [4 bytes length][type][stream_id][flags][payload]
-      if (buf.length >= 2) {
-        const count = buf.readUInt16BE(0);
-        if (count >= 2) {
-          // Multiple frames batched together - count field at offset 0
-          const frames = this._decodeBatch(buf);
-          for (const frame of frames) {
-            this._handleFrame(frame);
+      // Frame layout:       [4B length][1B type][4B stream id][4B flags][payload]
+      // Batch layout:       [2B count][frame][frame]...
+      //
+      // These bytes come straight off the wire BEFORE authentication (the mux is
+      // wired up as soon as the socket opens, see ws-server), so a truncated
+      // frame must be dropped instead of parsed: an out-of-range read throws
+      // ERR_OUT_OF_RANGE, and the process-level uncaughtException handler treats
+      // anything that is not a transient network errno as fatal and exits - one
+      // two-byte binary frame from an unauthenticated peer killed the server.
+      try {
+        if (buf.length >= 2) {
+          const count = buf.readUInt16BE(0);
+          if (count >= 2) {
+            // Multiple frames batched together - count field at offset 0
+            const frames = this._decodeBatch(buf);
+            for (const frame of frames) {
+              this._handleFrame(frame);
+            }
+          } else if (buf.length >= 13) {
+            // Single frame
+            const firstFrameLen = buf.readUInt32BE(0);
+            if (firstFrameLen > MAX_FRAME_SIZE || 13 + firstFrameLen > buf.length) {
+              this.logger?.warn({ declared: firstFrameLen, received: buf.length }, 'Dropping malformed mux frame');
+              return;
+            }
+            this._handleFrame({
+              type: buf[4],
+              streamId: buf.readUInt32BE(5),
+              flags: buf.readUInt32BE(9),
+              payload: buf.slice(13, 13 + firstFrameLen),
+            });
+          } else {
+            this.logger?.warn({ received: buf.length }, 'Dropping truncated mux frame');
           }
-        } else {
-          // Single frame
-          const firstFrameLen = buf.readUInt32BE(0);
-          this._handleFrame({
-            type: buf[4],
-            streamId: buf.readUInt32BE(5),
-            flags: buf.readUInt32BE(9),
-            payload: buf.slice(13, 13 + firstFrameLen),
-          });
         }
+      } catch (err) {
+        // Never let a parse error reach the process handler, which exits: drop
+        // the frame and keep the connection alive.
+        this.logger?.warn(
+          { error: err instanceof Error ? err.message : String(err) },
+          'Malformed mux frame ignored'
+        );
       }
     });
 
@@ -791,7 +849,7 @@ export class StreamMux {
       if (!stream) {
         stream = new Stream(streamId, this);
         this.streams.set(streamId, stream);
-        this._priorityQueue.push(streamId);
+        if (!this._priorityQueue.includes(streamId)) this._priorityQueue.push(streamId);
       }
       stream._handleFrame(type, this._parsePayload(type, payload), flags);
 
@@ -810,7 +868,7 @@ export class StreamMux {
         stream.headers = payloadObj;
         stream.state = STREAM_STATE.OPEN;
         this.streams.set(streamId, stream);
-        this._priorityQueue.push(streamId);
+        if (!this._priorityQueue.includes(streamId)) this._priorityQueue.push(streamId);
 
         if (this._onStream) {
           this._onStream(stream);
@@ -824,7 +882,16 @@ export class StreamMux {
   }
 
   _handleConnectionFrame(type: number, payload: Buffer): void {
-    const p = JSON.parse(payload.toString('utf8')) as { time?: number; lastStreamId?: number; increment?: number };
+    // Connection-level frames arrive before authentication, so a payload that is
+    // not JSON (an empty one is enough) must not throw: the SyntaxError would
+    // reach the process-level handler, which exits. Drop the frame instead.
+    let p: { time?: number; lastStreamId?: number; increment?: number };
+    try {
+      p = JSON.parse(payload.toString('utf8')) as { time?: number; lastStreamId?: number; increment?: number };
+    } catch (_) {
+      this.logger?.warn({ type, bytes: payload.length }, 'Dropping connection frame with invalid payload');
+      return;
+    }
 
     if (type === FRAME_TYPE.PING) {
       // Respond with PONG
@@ -848,7 +915,19 @@ export class StreamMux {
     }
 
     if (type === FRAME_TYPE.WINDOW_UPDATE) {
-      this.connectionSendWindow += p.increment || 0;
+      const connectionSendWindowInc = Number(p.increment);
+      if (Number.isInteger(connectionSendWindowInc) && connectionSendWindowInc > 0 && connectionSendWindowInc <= MAX_WINDOW_INCREMENT) {
+        this.connectionSendWindow += connectionSendWindowInc;
+        // Resume a flush that the connection window stopped: the batch path puts the frames
+        // back and clears _sending, and only a NEW outbound frame would otherwise reschedule
+        // it - so a quiet stream could wait forever once the window was exhausted (issue #119).
+        if (!this._sending && this._sendBuffer.length > 0) {
+          this._sending = true;
+          setImmediate(() => this._flushSendBuffer());
+        }
+      } else {
+        this.logger?.debug({ increment: p.increment }, 'Ignoring invalid WINDOW_UPDATE increment');
+      }
       return;
     }
   }
@@ -895,7 +974,10 @@ export class StreamMux {
   }
 
   _reschedule(): void {
-    // Sort priority queue by priority (lower = higher priority)
+    // Entries are deduplicated on push: the removal path (indexOf + splice) deletes ONE
+  // copy, so an id pushed repeatedly would linger as a stale duplicate and the queue would
+  // grow with entries that are no longer pending (issue #119).
+  // Sort priority queue by priority (lower = higher priority)
     this._priorityQueue.sort((a, b) => {
       const sa = this.streams.get(a);
       const sb = this.streams.get(b);
