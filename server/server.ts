@@ -289,6 +289,31 @@ if (tlsCreds) {
   });
 }
 
+// Optional ACME HTTP-01 listener on its own port (usually 80). The certificate authority
+// validates over plain HTTP on port 80 while the panel normally listens elsewhere, so an
+// operator who cannot put a reverse proxy in front can opt in with ACME_HTTP_PORT=80. It
+// serves ONLY the challenge path and answers 404 to everything else, so it adds no
+// unauthenticated surface beyond what the CA needs. Binding :80 needs privileges (root or
+// CAP_NET_BIND_SERVICE) and the port may be taken: a failure is logged and ignored, never
+// fatal - a certificate feature must not take the proxy down (issue #122).
+let acmeHttpServer: import('http').Server | null = null;
+const acmeHttpPort = Number(process.env.ACME_HTTP_PORT || 0);
+if (acmeManager.enabled && acmeHttpPort > 0) {
+  const listener = http.createServer((req: import('http').IncomingMessage, res: import('http').ServerResponse) => {
+    if (acmeManager.handleChallenge(req, res)) return;
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not found');
+  });
+  listener.on('error', (err: Error) => {
+    logger.error({ error: err.message, port: acmeHttpPort }, 'ACME HTTP-01 listener failed; continuing without it');
+    if (acmeHttpServer === listener) acmeHttpServer = null;
+  });
+  listener.listen(acmeHttpPort, () => {
+    logger.info({ port: acmeHttpPort }, 'ACME HTTP-01 listener started (challenge path only)');
+  });
+  acmeHttpServer = listener;
+}
+
 // =============================================================================
 // Health Checks
 // =============================================================================
@@ -372,6 +397,9 @@ function shutdown(signal: string) {
   auditLogger.shutdown();
   autoUpdater.shutdown();
   if (acmeManager.enabled) acmeManager.destroy(); // stop() never existed (issue #122)
+  if (acmeHttpServer) {
+    try { acmeHttpServer.close(); } catch (_) { /* shutdown must not throw */ }
+  }
   setTimeout(() => {
     logger.info('Goodbye');
     process.exit(0);
