@@ -67,7 +67,7 @@ const MAX_FRAME_SIZE = 16384; // 16KB max frame payload
 // `sendWindow += p.increment || 0`, so a NEGATIVE increment drove the window to a huge
 // negative value and stalled the stream forever - a cheap way for one peer to freeze a
 // connection (issue #119). 16 MiB is far above any legitimate increment.
-export const MAX_WINDOW_INCREMENT = 16 * 1024 * 1024;
+const MAX_WINDOW_INCREMENT = 16 * 1024 * 1024;
 const DEFAULT_PRIORITY = 128;
 
 // =============================================================================

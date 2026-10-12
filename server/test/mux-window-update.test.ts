@@ -31,7 +31,7 @@ const ROOT = path.join(__dirname, '..', '..');
 test('both mux copies validate the window increment', () => {
   for (const rel of ['server/lib/stream-mux.ts', 'client/lib/stream-mux.ts']) {
     const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
-    assert.ok(/export const MAX_WINDOW_INCREMENT = 16 \* 1024 \* 1024;/.test(src), rel + ' must define the bound');
+    assert.ok(/const MAX_WINDOW_INCREMENT = 16 \* 1024 \* 1024;/.test(src), rel + ' must define the bound');
     assert.ok(!/\+= p\.increment \|\| 0;/.test(src), rel + ' must not apply a raw increment');
     assert.ok(src.includes('Number.isInteger(sendWindowInc) && sendWindowInc > 0'), rel + ' must validate the stream window');
     assert.ok(src.includes('Number.isInteger(connectionSendWindowInc) && connectionSendWindowInc > 0'), rel + ' must validate the connection window');
