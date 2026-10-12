@@ -1123,6 +1123,14 @@ function handleUdpData(msg: Extract<ServerMsg, { type: 'udp_data' }>) {
 // Cleanup
 // =============================================================================
 function cleanupAll() {
+  // Cancel a pending reconnect. Only one exists at a time (connect() clears it before
+  // scheduling another), so this is not an accumulating leak - but without it a deliberate
+  // shutdown/logout leaves the timer pending: it keeps the event loop alive and, worse, it
+  // can reconnect a client that was just told to stop (issue #119).
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   stopHeartbeat();
   currentClientId = null;
 
