@@ -86,7 +86,11 @@ export function setupClientWebSocket(
   config: ServerConfig,
   logger: AppLogger
 ) {
-  const wss = new WebSocketServer({ noServer: true });
+  // Cap the message size. Without maxPayload the `ws` library buffers an arbitrarily large
+// frame in memory before we ever see it, so one authenticated (or even pre-auth) peer
+// could exhaust the process by sending a single huge message (issue #119). 16 MiB matches
+// the mux MAX_FRAME_SIZE, so legitimate batched frames still fit.
+const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
 
   wss.on('connection', (rawWs, req) => {
     const ws = rawWs as WsWithMux;

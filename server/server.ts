@@ -146,7 +146,7 @@ const clientWss = setupClientWebSocket(httpServer, clientManager, authManager, c
 
 // Web UI WebSocket for live updates
 const { WebSocketServer } = require('ws');
-const webWss = new WebSocketServer({ noServer: true });
+const webWss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
 
 webWss.on('connection', (ws: WebSocketLike) => {
   try {
