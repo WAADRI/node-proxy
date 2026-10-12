@@ -75,6 +75,15 @@ const FRAME_HEADER_SIZE = 13;
 // negative value and stalled the stream forever - a cheap way for one peer to freeze a
 // connection (issue #119). 16 MiB is far above any legitimate increment.
 const MAX_WINDOW_INCREMENT = 16 * 1024 * 1024;
+// Outbound backpressure bounds, mirroring the server copy. Every frame ends up in the ws
+// library own send buffer and nothing ever looked at how much is already queued, so a peer
+// that reads slowly could make the client hold an arbitrarily large pending buffer
+// (issue #119). Above the high-water mark the flush is deferred (the same "put it back"
+// pattern the connection-window check uses); once the deferral budget is spent we send
+// anyway, so a slow peer degrades to the previous behaviour instead of stalling forever.
+const OUTBOUND_HIGH_WATER = 4 * 1024 * 1024;
+const MAX_DEFERRALS = 100;
+const DEFERRAL_RETRY_MS = 20;
 const DEFAULT_PRIORITY = 128;
 
 // =============================================================================
@@ -619,6 +628,10 @@ class StreamMux {
     }
   }
 
+  // State for outbound backpressure (see OUTBOUND_HIGH_WATER).
+  private _deferrals = 0;
+  private _backpressureTimer: ReturnType<typeof setTimeout> | null = null;
+
   _flushSendBuffer(): void {
     if (this._sendBuffer.length === 0) {
       this._sending = false;
@@ -649,6 +662,27 @@ class StreamMux {
         return;
       }
 
+      // Backpressure: do not keep feeding the ws buffer without bound. Same shape as the
+      // connection-window check above - put the batch back and stop this pass - plus a timer
+      // to resume, and a bounded number of deferrals so this can never stall permanently.
+      const buffered = (this.ws as { bufferedAmount?: number }).bufferedAmount ?? 0;
+      if (buffered > OUTBOUND_HIGH_WATER && this._deferrals < MAX_DEFERRALS) {
+        this._deferrals++;
+        this._sendBuffer.unshift(...batch);
+        this._sending = false;
+        if (!this._backpressureTimer) {
+          this._backpressureTimer = setTimeout(() => {
+            this._backpressureTimer = null;
+            if (!this._sending && this._sendBuffer.length > 0) {
+              this._sending = true;
+              this._flushSendBuffer();
+            }
+          }, DEFERRAL_RETRY_MS);
+          if (typeof this._backpressureTimer.unref === 'function') this._backpressureTimer.unref();
+        }
+        return;
+      }
+      this._deferrals = 0; // a pass that actually sends resets the budget
       // Debit the connection window by the DATA payload about to go out. A sender window only
       // means something if it shrinks as data is sent: before this it was credited by
       // WINDOW_UPDATE and never debited, so the exhausted-window check above could never trip
@@ -657,7 +691,8 @@ class StreamMux {
         (sum, f) => (f[4] === FRAME_TYPE.DATA ? sum + (f.length - FRAME_HEADER_SIZE) : sum),
         0
       );
-      if (dataBytes > 0) this.connectionSendWindow -= dataBytes;      this.ws.send(sendData, { binary: true }, (err?: Error) => {
+      if (dataBytes > 0) this.connectionSendWindow -= dataBytes;
+this.ws.send(sendData, { binary: true }, (err?: Error) => {
         if (err) {
           this.logger?.error({ error: err.message }, 'StreamMux send error');
           if (this._onError) this._onError(err);

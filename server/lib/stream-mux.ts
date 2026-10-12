@@ -696,6 +696,7 @@ export class StreamMux {
         return;
       }
       this._deferrals = 0; // a pass that actually sends resets the budget
+
       // Debit the connection window by the DATA payload about to go out. A sender window only
       // means something if it shrinks as data is sent: before this it was credited by
       // WINDOW_UPDATE and never debited, so the exhausted-window check above could never trip
