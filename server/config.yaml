@@ -10,6 +10,9 @@ server:
   host: 0.0.0.0
   # Set to true for IPv6-only mode (binds to ::)
   ipv6_only: false
+  # 反向代理跳数：面板/节点注册/代理日志在多少个可信反代之后（单层 nginx = 1）。
+  # 0 = 不信任任何 X-Forwarded-For（默认，直连部署）。开启后显示节点真实来源 IP。
+  trusted_proxy_hops: 0
   # Web control panel port
   web_port: 3000
   # HTTP/HTTPS CONNECT proxy port

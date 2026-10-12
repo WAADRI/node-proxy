@@ -47,7 +47,10 @@ docker compose -p node-proxy up -d --build
 
 验证：浏览器打开 `http://服务器IP:3000`，用上面设置的账号登录。
 
-**nginx 反向代理（推荐）**：用域名 + HTTPS 反代 Web 面板，例如将 `https://proxy.example.com` 反向代理到本机 `:3000`（需透传 `X-Forwarded-For` 以便面板显示真实客户端 IP）。
+**nginx 反向代理（推荐）**：用域名 + HTTPS 反代 Web 面板，例如将 `https://proxy.example.com` 反向代理到本机 `:3000`。要让面板与节点列表显示真实来源 IP（而非 `::ffff:127.0.0.1` 这类回环形式），需要两步：
+
+1. nginx 透传来源头：`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`；
+2. 服务端声明信任（默认不信任任何头，防伪造）：在 config.yaml 设 `server.trusted_proxy_hops: 1`（单层 nginx = 1）。开启后面板 `req.ip`、节点注册 IP 与代理日志统一按可信跳数解析 `X-Forwarded-For` —— 客户端可伪造的最左侧值不会生效。不加此配置时保持直连行为（真实 TCP 对端）。
 
 不使用 Docker 时：
 

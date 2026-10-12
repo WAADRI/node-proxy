@@ -42,6 +42,8 @@ interface CircuitBreakerLike {
   onFailure(id: string, type?: string): void;
   onSuccess(id: string): void;
   reset(id: string): void;
+  // Quiet variant used on re-registration (see circuit-breaker.ts).
+  resetForReconnect?: (id: string) => void;
   cleanup(ids: Iterable<string>): void;
 }
 
@@ -305,6 +307,19 @@ export class ClientManager {
     };
     this.clients.set(id, client);
     this.log.info({ clientId: id, tags: client.tags, info: client.info }, 'Client connected');
+
+    // A reconnect is a fresh session: drop any breaker state left over from the
+    // previous connection. The failures that opened the breaker were in-flight
+    // timeouts from the disconnect itself (node update / restart); without this
+    // the node came back as half_open and, on a quiet deployment, never saw the
+    // three consecutive proxy successes the old state required - the panel then
+    // showed "testing" forever. A genuinely broken node re-opens within
+    // error_threshold requests, so this does not mask real failures.
+    try {
+      this.circuitBreaker?.resetForReconnect?.(id);
+    } catch (_) {
+      // ignore - a broken breaker must not block registration
+    }
 
     // Persist connection event
     if (this.storage) {

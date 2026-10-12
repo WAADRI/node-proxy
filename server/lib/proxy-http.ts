@@ -11,6 +11,7 @@ import type { Socket as NetSocket } from 'net';
 import { v4 as uuidv4 } from 'uuid';
 import type { ClientManager, PendingRecord } from './client-manager.ts';
 import { watchSni } from './tls-sni.ts';
+import { clientIpFromSocket } from './config.ts';
 import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
 import type { DomainRouter } from './domain-router.ts';
@@ -84,14 +85,14 @@ function checkProxyAuth(
   return result.route || {};
 }
 
-// The client IP is the RAW TCP peer: client-supplied headers (X-Forwarded-For /
-// X-Real-IP) are ignored. Honouring them unconditionally let any client choose the
-// address written to the audit log and used in ACL checks (issue #117).
-// IPv4-mapped IPv6 form (::ffff:1.2.3.4) from dual-stack listening is
-// normalised back to plain IPv4 for display.
-function clientIp(req: IncomingMessage): string {
-  const norm = (v: string | undefined | null): string => String(v || '').replace(/^::ffff:/i, '');
-  return norm(req.socket && req.socket.remoteAddress);
+// The client IP starts from the RAW TCP peer: client-supplied headers such as
+// X-Forwarded-For are ignored. Honouring them unconditionally let
+// any client choose the address written to the audit log and used in ACL checks
+// (issue #117). An operator behind a reverse proxy opts in with
+// server.trusted_proxy_hops; the shared helper (#162 follow-up) then picks the
+// untrusted-hop XFF entry. IPv4-mapped form is normalised for display (#206).
+function clientIpFrom(req: IncomingMessage, trustedHops: number): string {
+  return clientIpFromSocket(req.socket, req.headers['x-forwarded-for'], trustedHops);
 }
 
 function sanitizeHeaders(headers: http.IncomingHttpHeaders): HeadersLike {
@@ -129,7 +130,7 @@ function handleHttpRequest(
     method: req.method,
     url: req.url,
     headers: req.headers,
-    ip: clientIp(req),
+    ip: clientIpFrom(req, config.server?.trusted_proxy_hops || 0),
     timestamp: startedAt,
   });
 
@@ -137,7 +138,7 @@ function handleHttpRequest(
   res.on('finish', () => {
     const entry = {
       ts: Date.now(),
-      ip: clientIp(req),
+      ip: clientIpFrom(req, config.server?.trusted_proxy_hops || 0),
       method: req.method,
       url: req.url,
       status: res.statusCode || 0,
@@ -428,7 +429,7 @@ function handleConnect(
     method: req.method,
     url: req.url,
     headers: req.headers,
-    ip: clientIp(req),
+    ip: clientIpFrom(req, config.server?.trusted_proxy_hops || 0),
     timestamp: Date.now(),
   });
 
@@ -493,7 +494,7 @@ function handleConnect(
     timeout,
     startTime,
     head: Buffer.isBuffer(head) ? head : Buffer.alloc(0),
-    ip: clientIp(req),
+    ip: clientIpFrom(req, config.server?.trusted_proxy_hops || 0),
     host,
     port,
     sni: null,
