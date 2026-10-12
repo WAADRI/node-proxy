@@ -136,7 +136,25 @@ function createWebServer(
     }
   });
 
-  app.post('/api/logout', (_req: WebRequest, res: HttpResponse) => {
+  app.post('/api/logout', (req: WebRequest, res: HttpResponse) => {
+    // Revoke the caller tokens AND clear the cookie. Clearing a cookie alone cannot cancel a
+    // stateless JWT - the token stays valid until it expires - so both halves are needed, and
+    // both live here on purpose: PR #165 added the cookie clearing, PR #194 added the
+    // revocation, and keeping them in one handler removes the merge conflict that silently
+    // dropped one of the two (issue #118).
+    //
+    // This route is registered BEFORE the auth middleware, so it cannot rely on req.user: the
+    // token is read here exactly as that middleware does it - Bearer header first, then cookie.
+    let logoutToken: string | null = null;
+    const rawAuth = req.headers.authorization;
+    const authHeader = typeof rawAuth === 'string' ? rawAuth : null;
+    if (authHeader && authHeader.startsWith('Bearer ')) logoutToken = authHeader.slice(7);
+    if (!logoutToken && req.cookies && req.cookies.token) logoutToken = req.cookies.token;
+    if (logoutToken) {
+      const result = authManager.verifyWebToken(logoutToken);
+      if (result.valid && result.username) authManager.revokeUserTokens(result.username);
+    }
+    res.clearCookie('token');
     res.json({ success: true });
   });
 
