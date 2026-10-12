@@ -84,17 +84,13 @@ function checkProxyAuth(
   return result.route || {};
 }
 
-// Best-effort real client IP: honour X-Forwarded-For when a reverse proxy
-// (e.g. nginx) terminates the client connection, otherwise use the socket.
+// The client IP is the RAW TCP peer: client-supplied headers (X-Forwarded-For /
+// X-Real-IP) are ignored. Honouring them unconditionally let any client choose the
+// address written to the audit log and used in ACL checks (issue #117).
 // IPv4-mapped IPv6 form (::ffff:1.2.3.4) from dual-stack listening is
 // normalised back to plain IPv4 for display.
 function clientIp(req: IncomingMessage): string {
   const norm = (v: string | undefined | null): string => String(v || '').replace(/^::ffff:/i, '');
-  const xff = req.headers && req.headers['x-forwarded-for'];
-  if (xff) {
-    const first = String(xff).split(',')[0].trim();
-    if (first) return norm(first);
-  }
   return norm(req.socket && req.socket.remoteAddress);
 }
 
