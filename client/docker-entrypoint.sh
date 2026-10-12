@@ -35,6 +35,24 @@ BEACON="${LIVENESS_FILE:-/tmp/node-proxy-liveness}"
 STALE="${WATCHDOG_STALE_SECONDS:-180}"
 CHECK="${WATCHDOG_CHECK_SECONDS:-5}"
 
+# Validate the two knobs BEFORE use. A typo used to disable the watchdog SILENTLY:
+# `[ abc -gt 0 ]` reports an error, the `&&` on that line short-circuits, and the
+# supervisor simply never kills a stalled client - self-healing gone, no message.
+# `sleep abc` is the other half: it fails immediately, so the loop became a busy
+# spin. Fail fast with a clear message instead (issue #123).
+case "$STALE" in
+  ''|*[!0-9]*)
+    echo "[watchdog] WATCHDOG_STALE_SECONDS must be a non-negative integer, got '$WATCHDOG_STALE_SECONDS'" >&2
+    exit 1
+    ;;
+esac
+case "$CHECK" in
+  ''|*[!0-9]*)
+    echo "[watchdog] WATCHDOG_CHECK_SECONDS must be a non-negative integer, got '$WATCHDOG_CHECK_SECONDS'" >&2
+    exit 1
+    ;;
+esac
+
 # Fall back to the image's default command when none was given.
 if [ "$#" -eq 0 ]; then
   set -- node client.ts
