@@ -274,18 +274,23 @@ class Storage {
       if (!stmt) return [];
       stmt.bind([clientId, limit]);
       const rows: Record<string, unknown>[] = [];
-      while (stmt.step()) {
-        const row = stmt.getAsObject();
-        if (typeof row.data === 'string') {
-          try {
-            row.data = JSON.parse(row.data);
-          } catch (_) {
-            row.data = {};
+      // free() in a finally: if step()/getAsObject() throws, the old code skipped it
+      // and leaked the WASM statement until the process exited (issue #122).
+      try {
+        while (stmt.step()) {
+          const row = stmt.getAsObject();
+          if (typeof row.data === 'string') {
+            try {
+              row.data = JSON.parse(row.data);
+            } catch (_) {
+              row.data = {};
+            }
           }
+          rows.push(row);
         }
-        rows.push(row);
+      } finally {
+        stmt.free();
       }
-      stmt.free();
       return rows;
     } catch (_) {
       return [];
@@ -525,9 +530,10 @@ class Storage {
       if (!stmt) return null;
       stmt.bind([clientId]);
       if (stmt.step()) {
-        const row = stmt.getAsObject();
-        stmt.free();
-        const parsed: ClientMetaRow = {
+        // Same as above: free() must run even if reading the row throws.
+        try {
+          const row = stmt.getAsObject();
+          const parsed: ClientMetaRow = {
           client_id: String(row.client_id || clientId),
           tags: parseJsonArray(row.tags),
           alias: row.alias != null ? String(row.alias) : null,
@@ -538,8 +544,11 @@ class Storage {
           group: row.grp != null && String(row.grp) !== '' ? String(row.grp) : null,
           created_at: num(row.created_at),
           updated_at: num(row.updated_at),
-        };
-        return parsed;
+          };
+          return parsed;
+        } finally {
+          stmt.free();
+        }
       }
       stmt.free();
       return null;
