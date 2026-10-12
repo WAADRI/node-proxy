@@ -328,7 +328,11 @@ function createWebServer(
     res.json(task);
   });
 
-  api.get('/config', (_req: WebRequest, res: HttpResponse) => {
+  api.get('/config', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'system:config')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const safeConfig = {
       server: config.server,
       auth: { web: { enabled: config.auth.web.enabled }, proxy: { enabled: config.auth.proxy.enabled } },
