@@ -175,7 +175,9 @@ export class AuthManager {
 
   deleteUser(username: string): boolean {
     // Cannot delete the last admin
-    const adminCount = this.listUsers().filter((u) => u.role === 'admin').length;
+    // Count ENABLED admins only: counting every admin allowed deleting the only
+    // usable one while a disabled admin remained - a lockout too (issue #117).
+    const adminCount = this.listUsers().filter((u) => u.role === 'admin' && u.enabled).length;
     const user = this.users.get(username);
     if (user && user.role === 'admin' && adminCount <= 1) return false;
     return this.users.delete(username);
@@ -184,6 +186,17 @@ export class AuthManager {
   modifyUser(username: string, updates: { password?: string; role?: string; enabled?: boolean }): boolean {
     const user = this.users.get(username);
     if (!user) return false;
+    // Refuse to leave the panel without an ENABLED admin. deleteUser guarded this;
+    // modifyUser did not, so the last admin could be demoted or disabled - by
+    // themselves or by another admin - and nobody could reach user management ever
+    // again (issue #117). Only enforced when this change removes the last one, and
+    // an invalid role is ignored later anyway, so it must not trigger the refusal.
+    const demotes =
+      updates.role !== undefined && updates.role !== 'admin' && VALID_ROLES.includes(updates.role as RoleName);
+    const disables = updates.enabled === false;
+    const wasEnabledAdmin = user.enabled && user.role === 'admin';
+    const enabledAdmins = [...this.users.values()].filter((u) => u.enabled && u.role === 'admin').length;
+    if (wasEnabledAdmin && (demotes || disables) && enabledAdmins <= 1) return false;
     if (updates.password) user.password = updates.password;
     if (updates.role && VALID_ROLES.includes(updates.role as RoleName)) user.role = updates.role as RoleName;
     if (updates.enabled !== undefined) user.enabled = updates.enabled;
