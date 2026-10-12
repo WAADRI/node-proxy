@@ -194,7 +194,11 @@ function createWebServer(
   });
 
   // --- Network testing toolkit (issue #31): ping / tcping / http / dns / traceroute ---
-  api.get('/network-test/types', (_req: WebRequest, res: HttpResponse) => {
+  api.get('/network-test/types', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'nettest:run')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     res.json({
       types: [
         { id: 'ping', label: 'Ping' },
