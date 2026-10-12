@@ -183,12 +183,20 @@ function createWebServer(
   const api = express.Router();
 
   // --- Status ---
-  api.get('/status', (_req: WebRequest, res: HttpResponse) => {
+  api.get('/status', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'client:list')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     res.json(clientManager.getStats());
   });
 
   // --- Recent request log (for the panel "Request log" view) ---
   api.get('/logs', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'system:logs')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const limit = Math.min(parseInt(str(req.query.limit), 10) || 100, 500);
     const hub = clientManager.requestLog;
     if (!hub) {
@@ -695,21 +703,37 @@ function createWebServer(
     res.json({ success: true });
   });
 
-  api.get('/circuit-breaker/status', (_req: WebRequest, res: HttpResponse) => {
+  api.get('/circuit-breaker/status', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'circuit:view')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     res.json(clientManager.circuitBreaker?.getAllStatuses() || {});
   });
 
-  api.get('/bandwidth/stats', (_req: WebRequest, res: HttpResponse) => {
+  api.get('/bandwidth/stats', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'proxy:stats')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     res.json(clientManager.bandwidthLimiter?.getStats() || {});
   });
 
   api.get('/client/:id/events', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'client:events')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const limit = parseInt(str(req.query.limit), 10) || 50;
     const events = clientManager.storage?.getClientEvents(pstr(req.params.id), limit) || [];
     res.json({ events });
   });
 
   api.get('/client/:id/traffic', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'proxy:stats')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const since = parseInt(str(req.query.since), 10) || Date.now() - 86400000;
     const stats = clientManager.storage?.getTrafficStats(pstr(req.params.id), since) || {};
     res.json(stats);
@@ -718,6 +742,10 @@ function createWebServer(
   // Daily traffic aggregation (frp-style per-day stats).
   // GET /api/v1/traffic?days=7&client_id=<id>   (client_id optional = all clients)
   api.get('/traffic', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'proxy:stats')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const days = Math.max(1, Math.min(30, parseInt(str(req.query.days), 10) || 7));
     const clientId = str(req.query.client_id) || null;
     // Validate client exists when specified (avoid leaking arbitrary ids via SQL)
@@ -1039,7 +1067,11 @@ function createWebServer(
   // ===========================================================================
   // Phase 4: Stream Multiplexer Stats
   // ===========================================================================
-  api.get('/mux/stats', (_req: WebRequest, res: HttpResponse) => {
+  api.get('/mux/stats', (req: WebRequest, res: HttpResponse) => {
+    if (!authManager.hasPermission(str(req.user), 'client:list')) {
+      res.status(403).json({ success: false, message: 'Permission denied' });
+      return;
+    }
     const stats: { clientId: string; tags: string[]; mux: Record<string, unknown> }[] = [];
     for (const [id, client] of clientManager.clients) {
       if (client.mux) {
