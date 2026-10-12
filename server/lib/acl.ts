@@ -160,18 +160,32 @@ class ACLManager {
       hits: 0,
     };
 
-    // Pre-compile match conditions for performance
+    // Pre-compile match conditions for performance. Anything that cannot be parsed
+    // is refused here, loudly: a silently dropped condition used to become an empty
+    // list, which matched everything (see _isInCIDR), so one typo could deny all
+    // traffic - or, in an allow rule, permit all of it (#116).
+    const reject = (field: string, value: unknown) => {
+      this.log.error(
+        { rule, field, value },
+        'ACL rule rejected: unparseable condition (only IPv4 addresses/CIDRs and NUM or NUM-NUM ports are supported)'
+      );
+      return false;
+    };
     if (compiled.match.sourceIp) {
       compiled._sourceNets = this._parseCIDR(compiled.match.sourceIp);
+      if (!compiled._sourceNets.length) return reject('sourceIp', compiled.match.sourceIp);
     }
     if (compiled.match.targetIp) {
       compiled._targetNets = this._parseCIDR(compiled.match.targetIp);
+      if (!compiled._targetNets.length) return reject('targetIp', compiled.match.targetIp);
     }
     if (compiled.match.targetDomain) {
       compiled._domainRegex = this._wildcardToRegex(compiled.match.targetDomain);
+      if (!compiled._domainRegex) return reject('targetDomain', compiled.match.targetDomain);
     }
     if (compiled.match.targetPort) {
       compiled._portRange = this._parsePortRange(compiled.match.targetPort);
+      if (!compiled._portRange || !compiled._portRange.length) return reject('targetPort', compiled.match.targetPort);
     }
     if (compiled.match.time) {
       compiled._timeRange = this._parseTimeRange(compiled.match.time);
@@ -342,6 +356,9 @@ class ACLManager {
         if (p.includes('/')) {
           const [ip, bits] = p.split('/');
           const mask = parseInt(bits, 10);
+          // A prefix outside 0..32 used to shift into a wildly different mask
+          // (/33 became /1, matching half the internet) instead of being rejected.
+          if (!/^\d{1,2}$/.test(bits) || !Number.isInteger(mask) || mask > 32) return null;
           const ipLong = this._ipToLong(ip);
           if (ipLong === null) return null;
           return { ip: ipLong, mask, bits };
@@ -358,8 +375,12 @@ class ACLManager {
   }
 
   _ipToLong(ip: string): number | null {
-    if (!net.isIPv4(ip)) return null;
-    const parts = ip.split('.');
+    // A dual-stack listener (server.ts binds '::') reports an IPv4 peer as
+    // ::ffff:1.2.3.4, which net.isIPv4 rejects - so every IPv4 sourceIp rule
+    // silently stopped matching and fell through to the default policy (#116).
+    const normalized = (ip || '').replace(/^::ffff:/i, '');
+    if (!net.isIPv4(normalized)) return null;
+    const parts = normalized.split('.');
     return ((parseInt(parts[0], 10) << 24) |
             (parseInt(parts[1], 10) << 16) |
             (parseInt(parts[2], 10) << 8) |
@@ -367,7 +388,11 @@ class ACLManager {
   }
 
   _isInCIDR(ip: string, nets?: CidrNet[] | null): boolean {
-    if (!nets || !nets.length) return true;
+    // An empty list means "this condition could not be parsed", which must never
+    // match anything (addRule refuses such rules up front). Returning true used to
+    // make a typo deny all traffic in a deny rule and allow all of it in an allow
+    // rule - the same empty list, two opposite silent failures (#116).
+    if (!nets || !nets.length) return false;
     const ipLong = this._ipToLong(ip);
     if (ipLong === null) return false;
     return nets.some(net => {
@@ -379,28 +404,39 @@ class ACLManager {
 
   _wildcardToRegex(pattern: string): RegExp | null {
     if (!pattern) return null;
-    const escaped = pattern
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-      .replace(/\*/g, '[^.]*')
-      .replace(/\?/g, '.');
-    return new RegExp(`^${escaped}$`, 'i');
+    // A comma-separated list is what config.yaml documents, but the whole string
+    // used to be compiled as ONE literal pattern, so `*.a.com,*.b.com` matched
+    // neither host and the rule silently did nothing (#116).
+    const alternatives = pattern
+      .split(',')
+      .map(p => p.trim())
+      .filter(Boolean)
+      .map(p =>
+        p
+          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+          .replace(/\*/g, '[^.]*')
+          .replace(/\?/g, '.')
+      );
+    if (!alternatives.length) return null;
+    return new RegExp(`^(?:${alternatives.join('|')})$`, 'i');
   }
 
   _parsePortRange(portStr: string): PortRangeEntry[] | null {
     if (!portStr) return null;
-    const parts = portStr.split(',');
-    return parts
-      .map(p => {
-        p = p.trim();
-        if (p.includes('-')) {
-          const [start, end] = p.split('-').map(Number);
-          return { start: isNaN(start) ? 0 : start, end: isNaN(end) ? 65535 : end };
-        }
-        const port = parseInt(p, 10);
-        if (isNaN(port)) return null;
-        return { start: port, end: port };
-      })
-      .filter((r): r is PortRangeEntry => r !== null);
+    // Validate instead of coercing: '80-' produced {start:80,end:0} (Number('') is
+    // 0, not NaN) - an empty range that matched nothing, so a deny rule silently
+    // stopped working, while '80-abc' became 80-65535 and matched everything.
+    const out: PortRangeEntry[] = [];
+    for (const raw of portStr.split(',')) {
+      const p = raw.trim();
+      const m = /^(\d{1,5})(?:-(\d{1,5}))?$/.exec(p);
+      if (!m) return null;
+      const start = Number(m[1]);
+      const end = m[2] === undefined ? start : Number(m[2]);
+      if (start > 65535 || end > 65535 || start > end) return null;
+      out.push({ start, end });
+    }
+    return out.length ? out : null;
   }
 
   _isInPortRange(port: number, ranges?: PortRangeEntry[] | null): boolean {
