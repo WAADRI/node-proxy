@@ -32,11 +32,11 @@ const http = fs.readFileSync(path.join(ROOT, 'proxy-http.ts'), 'utf8');
 test('the client IP ignores proxy headers unless the operator opted in', () => {
   // Header reads now go through the shared, opt-in-gated helper
   // (lib/config.ts clientIpFromSocket, trusted_proxy_hops). The invariant here
-  // covers the DEFAULT (no opt-in) behaviour of all three consumers.
+  // covers the DEFAULT (no opt-in) behaviour of all three consumers; the
+  // ::ffff: strip that #207 put in place now lives inside the helper and is
+  // additionally pinned by node-ip-normalize.test.ts over a real socket.
   assert.ok(/clientIpFromSocket/.test(ws), 'ws-server resolves through the shared helper');
   assert.ok(/trusted_proxy_hops/.test(ws), 'and gates it on the operator-declared hop count');
-  const regPath = ws.slice(ws.indexOf('const clientIp = clientIpFromSocket'), ws.indexOf('// Create StreamMux'));
-  assert.ok(/x-forwarded-for/.test(regPath) === false || /trusted_proxy_hops/.test(regPath), 'the header is only consulted behind the trusted-hops gate');
   assert.ok(!/x-real-ip/i.test(ws), 'X-Real-IP is not used anywhere (it has no hop semantics)');
   assert.ok(/clientIpFromSocket/.test(http), 'proxy-http resolves through the shared helper');
   assert.ok(/trusted_proxy_hops/.test(http), 'and gates it on the operator-declared hop count');

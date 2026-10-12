@@ -98,12 +98,13 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 }
     let clientId: string | null = null;
     let authenticated = false;
     // The client IP starts from the RAW TCP peer, never a client-supplied header:
-    // trusting X-Forwarded-For unconditionally let any client choose
-    // the address recorded for it (and shown in the panel), and contradicted the
-    // panel own `trust proxy = false` (issue #117). An operator who really sits
-    // behind a reverse proxy opts in with server.trusted_proxy_hops; the shared
-    // helper then picks the untrusted-hop entry of X-Forwarded-For (#162 follow-up)
-    // and strips the IPv4-mapped prefix for display (issue #206).
+    // trusting X-Forwarded-For unconditionally let any client choose the address
+    // recorded for it (and shown in the panel), and contradicted the panel own
+    // `trust proxy = false` (issue #117). An operator who really sits behind a
+    // reverse proxy opts in with server.trusted_proxy_hops; the shared helper then
+    // picks the untrusted-hop entry of X-Forwarded-For (#162 follow-up) and strips
+    // the IPv4-mapped prefix for display (issue #206). A pure IPv6 peer keeps its
+    // original form.
     const clientIp = clientIpFromSocket(
       req.socket,
       req.headers['x-forwarded-for'],
