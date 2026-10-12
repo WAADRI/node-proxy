@@ -11,6 +11,7 @@ import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
 import type { ProxyPasswordEntry } from './proxy-passwords.ts';
 import type { RoutingStrategy } from './router.ts';
+import { createHash, timingSafeEqual } from 'crypto';
 
 export type RoleName = 'admin' | 'operator' | 'viewer';
 
@@ -22,6 +23,15 @@ function toRoleName(value: string | undefined): RoleName {
 }
 
 // Built-in roles with permission sets
+// Constant-time comparison for secrets. `===` on a password or token short-circuits
+// at the first differing byte, so an attacker who can time the response learns the
+// matching prefix byte by byte (issue #117). Hashing first also keeps the lengths
+// equal, which timingSafeEqual requires.
+function safeEqual(a: string, b: string): boolean {
+  const ha = createHash('sha256').update(a).digest();
+  const hb = createHash('sha256').update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
 export const ROLES: Record<RoleName, { permissions: string[] }> = {
   admin: {
     permissions: [
@@ -221,7 +231,7 @@ export class AuthManager {
     if (!webAuth.enabled) return true;
     const user = this.users.get(username);
     if (!user || !user.enabled) return false;
-    return user.password === password;
+    return safeEqual(user.password, password);
   }
 
   generateWebToken(username: string): string {
@@ -323,7 +333,7 @@ export class AuthManager {
   // Legacy: Client Node Authentication
   // ===========================================================================
   validateClientToken(token: string): boolean {
-    return token === this.config.auth.token;
+    return safeEqual(token, this.config.auth.token);
   }
 
   // ===========================================================================
@@ -362,13 +372,13 @@ export class AuthManager {
   private _matchProxyCredentials(username: string, password: string): { ok: boolean; route?: ProxyRoute } {
     const proxyAuth = this.config.auth.proxy;
     // Legacy configured pair (strict username + password) -> default pool.
-    if (username === proxyAuth.username && password === proxyAuth.password) {
+    if (username === proxyAuth.username && safeEqual(password, proxyAuth.password)) {
       return { ok: true, route: {} };
     }
     // Panel-managed extra passwords: only the password matters.
     if (this.proxyPasswordProvider) {
       for (const entry of this.proxyPasswordProvider()) {
-        if (entry.enabled && entry.password === password) {
+        if (entry.enabled && safeEqual(entry.password, password)) {
           return {
             ok: true,
             route: {
