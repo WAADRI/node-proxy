@@ -10,6 +10,11 @@
 # 节点只允许配置以下几项（issue #53 第四条）。心跳、超时、并发、重连退避等
 # 行为参数已固定为内置常量，写在本文件或环境变量里都不会生效。
 
+# 是否校验服务端证书（默认 true；自签证书场景需显式设为 false）
+# 默认: true
+# 环境变量: TLS_REJECT_UNAUTHORIZED
+tls_reject_unauthorized: true
+
 # 代理服务器 WebSocket 地址（端点）
 # 默认: "ws://127.0.0.1:3000/ws"
 # 环境变量: SERVER_URL
@@ -29,9 +34,3 @@ region: cn-guangzhou
 # 默认: ""
 # 环境变量: TAGS
 tags: cn,premium
-
-# TLS certificate verification (default: true). Keep it on unless the server uses a
-# certificate your machine cannot validate (self-signed). Turning it off means any host that
-# answers for server_url can impersonate the server and read your traffic and token.
-# 环境变量: TLS_REJECT_UNAUTHORIZED
-tls_reject_unauthorized: true
