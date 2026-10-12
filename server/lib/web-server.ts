@@ -123,14 +123,50 @@ function createWebServer(
     res.sendFile(path.join(__dirname, '..', 'views', 'login.html'));
   });
 
+  // Login throttle. The panel had NO limit, so a password could be brute-forced at
+  // full request rate - and the route is public (registered before the auth
+  // middleware) (issue #117). Keyed by peer+username, cleared on success.
+  const LOGIN_MAX_FAILURES = 5;
+  const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+  const LOGIN_LOCK_MS = 15 * 60 * 1000;
+  const loginFailures = new Map<string, { count: number; first: number; until: number }>();
+  // Bound the map: otherwise a flood of random usernames is itself a memory leak
+  // (the same class of defect fixed in the audit buffer).
+  const trimLoginFailures = (now: number): void => {
+    for (const [k, v] of loginFailures) {
+      if (v.until !== 0 && v.until <= now) loginFailures.delete(k);
+    }
+    while (loginFailures.size > 1000) {
+      const oldest = loginFailures.keys().next();
+      if (oldest.done) break;
+      loginFailures.delete(oldest.value);
+    }
+  };
   app.post('/api/login', (req: WebRequest, res: HttpResponse) => {
     const { username, password } = (req.body || {}) as { username?: string; password?: string };
+    const loginKey = `${String(req.ip || '')}|${asString(username)}`;
+    const now = Date.now();
+    const record = loginFailures.get(loginKey);
+    if (record && record.until > now) {
+      logger.warn({ username, ip: req.ip }, 'Web login blocked (too many failures)');
+      res.status(429).json({ success: false, message: 'Too many failed attempts, try again later' });
+      return;
+    }
     if (authManager.validateWebLogin(asString(username), asString(password))) {
+    loginFailures.delete(loginKey);
       const token = authManager.generateWebToken(asString(username));
       const role = authManager.getRole(asString(username));
       logger.info({ username, role }, 'Web login success');
       res.json({ success: true, token, role, redirect: '/' });
     } else {
+      const within = record && now - record.first < LOGIN_WINDOW_MS;
+      const failures = (within ? record.count : 0) + 1;
+      loginFailures.set(loginKey, {
+        count: failures,
+        first: within ? record.first : now,
+        until: failures >= LOGIN_MAX_FAILURES ? now + LOGIN_LOCK_MS : 0,
+      });
+      trimLoginFailures(now);
       logger.warn({ username, ip: req.ip }, 'Web login failed');
       res.status(401).json({ success: false, message: 'Invalid username or password' });
     }
