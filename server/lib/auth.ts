@@ -12,7 +12,13 @@ import type { AppLogger } from './logger.ts';
 import type { ProxyPasswordEntry } from './proxy-passwords.ts';
 import type { RoutingStrategy } from './router.ts';
 import { createHash, timingSafeEqual } from 'crypto';
-import * as bcrypt from 'bcryptjs';
+// Default import, deliberately NOT a namespace import. This repo runs .ts directly through
+// Node's type stripping, so a namespace import is handed to Node as a REAL ESM namespace
+// import of a CJS package: bcryptjs's named exports are not statically detectable, so the
+// namespace carries only `default`/`module.exports`, bcrypt.hashSync is undefined, and every
+// login threw `TypeError: bcrypt.hashSync is not a function` (measured: namespace.hashSync =
+// undefined, namespace.default.hashSync = function).
+import bcrypt from 'bcryptjs';
 
 export type RoleName = 'admin' | 'operator' | 'viewer';
 

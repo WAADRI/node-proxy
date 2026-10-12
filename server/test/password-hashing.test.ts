@@ -29,7 +29,15 @@ const path: typeof NodePath = require('path');
 const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'auth.ts'), 'utf8');
 
 test('passwords are hashed on store and both forms verify', () => {
-  assert.ok(/import \* as bcrypt from 'bcryptjs';/.test(src), 'bcryptjs must be imported');
+  // The import FORM decides runtime behaviour: a namespace import of this CJS package leaves
+  // bcrypt.hashSync undefined under Node's type stripping, which made every login throw
+  // TypeError. This assertion previously pinned the namespace form - it locked the bug in.
+  // Anchored to the start of a line so a comment mentioning the old form cannot satisfy it.
+  assert.ok(/^import bcrypt from 'bcryptjs';/m.test(src), 'bcryptjs must be imported as a default import');
+  assert.ok(
+    !/^import \* as bcrypt/m.test(src),
+    'a namespace import leaves hashSync undefined at runtime - never restore it'
+  );
   assert.ok(/function isBcryptHash\(value: string\): boolean/.test(src), 'the hash detector must exist');
   assert.ok(/bcrypt\.hashSync\(plain, 10\)/.test(src), 'hashing must use bcrypt');
   assert.ok(/if \(updates\.password\) user\.password = hashPassword\(updates\.password\);/.test(src), 'modifyUser must hash');
