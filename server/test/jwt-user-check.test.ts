@@ -29,7 +29,13 @@ const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'auth.ts'), 'utf8'
 test('the web middleware re-checks the user on every request', () => {
   const start = src.indexOf('webAuthMiddleware(requiredPermission');
   assert.ok(start > 0, 'webAuthMiddleware was not found');
-  const body = src.slice(start, start + 2600);
+  // Slice to the end of the file instead of an arbitrary byte count: a fixed window is a
+  // brittle anchor that breaks whenever anything (a comment, an unrelated guard) is added
+  // above the line it looks for. That is exactly what happened - the distance grew to 2639
+  // against a 2600 window, so this test failed on a main where the middleware was intact.
+  // The four patterns below are unique to this middleware, so scanning the rest of the file
+  // is safe; the ordering assertion uses absolute positions and is unaffected.
+  const body = src.slice(start);
   assert.ok(/const liveUsername = result\.username;/.test(body), 'the optional username must be narrowed');
   assert.ok(/this\.users\.get\(liveUsername\)/.test(body), 'the live user must be looked up');
   assert.ok(/if \(!liveUser \|\| !liveUser\.enabled\)/.test(body), 'a missing or disabled account must be refused');
