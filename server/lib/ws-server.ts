@@ -101,7 +101,12 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 }
     // recorded for it (and shown in the panel) by sending a header, and it
     // contradicted the panel own `trust proxy = false` (issue #117). A deployment
     // that really sits behind a reverse proxy needs an explicit opt-in, not a guess.
-    const clientIp = req.socket.remoteAddress || '';
+    // The IPv4-mapped prefix is stripped for display: not doing this made the panel
+    // show ::ffff:127.0.0.1 on every dual-stack listener - the same normalization the
+    // proxy paths apply to their remoteAddress reads (issue #206 / regression of #162).
+    // A pure IPv6 peer keeps its original form.
+    const rawPeer = req.socket.remoteAddress || '';
+    const clientIp = rawPeer.toLowerCase().startsWith('::ffff:') ? rawPeer.slice(7) : rawPeer;
 
     // Create StreamMux for this client
     const mux = new StreamMux(ws, {
