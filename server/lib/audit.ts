@@ -321,8 +321,13 @@ class AuditLogger {
       fs.appendFileSync(this.logFile, output, 'utf8');
     } catch (err) {
       this.log.error({ error: errorMessage(err) }, 'Failed to write audit log');
-      // Put entries back in buffer
-      this.buffer.unshift(...entries);
+      // Put the entries back, but BOUNDED. The old code spread an ever-growing
+      // array: while writes keep failing the buffer doubles every 5s flush, and a
+      // spread that large throws RangeError (Maximum call stack size exceeded),
+      // which the process-level handler treats as fatal - exit(1). Keep the failed
+      // batch plus the newest entries and drop the oldest overflow instead.
+      const maxBuffered = Math.max(this.bufferSize * 10, 1000);
+      this.buffer = [...entries, ...this.buffer].slice(0, maxBuffered);
     }
   }
 
