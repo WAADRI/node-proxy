@@ -243,10 +243,31 @@ function handleHttpRequest(
   }
 
   const requestId = uuidv4();
+  // Maximum request body this proxy will buffer and forward. The body is held in full before
+  // forwarding (then base64ed, so ~1.33x in memory) and NOTHING bounded it: one client could
+  // ask the process to hold an arbitrarily large upload and exhaust it (issue #119). 64 MiB is
+  // generous for normal API traffic; it is also the largest body this proxy forwards, which is
+  // the deliberate trade - previously that limit simply did not exist.
+  const MAX_PROXY_BODY_BYTES = 64 * 1024 * 1024;
   const chunks: Buffer[] = [];
+  let bodyBytes = 0;
+  let tooLarge = false;
   const startTime = Date.now();
 
-  req.on('data', (chunk: Buffer) => chunks.push(chunk));
+  req.on('data', (chunk: Buffer) => {
+    if (tooLarge) return;
+    bodyBytes += chunk.length;
+    if (bodyBytes > MAX_PROXY_BODY_BYTES) {
+      tooLarge = true;
+      chunks.length = 0; // release what we buffered; this request is going away
+      logger.warn({ bytes: bodyBytes, limit: MAX_PROXY_BODY_BYTES }, 'Proxy request body too large');
+      res.writeHead(413, { 'Content-Type': 'text/plain' });
+      res.end('Request body too large');
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
   req.on('end', () => {
     const body = Buffer.concat(chunks).toString('base64');
     let targetUrl2 = req.url || '';
