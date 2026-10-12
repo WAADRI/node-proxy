@@ -416,7 +416,7 @@ class StreamMux {
     const stream = new Stream(id, this);
     stream.priority = Math.max(0, Math.min(255, priority));
     this.streams.set(id, stream);
-    this._priorityQueue.push(id);
+    if (!this._priorityQueue.includes(id)) this._priorityQueue.push(id);
     this._reschedule();
 
     if (this.logger) {
@@ -744,7 +744,7 @@ class StreamMux {
       if (!stream) {
         stream = new Stream(streamId, this);
         this.streams.set(streamId, stream);
-        this._priorityQueue.push(streamId);
+        if (!this._priorityQueue.includes(streamId)) this._priorityQueue.push(streamId);
       }
       stream._handleFrame(type, this._parsePayload(type, payload), flags);
 
@@ -763,7 +763,7 @@ class StreamMux {
         stream.headers = payloadObj;
         stream.state = STREAM_STATE.OPEN;
         this.streams.set(streamId, stream);
-        this._priorityQueue.push(streamId);
+        if (!this._priorityQueue.includes(streamId)) this._priorityQueue.push(streamId);
 
         if (this._onStream) {
           this._onStream(stream);
@@ -848,7 +848,10 @@ class StreamMux {
   }
 
   _reschedule(): void {
-    // Sort priority queue by priority (lower = higher priority)
+    // Entries are deduplicated on push: the removal path (indexOf + splice) deletes ONE
+  // copy, so an id pushed repeatedly would linger as a stale duplicate and the queue would
+  // grow with entries that are no longer pending (issue #119).
+  // Sort priority queue by priority (lower = higher priority)
     this._priorityQueue.sort((a, b) => {
       const sa = this.streams.get(a);
       const sb = this.streams.get(b);
