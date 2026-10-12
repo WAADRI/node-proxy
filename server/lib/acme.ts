@@ -168,7 +168,7 @@ class ACMEManager {
 
     const client = new acme.Client({
       directoryUrl: this.directoryUrl,
-      accountKey: await acme.forge.createPrivateKey(),
+      accountKey: await this._accountKey(acme),
     });
 
     // Create CSR
@@ -211,6 +211,30 @@ class ACMEManager {
   }
 
   // Handle HTTP-01 challenge requests
+  // Reuse ONE ACME account across issuances. A fresh key per order created a new account
+  // every time, which burns the CA's new-account/new-order rate limits and makes the
+  // "account" meaningless (issue #122). The key is stored next to the certificates with
+  // mode 0600 - the same treatment the certificate key itself got.
+  protected async _accountKey(acme: AcmeLibrary): Promise<string> {
+    const file = path.join(this.certDir, 'acme-account-key.pem');
+    try {
+      const existing = fs.readFileSync(file, 'utf8').trim();
+      if (existing) return existing;
+    } catch (_) {
+      // No key on disk yet: create one below.
+    }
+    const created = toStringable(await acme.forge.createPrivateKey()).toString();
+    try {
+      fs.mkdirSync(this.certDir, { recursive: true });
+      fs.writeFileSync(file, created, { mode: 0o600 });
+      fs.chmodSync(file, 0o600);
+    } catch (_) {
+      // Best effort: a read-only key store must not stop issuance; the key still works
+      // for this process, it just will not be reused after a restart.
+    }
+    return created;
+  }
+
   handleChallenge(req: IncomingMessage, res: ServerResponse): boolean {
     const pathname = req.url || '';
     if (!pathname.startsWith('/.well-known/acme-challenge/')) {
