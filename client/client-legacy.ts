@@ -65,7 +65,11 @@ const DEFAULTS: ClientConfig = {
   max_concurrent_requests: 100,
   region: 'unknown',
   tags: '',
-  tls_reject_unauthorized: false,
+  // Verify the server certificate by DEFAULT. This used to be false, i.e. every client
+// accepted any certificate, so anyone able to answer for the server_url could read the
+// node's traffic and its shared token (issues #118). A self-signed setup must now opt out
+// explicitly with tls_reject_unauthorized: false / TLS_REJECT_UNAUTHORIZED=false.
+tls_reject_unauthorized: true,
 };
 
 function loadConfig(): ClientConfig {
