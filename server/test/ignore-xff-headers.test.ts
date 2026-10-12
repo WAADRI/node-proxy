@@ -32,7 +32,9 @@ const http = fs.readFileSync(path.join(ROOT, 'proxy-http.ts'), 'utf8');
 test('the socket peer is the only source of the client IP', () => {
   assert.ok(!/x-forwarded-for/.test(ws), 'ws-server must not read X-Forwarded-For');
   assert.ok(!/x-real-ip/.test(ws), 'ws-server must not read X-Real-IP');
-  assert.ok(/const clientIp = req\.socket\.remoteAddress \|\| '';/.test(ws), 'ws-server must use the socket peer');
+  assert.ok(/req\.socket\.remoteAddress \|\| ''/.test(ws), 'ws-server must use the socket peer');
+  const registration = ws.slice(ws.indexOf('const rawPeer'), ws.indexOf('// Create StreamMux'));
+  assert.ok(/::ffff:/.test(registration) && /slice\(7\)/.test(registration), 'ws-server must strip the IPv4-mapped prefix, like proxy-http does (issue #206)');
   assert.ok(!/x-forwarded-for/.test(http), 'proxy-http must not read X-Forwarded-For');
   const fn = http.slice(http.indexOf('function clientIp('), http.indexOf('}', http.indexOf('function clientIp(')));
   assert.ok(/return norm\(req\.socket && req\.socket\.remoteAddress\);/.test(fn), 'proxy-http must use the socket peer');
