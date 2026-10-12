@@ -92,13 +92,12 @@ export function setupClientWebSocket(
     const ws = rawWs as WsWithMux;
     let clientId: string | null = null;
     let authenticated = false;
-    // Read the real client IP from nginx proxy headers when available;
-    // otherwise fall back to the raw TCP connection address (Docker gateway / nginx IP).
-    const clientIp =
-      (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
-      (req.headers['x-real-ip'] as string | undefined) ||
-      req.socket.remoteAddress ||
-      '';
+    // The client IP is the RAW TCP peer, never a client-supplied header. Trusting
+    // X-Forwarded-For / X-Real-IP unconditionally let any client choose the address
+    // recorded for it (and shown in the panel) by sending a header, and it
+    // contradicted the panel own `trust proxy = false` (issue #117). A deployment
+    // that really sits behind a reverse proxy needs an explicit opt-in, not a guess.
+    const clientIp = req.socket.remoteAddress || '';
 
     // Create StreamMux for this client
     const mux = new StreamMux(ws, {
