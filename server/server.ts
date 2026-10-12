@@ -147,10 +147,15 @@ authManager.setClientIdResolver((password: string) => {
   const DEFAULT_TOKENS = ['node-proxy-default-token', 'change-me', 'changeme', 'secret'];
   const configuredToken = String((config.auth && config.auth.token) || '');
   if (DEFAULT_TOKENS.includes(configuredToken) && process.env.ALLOW_DEFAULT_TOKEN !== '1') {
-    logger.error(
+    const message =
       'auth.token is still the shipped default (' + configuredToken + '). Set your own token in ' +
-        'config.yaml or via NP_AUTH_TOKEN/--auth-token; set ALLOW_DEFAULT_TOKEN=1 to override for a throwaway setup.'
-    );
+      'config.yaml or via NP_AUTH_TOKEN/--auth-token; set ALLOW_DEFAULT_TOKEN=1 to override for a throwaway setup.';
+    logger.error(message);
+    // Belt and braces: the logger writes through an async file destination, and this process is
+    // about to exit. Losing THIS line is what makes the refusal confusing (exit 1 with no
+    // explanation), so also write it straight to stderr, which the operator always sees
+    // (issue #199, non-blocking usability item).
+    process.stderr.write('Node-Proxy: ' + message + '\n');
     process.exit(1);
   }
 }
@@ -170,11 +175,13 @@ authManager.setClientIdResolver((password: string) => {
   const { findShippedCredentialDefaults } = require('./lib/default-credentials.ts');
   const offenders = findShippedCredentialDefaults(config);
   if (offenders.length > 0 && !allowed) {
-    logger.error(
+    const message =
       'Shipped default credentials are still in use: ' + offenders.join(', ') +
-        '. Set your own in config.yaml (auth.web.password / auth.proxy.password), or set ' +
-        'ALLOW_DEFAULT_CREDENTIALS=1 to override for a throwaway setup.'
-    );
+      '. Set your own in config.yaml (auth.web.password / auth.proxy.password), or set ' +
+      'ALLOW_DEFAULT_CREDENTIALS=1 to override for a throwaway setup.';
+    logger.error(message);
+    // Same reasoning as the token guard above: this line must survive process.exit().
+    process.stderr.write('Node-Proxy: ' + message + '\n');
     process.exit(1);
   }
 }
