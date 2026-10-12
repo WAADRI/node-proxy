@@ -13,6 +13,7 @@ import type { ClientManager, ClientNode } from './client-manager.ts';
 import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
 import type { ProxyRoute } from './auth.ts';
+import { watchSni } from './tls-sni.ts';
 
 interface AuthManagerLike {
   config: { auth: { proxy: { enabled: boolean } } };
@@ -387,6 +388,19 @@ function handleTCPConnect(
       port,
     });
 
+    // Issue #107 only covered the HTTP CONNECT path, so SOCKS5 tunnels never got the
+    // ClientHello tap and their request-log entry could never name the site the client
+    // visited (the panel showed an empty SNI for every SOCKS5 row). Same shared probe as
+    // proxy-http.ts: it only ADDS a 'data' listener, so the tunnel pipe is untouched.
+    watchSni(
+      socket as unknown as Parameters<typeof watchSni>[0],
+      (name: string) => {
+        const record = clientManager.pendingTunnels.get(tunnelId);
+        if (record) record.sni = name;
+      },
+      null
+    );
+
     clientManager.trackTunnel(client.id);
 
     // Tunnel lifecycle (ready/data/close/error) is handled centrally in ws-server
@@ -432,6 +446,15 @@ function handleTCPConnect(
       host,
       port,
     });
+    // Same tap as the mux path above (issue #107 follow-up for SOCKS5).
+    watchSni(
+      socket as unknown as Parameters<typeof watchSni>[0],
+      (name: string) => {
+        const record = clientManager.pendingTunnels.get(tunnelId);
+        if (record) record.sni = name;
+      },
+      null
+    );
     client.pendingTunnels.add(tunnelId);
     clientManager.trackTunnel(client.id);
   }
