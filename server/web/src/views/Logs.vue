@@ -28,11 +28,17 @@ function fmtTime(ts) {
 
 function prettyUrl(u) {
   if (!u) return '-';
+  const s = String(u);
+  // Tunnel entries are recorded as 'host:port' (see recordTunnelLog in ws-server.ts), which is NOT
+  // a URL: new URL('gdtv-api.gdtv.cn:443') reads the host as the SCHEME and '443' as the path, so
+  // url.host was empty and this column displayed nothing but the port (and threw outright for a
+  // bare IP such as '129.80.7.65:443'). Only rewrite when an explicit scheme:// is present.
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) return s;
   try {
-    const url = new URL(u);
+    const url = new URL(s);
     return url.host + url.pathname + url.search;
   } catch (_) {
-    return u;
+    return s;
   }
 }
 
