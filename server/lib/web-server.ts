@@ -283,8 +283,17 @@ function createWebServer(
     }
     const data = settingsManager.list();
     const editable: Record<string, boolean> = {};
-    for (const g of Object.keys(SETTINGS_PERM)) editable[g] = canEditSettings(req.user, g);
-    res.json({ success: true, ...data, editable });
+    // Filter by the SAME predicate that gates edits: the response used to carry every
+    // group for every authenticated user, so a viewer could read the routing, circuit
+    // breaker, bandwidth, client and cache configuration (issue #117). A group the
+    // caller cannot act on is simply not theirs to read either.
+    const visible: Record<string, unknown> = { ...(data as Record<string, unknown>) };
+    for (const g of Object.keys(SETTINGS_PERM)) {
+      const allowed = canEditSettings(req.user, g);
+      editable[g] = allowed;
+      if (!allowed) delete visible[g];
+    }
+    res.json({ success: true, ...visible, editable });
   });
 
   api.post('/settings/:group', (req: WebRequest, res: HttpResponse) => {
