@@ -35,5 +35,10 @@ test('get() expires entries instead of waiting for the cleanup timer', () => {
 });
 
 test('the default TTL still falls back to a positive number', () => {
-  assert.ok(/this\.defaultTTL = config\.cache\?\.default_ttl \|\| 5000/.test(src), 'a missing or zero default_ttl must not disable expiry');
+  // The constructor was hardened further (see cache-settings-ttl): it validates the
+  // configured value instead of relying on ||, so the assertion matches that form.
+  assert.ok(
+    /Number\.isFinite\(configuredTTL\) && configuredTTL > 0 \? configuredTTL : 5000/.test(src),
+    'a missing or zero default_ttl must not disable expiry'
+  );
 });
