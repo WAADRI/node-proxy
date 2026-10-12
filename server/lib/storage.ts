@@ -274,18 +274,23 @@ class Storage {
       if (!stmt) return [];
       stmt.bind([clientId, limit]);
       const rows: Record<string, unknown>[] = [];
-      while (stmt.step()) {
-        const row = stmt.getAsObject();
-        if (typeof row.data === 'string') {
-          try {
-            row.data = JSON.parse(row.data);
-          } catch (_) {
-            row.data = {};
+      // free() in a finally: if step()/getAsObject() throws, the old code skipped it
+      // and leaked the WASM statement until the process exited (issue #122).
+      try {
+        while (stmt.step()) {
+          const row = stmt.getAsObject();
+          if (typeof row.data === 'string') {
+            try {
+              row.data = JSON.parse(row.data);
+            } catch (_) {
+              row.data = {};
+            }
           }
+          rows.push(row);
         }
-        rows.push(row);
+      } finally {
+        stmt.free();
       }
-      stmt.free();
       return rows;
     } catch (_) {
       return [];
@@ -302,10 +307,21 @@ class Storage {
       const periodStart = Math.floor(now / 60000) * 60000;
 
       // Check if row exists
-      const existing = this.db.exec(
-        `SELECT id FROM traffic_stats WHERE client_id = '${clientId.replace(/'/g, "''")}' AND period_start = ${periodStart}`
-      );
-      if (existing.length > 0 && existing[0].values.length > 0) {
+      // Bound parameters instead of string interpolation: exec() cannot take them, so
+      // this used quote-doubling for the id and a RAW numeric interpolation for the
+      // period - and the surrounding UPDATE/INSERT already bind. prepare()+bind() makes
+      // both concerns disappear at once (issue #122).
+      const existing = this._prepare('SELECT id FROM traffic_stats WHERE client_id = ? AND period_start = ?');
+      let hasRow = false;
+      if (existing) {
+        try {
+          existing.bind([clientId, periodStart]);
+          hasRow = existing.step();
+        } finally {
+          existing.free();
+        }
+      }
+      if (hasRow) {
         this.db.run(
           `UPDATE traffic_stats SET bytes_sent = bytes_sent + ?, bytes_received = bytes_received + ?, requests_count = requests_count + ? WHERE client_id = ? AND period_start = ?`,
           [bytesSent, bytesReceived, count, clientId, periodStart]
@@ -325,12 +341,22 @@ class Storage {
   getTrafficStats(clientId: string, since?: number): TrafficSummary {
     if (!this.available || !this.db) return { bytesSent: 0, bytesReceived: 0, requests: 0 };
     try {
-      const result = this.db.exec(
-        `SELECT COALESCE(SUM(bytes_sent),0) as bs, COALESCE(SUM(bytes_received),0) as br, COALESCE(SUM(requests_count),0) as rc FROM traffic_stats WHERE client_id = '${clientId.replace(/'/g, "''")}' AND period_start >= ${since || 0}`
+      // Bound parameters, like the writers above: exec() cannot take them, so this
+      // relied on quote-doubling plus a raw numeric interpolation for `since` (#122).
+      const stmt = this._prepare(
+        'SELECT COALESCE(SUM(bytes_sent),0) as bs, COALESCE(SUM(bytes_received),0) as br, COALESCE(SUM(requests_count),0) as rc FROM traffic_stats WHERE client_id = ? AND period_start >= ?'
       );
-      if (result.length > 0 && result[0].values.length > 0) {
-        const vals = result[0].values[0];
-        return { bytesSent: num(vals[0]), bytesReceived: num(vals[1]), requests: num(vals[2]) };
+      if (stmt) {
+        try {
+          stmt.bind([clientId, since || 0]);
+          if (stmt.step()) {
+            // Named columns (the SQL already aliases them) instead of positional values.
+            const row = stmt.getAsObject();
+            return { bytesSent: num(row.bs), bytesReceived: num(row.br), requests: num(row.rc) };
+          }
+        } finally {
+          stmt.free();
+        }
       }
       return { bytesSent: 0, bytesReceived: 0, requests: 0 };
     } catch (err) {
@@ -349,20 +375,28 @@ class Storage {
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const since = startOfToday - (safeDays - 1) * 86400000;
     try {
-      const where = clientId
-        ? `WHERE client_id = '${clientId.replace(/'/g, "''")}' AND period_start >= ${since}`
-        : `WHERE period_start >= ${since}`;
-      const result = this.db.exec(
-        `SELECT period_start, bytes_sent, bytes_received FROM traffic_stats ${where}`
-      );
+      // The filter is a CONSTANT fragment plus bound values now: exec() could not bind,
+      // so this built the clause with quote-doubling and a raw numeric interpolation.
+      // (since is derived from the clamped days here, so it was not reachable - this is
+      // defence in depth, and it removes the last string-built query in this file.)
+      const where = clientId ? 'WHERE client_id = ? AND period_start >= ?' : 'WHERE period_start >= ?';
+      const params: (string | number)[] = clientId ? [clientId, since] : [since];
+      const stmt = this._prepare(`SELECT period_start, bytes_sent, bytes_received FROM traffic_stats ${where}`);
       const byDay: Record<string, { bytesSent: number; bytesReceived: number }> = {};
-      if (result.length > 0 && result[0].values) {
-        for (const row of result[0].values) {
-          const d = new Date(num(row[0]));
-          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-          if (!byDay[key]) byDay[key] = { bytesSent: 0, bytesReceived: 0 };
-          byDay[key].bytesSent += num(row[1]);
-          byDay[key].bytesReceived += num(row[2]);
+      if (stmt) {
+        try {
+          stmt.bind(params);
+          while (stmt.step()) {
+            // Read by column name, so a change in SELECT order cannot silently swap them.
+            const row = stmt.getAsObject();
+            const d = new Date(num(row.period_start));
+            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            if (!byDay[key]) byDay[key] = { bytesSent: 0, bytesReceived: 0 };
+            byDay[key].bytesSent += num(row.bytes_sent);
+            byDay[key].bytesReceived += num(row.bytes_received);
+          }
+        } finally {
+          stmt.free();
         }
       }
       // Fill in every day (including empty ones) oldest -> newest
@@ -469,7 +503,10 @@ class Storage {
     if (!this.available || !this.db) return;
     try {
       this.db.run('DELETE FROM config_overrides WHERE key = ?', [key]);
-      this._save();
+      // Batching: _save() exports and rewrites the WHOLE database synchronously, so
+      // doing it on every metadata edit blocked the event loop as the DB grew (issue
+      // #122). Mark it dirty; the periodic writer persists it within its interval.
+      this._dirty = true;
     } catch (_) {
       // ignore
     }
@@ -512,7 +549,10 @@ class Storage {
           now,
         ]
       );
-      this._save();
+      // Batching: _save() exports and rewrites the WHOLE database synchronously, so
+      // doing it on every metadata edit blocked the event loop as the DB grew (issue
+      // #122). Mark it dirty; the periodic writer persists it within its interval.
+      this._dirty = true;
     } catch (_) {
       // ignore
     }
@@ -525,9 +565,10 @@ class Storage {
       if (!stmt) return null;
       stmt.bind([clientId]);
       if (stmt.step()) {
-        const row = stmt.getAsObject();
-        stmt.free();
-        const parsed: ClientMetaRow = {
+        // Same as above: free() must run even if reading the row throws.
+        try {
+          const row = stmt.getAsObject();
+          const parsed: ClientMetaRow = {
           client_id: String(row.client_id || clientId),
           tags: parseJsonArray(row.tags),
           alias: row.alias != null ? String(row.alias) : null,
@@ -538,8 +579,11 @@ class Storage {
           group: row.grp != null && String(row.grp) !== '' ? String(row.grp) : null,
           created_at: num(row.created_at),
           updated_at: num(row.updated_at),
-        };
-        return parsed;
+          };
+          return parsed;
+        } finally {
+          stmt.free();
+        }
       }
       stmt.free();
       return null;
