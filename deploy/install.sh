@@ -121,6 +121,27 @@ cd "$INSTALL_DIR"
 
 echo "==> 下载二进制 ${ASSET} ..."
 fetch_asset "${INSTALL_DIR}/node-proxy-client.tmp"
+# --- verify the download BEFORE it becomes a root-run service -----------------
+# This repository does not publish a checksum or signature yet, so verification can only
+# happen when the caller supplies the expected digest: CLIENT_SHA256=<hex>. Without it we
+# say so loudly instead of silently installing an unverified binary - and we do NOT fail
+# closed, because that would break every existing installation on upgrade (issue #121).
+if [[ -n "${CLIENT_SHA256:-}" ]]; then
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "${INSTALL_DIR}/node-proxy-client.tmp" | awk '{print $1}')"
+  else
+    actual="$(shasum -a 256 "${INSTALL_DIR}/node-proxy-client.tmp" | awk '{print $1}')"
+  fi
+  if [[ "$actual" != "$CLIENT_SHA256" ]]; then
+    echo "SHA-256 mismatch: expected ${CLIENT_SHA256}, got ${actual} - refusing to install." >&2
+    rm -f "${INSTALL_DIR}/node-proxy-client.tmp"
+    exit 1
+  fi
+  echo "SHA-256 verified: ${actual}"
+else
+  echo "WARNING: CLIENT_SHA256 is not set - the downloaded binary is NOT verified." >&2
+  echo "         Provide CLIENT_SHA256=<sha256 of the download> to verify it before installation." >&2
+fi
 chmod +x "${INSTALL_DIR}/node-proxy-client.tmp"
 mv -f "${INSTALL_DIR}/node-proxy-client.tmp" "${INSTALL_DIR}/node-proxy-client"
 

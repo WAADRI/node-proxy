@@ -34,3 +34,10 @@ README.md
 # Server lockfile stays out; the web panel ships its own lockfile so the
 # Docker build can run a reproducible `npm ci` for it
 /package-lock.json
+
+# The LIVE config (may hold real secrets: auth token, proxy and panel credentials). The
+# compose file mounts it read-only at runtime, so the image never needs this copy - while
+# baking it both leaked a local config into the image and made later edits to the file
+# silently ineffective, because the copy inside the image won (issue #121).
+# config.yaml.example ships the template instead.
+config.yaml
