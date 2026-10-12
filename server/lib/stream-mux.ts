@@ -65,6 +65,10 @@ export type StreamState = (typeof STREAM_STATE)[keyof typeof STREAM_STATE];
 export const DEFAULT_INITIAL_WINDOW = 65536; // 64KB per stream
 export const DEFAULT_CONNECTION_WINDOW = 1048576; // 1MB total
 export const MAX_FRAME_SIZE = 16384; // 16KB max frame payload
+// A peer must not be able to open streams without limit: `streams` is only pruned when a
+// stream ends, so an endless opener grows this.streams AND _priorityQueue until the
+// process dies (issue #119). 512 is far above any legitimate concurrency.
+export const MAX_CONCURRENT_STREAMS = 512;
 export const DEFAULT_PRIORITY = 128;
 
 export interface Frame {
@@ -410,6 +414,10 @@ export class StreamMux {
    */
   createStream(priority: number = DEFAULT_PRIORITY): Stream | null {
     if (this._closed) return null;
+    if (this.streams.size >= MAX_CONCURRENT_STREAMS) {
+      this.logger?.debug({ open: this.streams.size }, 'Refusing stream: too many open streams');
+      return null;
+    }
     const id = this._nextId;
     this._nextId += 2; // Client-initiated streams use odd IDs
 
