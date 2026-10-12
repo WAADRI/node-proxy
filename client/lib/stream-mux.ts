@@ -66,7 +66,7 @@ const MAX_FRAME_SIZE = 16384; // 16KB max frame payload
 // A peer must not be able to open streams without limit: `streams` is only pruned when a
 // stream ends, so an endless opener grows this.streams AND _priorityQueue until the
 // process dies (issue #119). 512 is far above any legitimate concurrency.
-export const MAX_CONCURRENT_STREAMS = 512;
+const MAX_CONCURRENT_STREAMS = 512;
 const DEFAULT_PRIORITY = 128;
 
 // =============================================================================

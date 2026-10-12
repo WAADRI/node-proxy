@@ -29,7 +29,7 @@ const ROOT = path.join(__dirname, '..', '..');
 test('both mux copies cap the number of open streams', () => {
   for (const rel of ['server/lib/stream-mux.ts', 'client/lib/stream-mux.ts']) {
     const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
-    assert.ok(/export const MAX_CONCURRENT_STREAMS = 512;/.test(src), rel + ' must define the cap');
+    assert.ok(/const MAX_CONCURRENT_STREAMS = 512;/.test(src), rel + ' must define the cap');
     const cap = src.indexOf('this.streams.size >= MAX_CONCURRENT_STREAMS');
     const set = src.indexOf('this.streams.set(id, stream);');
     assert.ok(cap > 0, rel + ' must check the cap');
