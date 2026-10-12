@@ -39,3 +39,20 @@ test('shipped credential defaults stop startup unless explicitly allowed', () =>
   const listen = src.indexOf('httpServer.listen(');
   assert.ok(guard > 0 && listen > 0 && guard < listen, 'the guard must run BEFORE the server starts listening');
 });
+
+test('the guard indexes the config through the right path segments (issue #199)', () => {
+  // A source-invariant test passed while the guard was dead: 'auth.web.password'.split('.')
+  // yields THREE segments, and [section, key] silently took 'auth' as the section, so
+  // config.auth['auth'] was undefined and no configuration could ever trip the guard.
+  // Pin the destructuring itself, which is the part that was wrong.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.ts'), 'utf8');
+  assert.ok(
+    /const \[, section, key\] = path\.split\('\.'\);/.test(src),
+    'the path must be split into [root, section, key] and the root segment skipped'
+  );
+  assert.ok(
+    !/const \[section, key\] = path\.split\('\.'\);/.test(src),
+    'taking the root segment as the section makes the guard dead code'
+  );
+  assert.ok(/\.auth\?\.\[section\]/.test(src), 'and the section must be used to index config.auth');
+});
