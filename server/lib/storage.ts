@@ -375,20 +375,28 @@ class Storage {
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const since = startOfToday - (safeDays - 1) * 86400000;
     try {
-      const where = clientId
-        ? `WHERE client_id = '${clientId.replace(/'/g, "''")}' AND period_start >= ${since}`
-        : `WHERE period_start >= ${since}`;
-      const result = this.db.exec(
-        `SELECT period_start, bytes_sent, bytes_received FROM traffic_stats ${where}`
-      );
+      // The filter is a CONSTANT fragment plus bound values now: exec() could not bind,
+      // so this built the clause with quote-doubling and a raw numeric interpolation.
+      // (since is derived from the clamped days here, so it was not reachable - this is
+      // defence in depth, and it removes the last string-built query in this file.)
+      const where = clientId ? 'WHERE client_id = ? AND period_start >= ?' : 'WHERE period_start >= ?';
+      const params: (string | number)[] = clientId ? [clientId, since] : [since];
+      const stmt = this._prepare(`SELECT period_start, bytes_sent, bytes_received FROM traffic_stats ${where}`);
       const byDay: Record<string, { bytesSent: number; bytesReceived: number }> = {};
-      if (result.length > 0 && result[0].values) {
-        for (const row of result[0].values) {
-          const d = new Date(num(row[0]));
-          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-          if (!byDay[key]) byDay[key] = { bytesSent: 0, bytesReceived: 0 };
-          byDay[key].bytesSent += num(row[1]);
-          byDay[key].bytesReceived += num(row[2]);
+      if (stmt) {
+        try {
+          stmt.bind(params);
+          while (stmt.step()) {
+            // Read by column name, so a change in SELECT order cannot silently swap them.
+            const row = stmt.getAsObject();
+            const d = new Date(num(row.period_start));
+            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            if (!byDay[key]) byDay[key] = { bytesSent: 0, bytesReceived: 0 };
+            byDay[key].bytesSent += num(row.bytes_sent);
+            byDay[key].bytesReceived += num(row.bytes_received);
+          }
+        } finally {
+          stmt.free();
         }
       }
       // Fill in every day (including empty ones) oldest -> newest
