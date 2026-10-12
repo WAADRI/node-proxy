@@ -302,10 +302,21 @@ class Storage {
       const periodStart = Math.floor(now / 60000) * 60000;
 
       // Check if row exists
-      const existing = this.db.exec(
-        `SELECT id FROM traffic_stats WHERE client_id = '${clientId.replace(/'/g, "''")}' AND period_start = ${periodStart}`
-      );
-      if (existing.length > 0 && existing[0].values.length > 0) {
+      // Bound parameters instead of string interpolation: exec() cannot take them, so
+      // this used quote-doubling for the id and a RAW numeric interpolation for the
+      // period - and the surrounding UPDATE/INSERT already bind. prepare()+bind() makes
+      // both concerns disappear at once (issue #122).
+      const existing = this._prepare('SELECT id FROM traffic_stats WHERE client_id = ? AND period_start = ?');
+      let hasRow = false;
+      if (existing) {
+        try {
+          existing.bind([clientId, periodStart]);
+          hasRow = existing.step();
+        } finally {
+          existing.free();
+        }
+      }
+      if (hasRow) {
         this.db.run(
           `UPDATE traffic_stats SET bytes_sent = bytes_sent + ?, bytes_received = bytes_received + ?, requests_count = requests_count + ? WHERE client_id = ? AND period_start = ?`,
           [bytesSent, bytesReceived, count, clientId, periodStart]
