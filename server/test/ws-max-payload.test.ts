@@ -4,7 +4,7 @@
 // `new WebSocketServer({ noServer: true })` sets no maxPayload, so the ws library happily
 // buffers a frame of any size in memory before the application sees it: a single peer
 // could exhaust the process with one message, before authentication even matters. The cap
-// matches the mux MAX_FRAME_SIZE (16 MiB) so legitimate batched frames still fit.
+// is 1024 x the mux MAX_FRAME_SIZE (which is 16 KiB), so a full batch of maximum-size frames still fits.
 //
 // Both modules need a full config to start, so this is a source-level invariant, like the
 // other tests in this suite.
@@ -36,5 +36,5 @@ test('every WebSocketServer sets maxPayload', () => {
     assert.ok(capped === opens, name + ' must cap ALL of them, found ' + capped + '/' + opens);
     assert.ok(!/new WebSocketServer\(\{ noServer: true \}\)/.test(src), name + ' must not leave an uncapped server');
   }
-  assert.ok(/maxPayload: 16 \* 1024 \* 1024/.test(wsServer), 'the node gateway cap must match MAX_FRAME_SIZE');
+  assert.ok(/maxPayload: 16 \* 1024 \* 1024/.test(wsServer), 'the node gateway cap must hold a full batch of maximum-size frames');
 });
