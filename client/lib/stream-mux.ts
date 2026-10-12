@@ -818,6 +818,26 @@ this.ws.send(sendData, { binary: true }, (err?: Error) => {
   _handleFrame(frame: Frame): void {
     const { type, streamId, flags, payload } = frame;
 
+    // Account for inbound DATA against the CONNECTION receive window, before any stream-state
+    // check. The send path debits connectionSendWindow for every DATA batch it emits
+    // (_flushSendBuffer); the receive path credited the per-stream window but never the
+    // connection-level one, so connectionRecvWindow never fell below half, _checkConnectionWindow
+    // never sent a connection WINDOW_UPDATE, and the peer's send window was debited without ever
+    // being credited back. Under load it drained to zero, the flush stalled on the first DATA
+    // batch, and everything queued behind it - including the heartbeat that shares this mux -
+    // stopped. The node then looked unhealthy and flapped between the breaker's open and
+    // half-open states forever (regression from the #189/#191 flow-control change).
+    // Only DATA is flow-controlled, exactly as on the send side. Connection-level accounting must
+    // count every DATA payload regardless of stream id (a stream may legitimately be numbered 0),
+    // and must never turn the window into NaN if a payload is not a buffer.
+    if (type === FRAME_TYPE.DATA) {
+      const dataBytes = Buffer.isBuffer(payload) ? payload.length : 0;
+      if (dataBytes > 0) {
+        this.connectionRecvWindow -= dataBytes;
+        this._checkConnectionWindow();
+      }
+    }
+
     // Connection-level frames (streamId = 0)
     if (streamId === 0) {
       this._handleConnectionFrame(type, payload);

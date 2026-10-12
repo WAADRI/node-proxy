@@ -75,9 +75,10 @@ function encodeJsonFrame(type: number, streamId: number, obj: unknown, flags = 0
   return encodeFrame(type, streamId, Buffer.from(JSON.stringify(obj), 'utf8'), flags);
 }
 
-type StreamLike = { sendData(data: Buffer, endStream: boolean): boolean };
+type StreamLike = { id: number; sendData(data: Buffer, endStream: boolean): boolean };
 type MuxLike = {
   connectionSendWindow: number;
+  connectionRecvWindow: number;
   createStream(): StreamLike | null;
   destroy?: () => void;
 };
@@ -144,6 +145,93 @@ test('the connection window is credited, debited, and drives a stall that resume
     assert.ok(
       socket.bytesSent() > sentBefore,
       'a WINDOW_UPDATE must resume the flush the exhausted window stopped'
+    );
+  } finally {
+    if (typeof mux.destroy === 'function') mux.destroy();
+  }
+});
+
+test('inbound DATA is credited back to the peer, so the connection window cannot drain', async () => {
+  // The regression this covers: the send path debited connectionSendWindow for every DATA batch,
+  // but the receive path never debited connectionRecvWindow - so _checkConnectionWindow's
+  // "below half" test could never become true, no connection WINDOW_UPDATE was ever sent, and the
+  // peer's window drained to zero under load. The flush then stalled on a DATA batch and the
+  // heartbeat queued behind it, which is what made a busy node look unhealthy and flap between
+  // the breaker's open and half-open states.
+  const { StreamMux, FRAME_TYPE } = await loadMux();
+  const socket = new FakeSocket();
+  const mux = new StreamMux(socket, { connectionWindow: 1024 });
+
+  try {
+    const stream = mux.createStream();
+    assert.ok(stream, 'a stream must be created');
+
+    // Count connection-level (stream 0) frames of a given type in everything sent so far. The
+    // mux batches frames ([2B count][frame]...), so a raw byte-length assertion proves nothing:
+    // delivering DATA to a stream the peer has not opened also makes the mux send a control frame
+    // (RST_STREAM). Only counting the WINDOW_UPDATE that carries the credit is decisive - with the
+    // bug, zero of them are ever sent.
+    function connectionFrames(sent: Buffer[], type: number): number {
+      let n = 0;
+      for (const buf of sent) {
+        const count = buf.length >= 2 ? buf.readUInt16BE(0) : 0;
+        const frames: Buffer[] = [];
+        if (count >= 2) {
+          let off = 2;
+          while (off + FRAME_HEADER_SIZE <= buf.length && frames.length < count) {
+            const len = buf.readUInt32BE(off);
+            frames.push(buf.subarray(off, off + FRAME_HEADER_SIZE + len));
+            off += FRAME_HEADER_SIZE + len;
+          }
+        } else if (buf.length >= FRAME_HEADER_SIZE) {
+          frames.push(buf);
+        }
+        for (const f of frames) {
+          if (f[4] === type && f.readUInt32BE(5) === 0) n++;
+        }
+      }
+      return n;
+    }
+
+    // The threshold is derived from the connection window and the mux also advertises that window
+    // at start-up, so take the live value as the baseline. Frames must stay far below the mux's
+    // MAX_FRAME_SIZE or the inbound parse drops them (a 1 MiB frame never reached the accounting).
+    const full = mux.connectionRecvWindow;
+    const frame = Buffer.alloc(512, 0x41);
+    const attempts = Math.ceil(full / frame.length) + 5;
+    const beforeCredit = connectionFrames(socket.sent, FRAME_TYPE.WINDOW_UPDATE);
+    let credited = beforeCredit;
+    for (let i = 0; i < attempts && credited === beforeCredit; i++) {
+      socket.deliver(encodeFrame(FRAME_TYPE.DATA, stream.id, frame));
+      await settle();
+      credited = connectionFrames(socket.sent, FRAME_TYPE.WINDOW_UPDATE);
+    }
+    assert.ok(
+      credited > beforeCredit,
+      'consuming inbound DATA must eventually send a connection WINDOW_UPDATE, or the peer never learns it can continue'
+    );
+    // The replenish uses the mux's own constant (see the note in the PR: _checkConnectionWindow
+    // compares against DEFAULT_CONNECTION_WINDOW rather than the instance option), so assert the
+    // property that matters rather than one exact number.
+    assert.ok(
+      mux.connectionRecvWindow > full / 2,
+      'and the receive window must be restored well above half, not left to drain'
+    );
+
+    // Connection-level frames are not data and must not be accounted as such.
+    const afterCredit = connectionFrames(socket.sent, FRAME_TYPE.WINDOW_UPDATE);
+    const afterCreditWindow = mux.connectionRecvWindow;
+    socket.deliver(encodeJsonFrame(FRAME_TYPE.WINDOW_UPDATE, 0, { increment: 16 }));
+    await settle();
+    assert.equal(
+      mux.connectionRecvWindow,
+      afterCreditWindow,
+      'a control frame must not move the receive window'
+    );
+    assert.equal(
+      connectionFrames(socket.sent, FRAME_TYPE.WINDOW_UPDATE),
+      afterCredit,
+      'a control frame must not be treated as data and trigger another credit'
     );
   } finally {
     if (typeof mux.destroy === 'function') mux.destroy();
