@@ -65,6 +65,15 @@ export type StreamState = (typeof STREAM_STATE)[keyof typeof STREAM_STATE];
 export const DEFAULT_INITIAL_WINDOW = 65536; // 64KB per stream
 export const DEFAULT_CONNECTION_WINDOW = 1048576; // 1MB total
 export const MAX_FRAME_SIZE = 16384; // 16KB max frame payload
+// Outbound backpressure bounds. Every frame ends up in the ws library own send buffer and
+// nothing ever looked at how much is already queued, so a slow peer could make the process
+// hold an arbitrarily large pending buffer (issue #119). Above the high-water mark the flush
+// is deferred (same "put it back" pattern as the connection-window check); once the deferral
+// budget is spent we send anyway, so a peer that stays slow degrades to the previous
+// behaviour instead of stalling forever.
+const OUTBOUND_HIGH_WATER = 4 * 1024 * 1024;
+const MAX_DEFERRALS = 100;
+const DEFERRAL_RETRY_MS = 20;
 export const DEFAULT_PRIORITY = 128;
 
 export interface Frame {
@@ -607,6 +616,10 @@ export class StreamMux {
     }
   }
 
+  // State for outbound backpressure (see OUTBOUND_HIGH_WATER).
+  private _deferrals = 0;
+  private _backpressureTimer: ReturnType<typeof setTimeout> | null = null;
+
   _flushSendBuffer(): void {
     if (this._sendBuffer.length === 0) {
       this._sending = false;
@@ -637,6 +650,27 @@ export class StreamMux {
         return;
       }
 
+      // Backpressure: do not keep feeding the ws buffer without bound. Same shape as the
+      // connection-window check above - put the batch back and stop this pass - plus a timer
+      // to resume, and a bounded number of deferrals so this can never stall permanently.
+      const buffered = (this.ws as { bufferedAmount?: number }).bufferedAmount ?? 0;
+      if (buffered > OUTBOUND_HIGH_WATER && this._deferrals < MAX_DEFERRALS) {
+        this._deferrals++;
+        this._sendBuffer.unshift(...batch);
+        this._sending = false;
+        if (!this._backpressureTimer) {
+          this._backpressureTimer = setTimeout(() => {
+            this._backpressureTimer = null;
+            if (!this._sending && this._sendBuffer.length > 0) {
+              this._sending = true;
+              this._flushSendBuffer();
+            }
+          }, DEFERRAL_RETRY_MS);
+          if (typeof this._backpressureTimer.unref === 'function') this._backpressureTimer.unref();
+        }
+        return;
+      }
+      this._deferrals = 0; // a pass that actually sends resets the budget
       this.ws.send(sendData, { binary: true }, (err?: Error) => {
         if (err) {
           this.logger?.error({ error: err.message }, 'StreamMux send error');
