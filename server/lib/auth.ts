@@ -12,6 +12,13 @@ import type { AppLogger } from './logger.ts';
 import type { ProxyPasswordEntry } from './proxy-passwords.ts';
 import type { RoutingStrategy } from './router.ts';
 import { createHash, timingSafeEqual } from 'crypto';
+// Default import, deliberately NOT a namespace import. This repo runs .ts directly through
+// Node's type stripping, so a namespace import is handed to Node as a REAL ESM namespace
+// import of a CJS package: bcryptjs's named exports are not statically detectable, so the
+// namespace carries only `default`/`module.exports`, bcrypt.hashSync is undefined, and every
+// login threw `TypeError: bcrypt.hashSync is not a function` (measured: namespace.hashSync =
+// undefined, namespace.default.hashSync = function).
+import bcrypt from 'bcryptjs';
 
 export type RoleName = 'admin' | 'operator' | 'viewer';
 
@@ -31,6 +38,15 @@ function safeEqual(a: string, b: string): boolean {
   const ha = createHash('sha256').update(a).digest();
   const hb = createHash('sha256').update(b).digest();
   return timingSafeEqual(ha, hb);
+}
+// A bcrypt hash is recognisable by its $2a/$2b/$2y prefix, which is also how legacy
+// plaintext records are told apart - so no offline migration is needed (issue #117).
+function isBcryptHash(value: string): boolean {
+  return /^\$2[aby]\$/.test(String(value || ''));
+}
+
+function hashPassword(plain: string): string {
+  return bcrypt.hashSync(plain, 10);
 }
 export const ROLES: Record<RoleName, { permissions: string[] }> = {
   admin: {
@@ -208,7 +224,7 @@ export class AuthManager {
     const wasEnabledAdmin = user.enabled && user.role === 'admin';
     const enabledAdmins = [...this.users.values()].filter((u) => u.enabled && u.role === 'admin').length;
     if (wasEnabledAdmin && (demotes || disables) && enabledAdmins <= 1) return false;
-    if (updates.password) user.password = updates.password;
+    if (updates.password) user.password = hashPassword(updates.password);
     if (updates.role && VALID_ROLES.includes(updates.role as RoleName)) user.role = updates.role as RoleName;
     if (updates.enabled !== undefined) user.enabled = updates.enabled;
     return true;
@@ -245,7 +261,12 @@ export class AuthManager {
     if (!webAuth.enabled) return true;
     const user = this.users.get(username);
     if (!user || !user.enabled) return false;
-    return safeEqual(user.password, password);
+    if (isBcryptHash(user.password)) return bcrypt.compareSync(password, user.password);
+    // Legacy plaintext record: verify, then upgrade in place so the plaintext does
+    // not survive the first successful login (issue #117).
+    if (!safeEqual(user.password, password)) return false;
+    user.password = hashPassword(password);
+    return true;
   }
 
   generateWebToken(username: string): string {
@@ -420,7 +441,12 @@ export class AuthManager {
     // Panel-managed extra passwords: only the password matters.
     if (this.proxyPasswordProvider) {
       for (const entry of this.proxyPasswordProvider()) {
-        if (entry.enabled && safeEqual(entry.password, password)) {
+        // Config-provided entries may hold either form; they are not rewritten here
+    // because they come from configuration, not from the user store (issue #117).
+    const matches = isBcryptHash(entry.password)
+      ? bcrypt.compareSync(password, entry.password)
+      : safeEqual(entry.password, password);
+    if (entry.enabled && matches) {
           return {
             ok: true,
             route: {
