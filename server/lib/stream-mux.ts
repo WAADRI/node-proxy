@@ -65,6 +65,9 @@ export type StreamState = (typeof STREAM_STATE)[keyof typeof STREAM_STATE];
 export const DEFAULT_INITIAL_WINDOW = 65536; // 64KB per stream
 export const DEFAULT_CONNECTION_WINDOW = 1048576; // 1MB total
 export const MAX_FRAME_SIZE = 16384; // 16KB max frame payload
+// Frame header length as written by _sendFrame: length(4) + type(1) + stream_id(4) + flags(4).
+// One constant, so the flow-control accounting cannot drift from the encoder.
+const FRAME_HEADER_SIZE = 13;
 // A WINDOW_UPDATE increment must be positive and sane: the old code did
 // `sendWindow += p.increment || 0`, so a NEGATIVE increment drove the window to a huge
 // negative value and stalled the stream forever - a cheap way for one peer to freeze a
@@ -188,7 +191,13 @@ export class Stream implements MuxStreamLike {
     if (this.state === STREAM_STATE.CLOSED || this.state === STREAM_STATE.HALF_CLOSED_LOCAL) return false;
 
     const dataBuf = Buffer.isBuffer(data) ? data : Buffer.from(data as string, 'base64');
-    const maxChunk = Math.min(this.sendWindow, MAX_FRAME_SIZE);
+    // Also respect the CONNECTION-level window. The batch path gates on it, but this immediate
+    // path only looked at the stream window - so DATA could be sent while the connection window
+    // was exhausted, i.e. connection-level flow control did not apply here (issue #119).
+    // Clamp only while it has room: at <= 0 the behaviour is unchanged, because the batch path
+    // is the one that must stall then - a zero maxChunk here would risk empty sends.
+    const connWindow = this.mux.connectionSendWindow;
+    const maxChunk = Math.min(this.sendWindow, connWindow > 0 ? connWindow : MAX_FRAME_SIZE, MAX_FRAME_SIZE);
 
     if (dataBuf.length <= maxChunk) {
       // Can send immediately
@@ -600,7 +609,7 @@ export class StreamMux {
     }
 
     // Frame header: length(4) + type(1) + stream_id(4) + flags(4)
-    const header = Buffer.alloc(13);
+    const header = Buffer.alloc(FRAME_HEADER_SIZE);
     header.writeUInt32BE(payloadBuf.length, 0); // payload length
     header[4] = type; // frame type
     header.writeUInt32BE(streamId, 5); // stream ID
@@ -645,7 +654,15 @@ export class StreamMux {
         return;
       }
 
-      this.ws.send(sendData, { binary: true }, (err?: Error) => {
+      // Debit the connection window by the DATA payload about to go out. A sender window only
+      // means something if it shrinks as data is sent: before this it was credited by
+      // WINDOW_UPDATE and never debited, so the exhausted-window check above could never trip
+      // and the window was decorative (issue #119). Only DATA payloads are flow-controlled.
+      const dataBytes = batch.reduce(
+        (sum, f) => (f[4] === FRAME_TYPE.DATA ? sum + (f.length - FRAME_HEADER_SIZE) : sum),
+        0
+      );
+      if (dataBytes > 0) this.connectionSendWindow -= dataBytes;      this.ws.send(sendData, { binary: true }, (err?: Error) => {
         if (err) {
           this.logger?.error({ error: err.message }, 'StreamMux send error');
           if (this._onError) this._onError(err);
@@ -825,6 +842,13 @@ export class StreamMux {
       const connectionSendWindowInc = Number(p.increment);
       if (Number.isInteger(connectionSendWindowInc) && connectionSendWindowInc > 0 && connectionSendWindowInc <= MAX_WINDOW_INCREMENT) {
         this.connectionSendWindow += connectionSendWindowInc;
+        // Resume a flush that the connection window stopped: the batch path puts the frames
+        // back and clears _sending, and only a NEW outbound frame would otherwise reschedule
+        // it - so a quiet stream could wait forever once the window was exhausted (issue #119).
+        if (!this._sending && this._sendBuffer.length > 0) {
+          this._sending = true;
+          setImmediate(() => this._flushSendBuffer());
+        }
       } else {
         this.logger?.debug({ increment: p.increment }, 'Ignoring invalid WINDOW_UPDATE increment');
       }
