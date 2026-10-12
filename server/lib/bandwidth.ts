@@ -28,7 +28,9 @@ export class TokenBucket {
 
   private _refill() {
     const now = Date.now();
-    const elapsed = (now - this.lastRefill) / 1000;
+    // Clamp: if the clock stepped backwards (NTP) elapsed went negative and drained the
+  // bucket below zero, throttling every request until real time caught up (#122).
+  const elapsed = Math.max(0, now - this.lastRefill) / 1000;
     this.tokens = Math.min(this.burst, this.tokens + elapsed * this.rate);
     this.lastRefill = now;
   }
