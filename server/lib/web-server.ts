@@ -137,6 +137,14 @@ function createWebServer(
   });
 
   app.post('/api/logout', (_req: WebRequest, res: HttpResponse) => {
+    // The token is a stateless JWT, so this handler cannot revoke it: it clears the
+    // cookie that webAuthMiddleware also accepts (it reads req.cookies.token) and the
+    // panel drops its Authorization header. An already-issued token therefore stays
+    // valid until it expires - and since every request re-checks the account against
+    // the user store (see the JWT revocation fix), disabling the user is what actually
+    // takes effect immediately. Real token revocation would need a token epoch and is
+    // deliberately out of scope here (issue #117).
+    res.clearCookie('token');
     res.json({ success: true });
   });
 
