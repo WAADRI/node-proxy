@@ -48,6 +48,7 @@ function isBcryptHash(value: string): boolean {
 function hashPassword(plain: string): string {
   return bcrypt.hashSync(plain, 10);
 }
+
 export const ROLES: Record<RoleName, { permissions: string[] }> = {
   admin: {
     permissions: [
@@ -99,6 +100,9 @@ interface AuthUserValue {
   role: RoleName;
   enabled: boolean;
   createdAt: number;
+  // Bumped whenever existing tokens must stop working (e.g. a password change). Tokens carry
+  // the value they were issued with, so a stateless JWT can still be revoked (issue #118).
+  tokenVersion?: number;
 }
 
 // Request enriched by the auth middleware with the authenticated user.
@@ -224,7 +228,14 @@ export class AuthManager {
     const wasEnabledAdmin = user.enabled && user.role === 'admin';
     const enabledAdmins = [...this.users.values()].filter((u) => u.enabled && u.role === 'admin').length;
     if (wasEnabledAdmin && (demotes || disables) && enabledAdmins <= 1) return false;
-    if (updates.password) user.password = hashPassword(updates.password);
+    // Store a hash, never the plaintext (issue #117).
+    if (updates.password) {
+      // Store the bcrypt hash (PR #163) AND advance the epoch (PR #193) - the two changes touch
+      // the same statement, which is exactly where the merge conflict was: keeping only one of
+      // them either loses the hashing or leaves old tokens valid.
+      user.password = hashPassword(updates.password);
+      user.tokenVersion = (user.tokenVersion || 0) + 1;
+    }
     if (updates.role && VALID_ROLES.includes(updates.role as RoleName)) user.role = updates.role as RoleName;
     if (updates.enabled !== undefined) user.enabled = updates.enabled;
     return true;
@@ -277,10 +288,21 @@ export class AuthManager {
       role,
       iat: Math.floor(Date.now() / 1000),
       exp: Math.floor(Date.now() / 1000) + 86400,
+      // The epoch this token belongs to; verification compares it with the live user.
+      ver: user?.tokenVersion || 0,
     };
     return jwt.sign(payload, this.jwtSecret);
   }
 
+  // Revoke every token already issued to this user by advancing the epoch that issued tokens
+  // carry (see tokenVersion). A stateless JWT cannot be cancelled any other way, so logout and
+  // password change both come down to this (issue #118).
+  revokeUserTokens(username: string): boolean {
+    const user = this.users.get(username);
+    if (!user) return false;
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
+    return true;
+  }
   verifyWebToken(token: string): WebAuthResult {
     try {
       const payload = jwt.verify(token, this.jwtSecret);
@@ -289,6 +311,15 @@ export class AuthManager {
       }
       const role = typeof payload.role === 'string' ? payload.role : undefined;
       const username = typeof payload.sub === 'string' ? payload.sub : undefined;
+      // Stateless tokens stay valid for their full 24h, so a password change (or a deleted
+      // account) could not take effect. Compare the epoch the token was issued with against
+      // the live user: a mismatch means it was revoked (issue #118).
+      if (username) {
+        const live = this.users.get(username);
+        const expected = live ? live.tokenVersion || 0 : -1;
+        const issued = typeof payload.ver === 'number' ? payload.ver : 0;
+        if (!live || issued !== expected) return { valid: false, error: 'token revoked' };
+      }
       return { valid: true, username, role };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

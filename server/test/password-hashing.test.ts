@@ -40,7 +40,12 @@ test('passwords are hashed on store and both forms verify', () => {
   );
   assert.ok(/function isBcryptHash\(value: string\): boolean/.test(src), 'the hash detector must exist');
   assert.ok(/bcrypt\.hashSync\(plain, 10\)/.test(src), 'hashing must use bcrypt');
-  assert.ok(/if \(updates\.password\) user\.password = hashPassword\(updates\.password\);/.test(src), 'modifyUser must hash');
+  // Narrow anchor: the statement itself, so wrapping it in a block (the token-epoch change
+  // from PR #193 sits on the same statement) does not break this invariant.
+  assert.ok(
+    /user\.password = hashPassword\(updates\.password\);/.test(src),
+    'modifyUser must hash'
+  );
   assert.ok(/bcrypt\.compareSync\(password, user\.password\)/.test(src), 'login must accept a hash');
   assert.ok(/user\.password = hashPassword\(password\);/.test(src), 'and upgrade a legacy record in place');
   assert.ok(/bcrypt\.compareSync\(password, entry\.password\)/.test(src), 'config entries must accept a hash too');
