@@ -59,6 +59,20 @@ interface CertificatePair {
   key: string;
 }
 
+// A domain from configuration is interpolated into file paths under cert_dir, so it must
+// not be able to escape that directory ("../x") or smuggle separators (issue #122). Only
+// DNS-name characters are allowed - which is all a certificate domain can be - so
+// validating the value protects every path built from it.
+function assertSafeDomain(domain: string): void {
+  const value = String(domain || "").trim();
+  if (!value || value.length > 253) {
+    throw new Error("Invalid domain: " + JSON.stringify(domain));
+  }
+  if (!/^[A-Za-z0-9.-]+$/.test(value) || value.includes("..") || value.startsWith(".") || value.endsWith(".")) {
+    throw new Error("Invalid domain: " + value);
+  }
+}
+
 class ACMEManager {
   config: Record<string, unknown>;
   log: {
@@ -128,6 +142,7 @@ class ACMEManager {
 
   private async _checkRenewal() {
     for (const domain of this.domains) {
+      assertSafeDomain(domain);
       const certPath = path.join(this.certDir, `${domain}.pem`);
       const keyPath = path.join(this.certDir, `${domain}-key.pem`);
 
@@ -201,6 +216,7 @@ class ACMEManager {
     } catch (_) {
       // ignore
     }
+    assertSafeDomain(domain);
     fs.writeFileSync(path.join(this.certDir, `${domain}.pem`), toStringable(cert).toString());
     fs.writeFileSync(path.join(this.certDir, `${domain}-key.pem`), toStringable(key).toString());
 
@@ -226,6 +242,7 @@ class ACMEManager {
   }
 
   getCertificate(domain: string): CertificatePair | null {
+    assertSafeDomain(domain);
     const certPath = path.join(this.certDir, `${domain}.pem`);
     const keyPath = path.join(this.certDir, `${domain}-key.pem`);
     if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
