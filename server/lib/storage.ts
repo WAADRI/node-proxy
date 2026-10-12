@@ -325,12 +325,22 @@ class Storage {
   getTrafficStats(clientId: string, since?: number): TrafficSummary {
     if (!this.available || !this.db) return { bytesSent: 0, bytesReceived: 0, requests: 0 };
     try {
-      const result = this.db.exec(
-        `SELECT COALESCE(SUM(bytes_sent),0) as bs, COALESCE(SUM(bytes_received),0) as br, COALESCE(SUM(requests_count),0) as rc FROM traffic_stats WHERE client_id = '${clientId.replace(/'/g, "''")}' AND period_start >= ${since || 0}`
+      // Bound parameters, like the writers above: exec() cannot take them, so this
+      // relied on quote-doubling plus a raw numeric interpolation for `since` (#122).
+      const stmt = this._prepare(
+        'SELECT COALESCE(SUM(bytes_sent),0) as bs, COALESCE(SUM(bytes_received),0) as br, COALESCE(SUM(requests_count),0) as rc FROM traffic_stats WHERE client_id = ? AND period_start >= ?'
       );
-      if (result.length > 0 && result[0].values.length > 0) {
-        const vals = result[0].values[0];
-        return { bytesSent: num(vals[0]), bytesReceived: num(vals[1]), requests: num(vals[2]) };
+      if (stmt) {
+        try {
+          stmt.bind([clientId, since || 0]);
+          if (stmt.step()) {
+            // Named columns (the SQL already aliases them) instead of positional values.
+            const row = stmt.getAsObject();
+            return { bytesSent: num(row.bs), bytesReceived: num(row.br), requests: num(row.rc) };
+          }
+        } finally {
+          stmt.free();
+        }
       }
       return { bytesSent: 0, bytesReceived: 0, requests: 0 };
     } catch (err) {
