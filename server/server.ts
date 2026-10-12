@@ -139,7 +139,17 @@ authManager.setClientIdResolver((password: string) => {
 
 // Create web app (pass all Phase 3 modules)
 const app = createWebServer(clientManager, authManager, config, logger, metricsManager, domainRouter, cache, pluginManager, aclManager, auditLogger, autoUpdater, settingsManager, passwordManager);
-const httpServer = http.createServer(app);
+const httpServer = http.createServer((req: import('http').IncomingMessage, res: import('http').ServerResponse) => {
+  // ACME HTTP-01 must be served WITHOUT authentication: the certificate authority fetches
+  // the token over plain HTTP, and handleChallenge() had no caller at all - so the token
+  // was never served and issuance could never complete (issue #122). It is tried before
+  // express, so the challenge bypasses the auth middleware; every other request falls
+  // through untouched. Serving it on this port means a reverse proxy in front can forward
+  // /.well-known/acme-challenge/ here; a direct :80 listener is a separate, config-gated
+  // change (see the PR).
+  if (acmeManager.enabled && acmeManager.handleChallenge(req, res)) return;
+  app(req, res);
+});
 
 // Setup WebSocket servers
 const clientWss = setupClientWebSocket(httpServer, clientManager, authManager, config, logger);
