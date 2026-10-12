@@ -55,7 +55,7 @@ async function main(): Promise<void> {
     console.log('\n警告: 当前目录未找到 config.yaml，请 cd 到 server 目录后重跑。');
     process.exit(1);
   }
-  fs.writeFileSync(target, yaml.dump(overlay, { noRefs: true }));
+  fs.writeFileSync(target, yaml.dump(overlay, { noRefs: true }), { mode: 0o600 });
   console.log(`\n已写入 ${target}，内容摘要：`);
   console.log(`  auth.token        : ${authToken}`);
   if (proxy && proxy.enabled) console.log(`  auth.proxy        : 启用  ${proxy.username} / ${proxy.password}`);
