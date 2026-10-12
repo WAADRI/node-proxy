@@ -11,6 +11,14 @@ import type { ServerConfig } from './config.ts';
 import type { AppLogger } from './logger.ts';
 import type { ProxyPasswordEntry } from './proxy-passwords.ts';
 import type { RoutingStrategy } from './router.ts';
+import { createHash, timingSafeEqual } from 'crypto';
+// Default import, deliberately NOT a namespace import. This repo runs .ts directly through
+// Node's type stripping, so a namespace import is handed to Node as a REAL ESM namespace
+// import of a CJS package: bcryptjs's named exports are not statically detectable, so the
+// namespace carries only `default`/`module.exports`, bcrypt.hashSync is undefined, and every
+// login threw `TypeError: bcrypt.hashSync is not a function` (measured: namespace.hashSync =
+// undefined, namespace.default.hashSync = function).
+import bcrypt from 'bcryptjs';
 
 export type RoleName = 'admin' | 'operator' | 'viewer';
 
@@ -22,6 +30,24 @@ function toRoleName(value: string | undefined): RoleName {
 }
 
 // Built-in roles with permission sets
+// Constant-time comparison for secrets. `===` on a password or token short-circuits
+// at the first differing byte, so an attacker who can time the response learns the
+// matching prefix byte by byte (issue #117). Hashing first also keeps the lengths
+// equal, which timingSafeEqual requires.
+function safeEqual(a: string, b: string): boolean {
+  const ha = createHash('sha256').update(a).digest();
+  const hb = createHash('sha256').update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
+// A bcrypt hash is recognisable by its $2a/$2b/$2y prefix, which is also how legacy
+// plaintext records are told apart - so no offline migration is needed (issue #117).
+function isBcryptHash(value: string): boolean {
+  return /^\$2[aby]\$/.test(String(value || ''));
+}
+
+function hashPassword(plain: string): string {
+  return bcrypt.hashSync(plain, 10);
+}
 export const ROLES: Record<RoleName, { permissions: string[] }> = {
   admin: {
     permissions: [
@@ -30,7 +56,7 @@ export const ROLES: Record<RoleName, { permissions: string[] }> = {
       'proxy:config', 'proxy:stats', 'proxy:passwords',
       'routing:config', 'routing:strategy',
       'circuit:reset', 'circuit:view',
-      'system:config', 'system:logs',
+      'system:config', 'system:logs', 'nettest:run',
       'user:list', 'user:create', 'user:delete', 'user:modify',
       'domain:list', 'domain:create', 'domain:delete', 'domain:modify',
       'cache:clear', 'cache:view',
@@ -47,6 +73,7 @@ export const ROLES: Record<RoleName, { permissions: string[] }> = {
       'proxy:stats', 'proxy:passwords',
       'routing:strategy',
       'circuit:reset', 'circuit:view',
+      'nettest:run',
       'domain:list', 'domain:create', 'domain:delete', 'domain:modify',
       'cache:clear', 'cache:view',
       'metrics:view',
@@ -175,7 +202,9 @@ export class AuthManager {
 
   deleteUser(username: string): boolean {
     // Cannot delete the last admin
-    const adminCount = this.listUsers().filter((u) => u.role === 'admin').length;
+    // Count ENABLED admins only: counting every admin allowed deleting the only
+    // usable one while a disabled admin remained - a lockout too (issue #117).
+    const adminCount = this.listUsers().filter((u) => u.role === 'admin' && u.enabled).length;
     const user = this.users.get(username);
     if (user && user.role === 'admin' && adminCount <= 1) return false;
     return this.users.delete(username);
@@ -184,7 +213,18 @@ export class AuthManager {
   modifyUser(username: string, updates: { password?: string; role?: string; enabled?: boolean }): boolean {
     const user = this.users.get(username);
     if (!user) return false;
-    if (updates.password) user.password = updates.password;
+    // Refuse to leave the panel without an ENABLED admin. deleteUser guarded this;
+    // modifyUser did not, so the last admin could be demoted or disabled - by
+    // themselves or by another admin - and nobody could reach user management ever
+    // again (issue #117). Only enforced when this change removes the last one, and
+    // an invalid role is ignored later anyway, so it must not trigger the refusal.
+    const demotes =
+      updates.role !== undefined && updates.role !== 'admin' && VALID_ROLES.includes(updates.role as RoleName);
+    const disables = updates.enabled === false;
+    const wasEnabledAdmin = user.enabled && user.role === 'admin';
+    const enabledAdmins = [...this.users.values()].filter((u) => u.enabled && u.role === 'admin').length;
+    if (wasEnabledAdmin && (demotes || disables) && enabledAdmins <= 1) return false;
+    if (updates.password) user.password = hashPassword(updates.password);
     if (updates.role && VALID_ROLES.includes(updates.role as RoleName)) user.role = updates.role as RoleName;
     if (updates.enabled !== undefined) user.enabled = updates.enabled;
     return true;
@@ -221,7 +261,12 @@ export class AuthManager {
     if (!webAuth.enabled) return true;
     const user = this.users.get(username);
     if (!user || !user.enabled) return false;
-    return user.password === password;
+    if (isBcryptHash(user.password)) return bcrypt.compareSync(password, user.password);
+    // Legacy plaintext record: verify, then upgrade in place so the plaintext does
+    // not survive the first successful login (issue #117).
+    if (!safeEqual(user.password, password)) return false;
+    user.password = hashPassword(password);
+    return true;
   }
 
   generateWebToken(username: string): string {
@@ -273,8 +318,13 @@ export class AuthManager {
 
       if (!token) {
         // Public endpoints that don't require auth
+        // /metrics carries the whole registry (topology, client ids, traffic), so it
+        // is token-free only for a LOOPBACK scraper; any other source must
+        // authenticate. It used to be public for everyone (issue #117).
+        const peer = (req as { socket?: { remoteAddress?: string } }).socket?.remoteAddress;
+        const fromLoopback = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1';
         if (
-          req.path === '/metrics' ||
+          (req.path === '/metrics' && fromLoopback) ||
           req.path.startsWith('/public/') ||
           req.path === '/api/swagger.json' ||
           req.path === '/api/docs'
@@ -302,6 +352,29 @@ export class AuthManager {
         return;
       }
 
+      // A token lives for 24h and carries a role snapshot, so the user store has to be
+      // consulted on EVERY request: otherwise disabling or deleting an account left its
+      // already-issued tokens working until they expired (issue #117). Same idiom as
+      // hasPermission: missing user or enabled === false means no access.
+      // result.username is optional in the payload type; narrow it before the lookup.
+      const liveUsername = result.username;
+      if (!liveUsername) {
+        if (req.path.startsWith('/api/')) {
+          res.status(401).json({ error: 'Unauthorized', message: 'Account is disabled or no longer exists' });
+        } else {
+          res.redirect('/login');
+        }
+        return;
+      }
+      const liveUser = this.users.get(liveUsername);
+      if (!liveUser || !liveUser.enabled) {
+        if (req.path.startsWith('/api/')) {
+          res.status(401).json({ error: 'Unauthorized', message: 'Account is disabled or no longer exists' });
+        } else {
+          res.redirect('/login');
+        }
+        return;
+      }
       req.user = result.username;
       req.role = result.role;
 
@@ -323,7 +396,7 @@ export class AuthManager {
   // Legacy: Client Node Authentication
   // ===========================================================================
   validateClientToken(token: string): boolean {
-    return token === this.config.auth.token;
+    return safeEqual(token, this.config.auth.token);
   }
 
   // ===========================================================================
@@ -362,13 +435,18 @@ export class AuthManager {
   private _matchProxyCredentials(username: string, password: string): { ok: boolean; route?: ProxyRoute } {
     const proxyAuth = this.config.auth.proxy;
     // Legacy configured pair (strict username + password) -> default pool.
-    if (username === proxyAuth.username && password === proxyAuth.password) {
+    if (username === proxyAuth.username && safeEqual(password, proxyAuth.password)) {
       return { ok: true, route: {} };
     }
     // Panel-managed extra passwords: only the password matters.
     if (this.proxyPasswordProvider) {
       for (const entry of this.proxyPasswordProvider()) {
-        if (entry.enabled && entry.password === password) {
+        // Config-provided entries may hold either form; they are not rewritten here
+    // because they come from configuration, not from the user store (issue #117).
+    const matches = isBcryptHash(entry.password)
+      ? bcrypt.compareSync(password, entry.password)
+      : safeEqual(entry.password, password);
+    if (entry.enabled && matches) {
           return {
             ok: true,
             route: {

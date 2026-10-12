@@ -124,6 +124,28 @@ class NetworkTestManager {
 
   constructor(logger: AppLogger) {
     this.log = logger;
+    // Nodes-only deployments never call _kick(), so the opportunistic cleanup there
+    // never ran and this.tasks grew without bound (issue #122). Sweep on a timer too.
+    // unref: housekeeping must not keep the process alive.
+    const gcTimer = setInterval(() => this._gcTasks(), 60_000);
+    gcTimer.unref();
+  }
+
+  // Drop finished tasks so the map cannot grow forever. The age check uses whatever
+  // timestamp the task carries; the size cap then guarantees progress even if none is
+  // present, which matters because this timer is the only sweep in a nodes-only job.
+  _gcTasks() {
+    const cutoff = Date.now() - 3600_000; // keep finished tasks for an hour
+    for (const [id, task] of this.tasks) {
+      const finished = task.state === 'done' || task.state === 'error';
+      const t2 = task as { finishedAt?: number; createdAt?: number };
+      const at = Number(t2.finishedAt ?? t2.createdAt);
+      if (finished && Number.isFinite(at) && at < cutoff) this.tasks.delete(id);
+    }
+    for (const [id, task] of this.tasks) {
+      if (this.tasks.size <= 500) break;
+      if (task.state === 'done' || task.state === 'error') this.tasks.delete(id);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -245,10 +267,17 @@ class NetworkTestManager {
     const task = this.tasks.get(String(msg.taskId || ''));
     if (!task || task.state !== 'running') return;
     const clientLabel = this._labelOf(task, clientId);
+    const index = Number(msg.index) || 0;
+    // Two problems with pushing blindly (issue #122): a node that reports the same
+    // index twice inflates results.length, which is ALSO the completion counter - so
+    // a duplicate could mark the task done early; and a hostile node could grow the
+    // array without bound. Dedupe on (client, index) and cap at the expected count.
+    if (task.results.some((r) => r.clientId === clientId && r.index === index)) return;
+    if (task.results.length >= Math.max(task.expect, 1)) return;
     task.results.push({
       clientId,
       clientLabel,
-      index: Number(msg.index) || 0,
+      index,
       target: msg.target == null ? undefined : String(msg.target),
       ok: !!msg.ok,
       ms: msg.ms,

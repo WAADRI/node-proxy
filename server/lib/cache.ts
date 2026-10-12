@@ -116,6 +116,11 @@ export class RequestCache {
       return null;
     }
     entry.hits++;
+    // Re-insert so Map order becomes ACCESS order, which makes _evictOne() a true O(1)
+    // LRU instead of a full scan of every entry on every insert once the cache is full
+    // (issue #122). Same object, so hits/createdAt are preserved.
+    this.cache.delete(key);
+    this.cache.set(key, entry);
     return {
       hit: true,
       data: entry.data,
@@ -275,16 +280,12 @@ export class RequestCache {
   }
 
   private _evictOne() {
-    // Evict oldest entry or least accessed
-    let oldest: StoredCacheEntry | null = null;
-    let oldestKey: string | null = null;
-    for (const [key, entry] of this.cache) {
-      if (!oldest || entry.createdAt < oldest.createdAt) {
-        oldest = entry;
-        oldestKey = key;
-      }
-    }
-    if (oldestKey) this.cache.delete(oldestKey);
+    // O(1) LRU: Map iterates in insertion order and get() re-inserts every hit, so the
+    // FIRST key is the least recently used. The previous version scanned every entry to
+    // find the smallest createdAt - on every insert once full - and never looked at
+    // `hits` at all, despite claiming to evict the least accessed (issue #122).
+    const lru = this.cache.keys().next();
+    if (!lru.done) this.cache.delete(lru.value);
   }
 
   destroy() {
