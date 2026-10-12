@@ -62,6 +62,18 @@ CI 失败或 review 需修改时：在**同一分支**补最小 commit 并 push�
 - 尽量对提交启用签名：**优先 GPG 签名**（`git config commit.gpgsign true`），其次 **SSH 私钥签名**（`git config gpg.format ssh` + 配置 `user.signingkey`）。
 - 签名为“尽量”项，**不签名也允许提交**；不要因签名失败而阻塞提交流程。
 
+## 非人工身份与并行作业
+
+- 以**非人工身份**（GitHub App、Actions bot 或其他自动化账号）提交或评论时，遵守本节。
+  **具体的 App 与账号映射由部署方内部文档维护，不写入本文件**（避免与第三方复核等外部身份冲突）。
+- 凭据：私钥与安装令牌**只能**存放于仓库目录之外；**禁止**提交、粘贴，或写入 issue / PR / 日志。
+  令牌**仅**通过环境变量注入单条命令；**禁止**写入 `.git/config`、remote URL
+  或任何持久化（用户级 / 系统级）环境变量。
+- 提交签名：本仓库 `commit.gpgsign = true`，非人工身份提交时**必须**显式加 `-c commit.gpgsign=false`，
+  或为该身份**单独**配置签名密钥；**禁止**复用人工密钥（否则会用人工密钥签名，或直接导致提交失败）。
+- 推送：被拒（non-fast-forward）时**禁止** force-push，应先合并远端后重推。
+- 并行作业：同一工作树**禁止**并行 checkout / 修改；多身份并行须用 `git worktree add` 另开工作树。
+
 ## 分支命名
 
 ```text
