@@ -93,6 +93,10 @@ curl -L -o node-proxy-client-linux-x64 https://github.com/WAADRI/node-proxy/rele
 curl -L -o node-proxy-client-linux-arm64 https://github.com/WAADRI/node-proxy/releases/latest/download/client-linux-arm64
 ```
 
+> ⚠️ **上面的 `latest/download` 链接没有完整性保证**：它是**可变的 `dev` 构建**（每次推送到 `main` 都会重建），因此**无法锁定版本、也无法据此复现**。若你以 root 运行该二进制（`deploy/install.sh` 会这样做），**下载即等于执行**，所以请按需选择：
+>
+> - **推荐**：在你**已审阅过的提交**上自行构建 —— `git checkout <commit> && npm ci --prefix client && npm run build --prefix client`；
+> - 或下载后**先记录并核对摘要**：`sha256sum node-proxy-client-linux-x64`（**注意**：本仓库目前**不发布**校验和文件或签名，因此这一步只能用于"多台机器之间比对同一构建"，**不能**证明其来源）。
 在文件旁放一个 `config.yaml` 或直接用环境变量启动（两者均与 Node.js 版完全一致）。`config.yaml` 可直接从仓库的 `client/config.yaml.example` 复制后填写：
 
 ```bash
