@@ -129,6 +129,19 @@ function createWebServer(
       const token = authManager.generateWebToken(asString(username));
       const role = authManager.getRole(asString(username));
       logger.info({ username, role }, 'Web login success');
+      // Also set the token as an HttpOnly cookie. webAuthMiddleware already accepts
+      // req.cookies.token, but nothing ever SET one, which is why the panel (and its
+      // WebSocket) had to put the token in the URL - where it lands in access logs and
+      // history (issue #117). HttpOnly keeps it away from scripts, SameSite=Strict
+      // keeps it off cross-site requests. The JSON token is still returned, so no
+      // client changes are required by this step.
+      res.cookie('token', token, {
+        httpOnly: true,
+        sameSite: 'strict',
+        secure: Boolean(req.secure),
+        maxAge: 24 * 60 * 60 * 1000,
+        path: '/',
+      });
       res.json({ success: true, token, role, redirect: '/' });
     } else {
       logger.warn({ username, ip: req.ip }, 'Web login failed');
