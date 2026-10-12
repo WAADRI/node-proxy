@@ -31,11 +31,11 @@ export interface ServerSection {
 }
 
 // Derives the real client address behind trusted reverse proxies (#162 follow-up):
-// with N trusted hops, the client is the (N+1)-th entry of X-Forwarded-For from the
-// right; when the chain is shorter than that, the socket peer is the answer. Only
-// ever called when the operator opted in via trusted_proxy_hops > 0 - an
-// unconditional trust is exactly the hole #162 closed (any client could forge the
-// address shown in the panel).
+// the socket peer counts as hop 0 (the express / nginx convention), so with N trusted
+// proxies the client is entries[len - N]; when the chain is shorter than N, the socket
+// peer is the answer. Only ever called when the operator opted in via
+// trusted_proxy_hops > 0 - an unconditional trust is exactly the hole #162 closed (any
+// client could forge the address shown in the panel).
 export function clientIpFromSocket(
   socket: { remoteAddress?: string | null } | null | undefined,
   forwardedFor: string | string[] | undefined,
@@ -49,11 +49,15 @@ export function clientIpFromSocket(
 
   const header = Array.isArray(forwardedFor) ? forwardedFor.join(',') : forwardedFor;
   if (!header) return peer;
-  // Entries are appended by each hop; the client contributed the leftmost ones.
-  // With N trusted proxies the real client is entry[len-1-N] (0-based from the
-  // left); anything further left can be spoofed by the client itself.
+  // Entries are appended by each hop. The convention follows express / nginx: the SOCKET peer is
+  // hop 0, so with N trusted proxies the client is entries[len - N]. #208 shipped len - 1 - N,
+  // which is one hop too far LEFT: it trusted an entry the client could have prepended itself, and
+  // with nginx's standard `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` (which
+  // appends the address nginx SAW, not its own address) a single-entry chain fell through to the
+  // socket peer - so a node behind docker NAT was registered as the 172.x gateway instead of its
+  // real address. Anything further left stays off-limits the same way.
   const entries = header.split(',').map((s) => s.trim()).filter(Boolean);
-  const idx = entries.length - 1 - trustedHops;
+  const idx = entries.length - trustedHops;
   const picked = idx >= 0 ? entries[idx] : '';
   if (!picked) return peer;
   // Normalize the picked entry too (the proxy may hand back a mapped form).
