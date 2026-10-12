@@ -86,19 +86,22 @@ export function setupClientWebSocket(
   config: ServerConfig,
   logger: AppLogger
 ) {
-  const wss = new WebSocketServer({ noServer: true });
+  // Cap the message size. Without maxPayload the `ws` library buffers an arbitrarily large
+// frame in memory before we ever see it, so one authenticated (or even pre-auth) peer
+// could exhaust the process by sending a single huge message (issue #119). 16 MiB matches
+// 1024 x the mux MAX_FRAME_SIZE (16 KiB), so a full batch of maximum-size frames fits.
+const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
 
   wss.on('connection', (rawWs, req) => {
     const ws = rawWs as WsWithMux;
     let clientId: string | null = null;
     let authenticated = false;
-    // Read the real client IP from nginx proxy headers when available;
-    // otherwise fall back to the raw TCP connection address (Docker gateway / nginx IP).
-    const clientIp =
-      (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
-      (req.headers['x-real-ip'] as string | undefined) ||
-      req.socket.remoteAddress ||
-      '';
+    // The client IP is the RAW TCP peer, never a client-supplied header. Trusting
+    // X-Forwarded-For / X-Real-IP unconditionally let any client choose the address
+    // recorded for it (and shown in the panel) by sending a header, and it
+    // contradicted the panel own `trust proxy = false` (issue #117). A deployment
+    // that really sits behind a reverse proxy needs an explicit opt-in, not a guess.
+    const clientIp = req.socket.remoteAddress || '';
 
     // Create StreamMux for this client
     const mux = new StreamMux(ws, {
@@ -396,11 +399,18 @@ function handleClientResponse(clientManager: ClientManager, stream: MuxStreamLik
         }
         clientManager.trackRequest('http', 429, duration, recClientId);
         clientManager.trackError(recClientId, 'bandwidth');
+        // Release the stream: END_STREAM only half-closes it, so a finished
+        // request used to keep its Stream (headers + buffered body) in
+        // mux.streams for the lifetime of the connection - one per request.
+        stream.close();
         return;
       }
       const statusMessage = asString(headers.statusMessage);
       res.writeHead(statusCode, statusMessage, respHeaders as OutgoingHttpHeaders);
       res.end(body);
+      // Same on the success path. Measured cost of the leak: ~1.1 KB per request
+      // (~1 GB/day at 10 req/s), on the server and on the node alike.
+      stream.close();
 
       clientManager.trackRequest('http', statusCode, duration, recClientId);
       // Count upstream failures (>=500 or explicit error) as circuit breaker failures

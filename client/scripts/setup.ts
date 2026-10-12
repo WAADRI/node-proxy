@@ -39,12 +39,12 @@ async function main(): Promise<void> {
   };
 
   const target = process.env.CONFIG_PATH || path.join(process.cwd(), 'config.yaml');
-  fs.writeFileSync(target, yaml.dump(cfg, { noRefs: true }));
+  fs.writeFileSync(target, yaml.dump(cfg, { noRefs: true }), { mode: 0o600 });
   console.log(`\n已写入 ${target}`);
 
   if (clientId) {
     const idFile = process.env.CLIENT_ID_FILE || path.join(os.homedir(), '.node-proxy-client-id');
-    fs.writeFileSync(idFile, clientId);
+    fs.writeFileSync(idFile, clientId, { mode: 0o600 });
     console.log(`节点 ID 已持久化到 ${idFile}`);
   }
 
