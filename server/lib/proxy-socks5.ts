@@ -259,7 +259,7 @@ export function createSocks5Proxy(
           }
 
           // ---- CONNECT ----
-          handleTCPConnect(socket, host, port, clientManager, config, logger, route);
+          handleTCPConnect(socket, host, port, clientManager, config, logger, route, cleanupState);
           state = 'tunnel';
           bufs = [];
           bufLen = 0;
@@ -296,7 +296,8 @@ function handleTCPConnect(
   clientManager: ClientManager,
   config: ServerConfig,
   logger: AppLogger,
-  route: ProxyRoute
+  route: ProxyRoute,
+  cleanupState: CleanupState
 ) {
   let tunnelId: string | number = uuidv4();
   let currentTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -353,6 +354,16 @@ function handleTCPConnect(
     return;
   }
 
+  // Hand this connection's identity to cleanup(). It releases the mux STREAM - not just the
+  // "pending" slots - when the SOCKS5 socket goes away, but only while these two fields hold the
+  // tunnel it belongs to. They were never written, so the release in cleanup() was dead code and
+  // EVERY SOCKS5 tunnel leaked its stream until the client's WebSocket closed: a long-running
+  // server reached MAX_CONCURRENT_STREAMS (512), after which every SOCKS5 CONNECT failed with
+  // "openTunnel failed" while the node stayed healthy and HTTP kept working (it falls back to the
+  // legacy JSON path). The 2026-10-13 incident showed openStreams=512 with pending=1-3 and a
+  // HEALTHY connectionSendWindow, i.e. leaked entries and not load or flow control.
+  cleanupState.currentClient = client;
+
   // Use StreamMux for tunnel if available
   if (client.mux) {
     const stream = client.mux.openTunnel(host, port, 128);
@@ -382,6 +393,7 @@ function handleTCPConnect(
     }
 
     tunnelId = String(stream.id);
+    cleanupState.tunnelId = tunnelId;
     client.pendingTunnels.add(tunnelId);
 
     currentTimeout = setTimeout(() => {
@@ -437,6 +449,9 @@ function handleTCPConnect(
     // via mux.onStream -> handleTunnelReady/handleTunnelData/handleTunnelClose/handleTunnelError
   } else {
     // Legacy JSON fallback
+    // The uuid is not a mux stream id, so cleanup()'s release finds nothing there - it is
+    // idempotent, and the pending slots plus the tunnel_close below are what this path needs.
+    cleanupState.tunnelId = tunnelId;
     const msg = { type: 'tunnel_open', id: tunnelId, host, port };
     client.ws.send(JSON.stringify(msg), (err) => {
       if (err) {
@@ -488,6 +503,10 @@ function handleTCPConnect(
     client.pendingTunnels.add(tunnelId);
     clientManager.trackTunnel(client.id);
   }
+
+  // Both branches above have created their timeout by now; cleanup() cancels it so a socket that
+  // goes away does not leave a timer that later fires on a dead tunnel.
+  cleanupState.currentTimeout = currentTimeout;
 }
 
 // =============================================================================
