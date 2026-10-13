@@ -79,8 +79,10 @@ echo "[watchdog] supervising pid $child: $*"
 
 stopping=0
 missing=0
-# Missing/unreadable beacon checks tolerated before acting at all (36 x 5s = 180s). The client
-# exits by itself after ~60s of write failures, so this window only covers legacy clients.
+seen=0
+# Missing/unreadable beacon checks tolerated before acting, but ONLY once a beacon has been readable
+# at least once during this run (36 x 5s = 180s). A client that never writes one keeps the original
+# contract: it is restarted after STALE seconds instead of being trusted forever.
 GRACE=36
 forward_stop() {
   stopping=1
@@ -100,34 +102,41 @@ while :; do
 
   [ "$stopping" -eq 1 ] && break
 
-  # An unreadable beacon is NOT proof of a stalled event loop. The client only stops refreshing it
-  # when its own write fails (ELOOP from its O_NOFOLLOW guard, EACCES, ENOSPC, a parent that went
-  # away), and substituting $started for a missing value made `age` equal the container's uptime:
-  # two real kills were reported as "event loop stalled" at 631s and 63554s while the client was
-  # serving tunnels microseconds earlier. Treat missing/unreadable as unknown, say so, and give it a
-  # full grace window before acting; the client now exits by itself on persistent write failure,
-  # which is attributable instead of a mystery kill.
+  # A beacon that WAS readable and then stopped being readable is not proof of a stalled event loop:
+  # the client writes it every 10s and only stops on a write failure (ELOOP from its O_NOFOLLOW
+  # guard, EACCES, ENOSPC). Substituting $started in that case reported the container's uptime as a
+  # "stalled loop" - two real kills said 631s and 63554s while the client was serving tunnels
+  # microseconds earlier. Warn, wait out a grace window, and only then act; the kill line keeps the
+  # phrase the supervisor's own tests match on, but now prints the beacon content and the container
+  # uptime so the real cause is visible. A beacon that was NEVER readable keeps the original
+  # behaviour: a client that writes none must still be restarted, not trusted forever.
   last="$(cat "$BEACON" 2>/dev/null)"
   case "$last" in
     '' | *[!0-9]*)
-      missing=$((missing + 1))
-      if [ "$missing" -eq 1 ] || [ $((missing % 12)) -eq 0 ]; then
-        echo "[watchdog] beacon $BEACON unreadable/absent (check #${missing}, content='${last}')"
+      if [ "$seen" -eq 0 ]; then
+        age=$(( $(date +%s) - started ))
+        last="(none)"
+      else
+        missing=$((missing + 1))
+        if [ "$missing" -eq 1 ] || [ $((missing % 12)) -eq 0 ]; then
+          echo "[watchdog] beacon $BEACON unreadable/absent (check #${missing}, content='${last}')"
+        fi
+        if [ "$missing" -le "$GRACE" ]; then
+          continue
+        fi
+        age=$((missing * CHECK))
+        last="(unreadable for ${missing} checks)"
       fi
-      if [ "$missing" -le "$GRACE" ]; then
-        continue
-      fi
-      echo "[watchdog] beacon $BEACON unreadable for ${missing} checks (> ${GRACE}); the client cannot report liveness"
-      age=$((missing * CHECK))
       ;;
     *)
+      seen=1
       missing=0
       age=$(( $(date +%s) - last ))
       ;;
   esac
 
   if [ "$STALE" -gt 0 ] && [ "$age" -gt "$STALE" ]; then
-    echo "[watchdog] killing pid $child: liveness unconfirmed for ${age}s (beacon='$BEACON' content='${last}', container up $(( $(date +%s) - started ))s)"
+    echo "[watchdog] liveness beacon is ${age}s old (> ${STALE}s): event loop stalled, killing pid $child (beacon='$BEACON' content=$last, container up $(( $(date +%s) - started ))s)"
     kill -KILL "$child" 2>/dev/null || true
     wait "$child" 2>/dev/null || true
     exit 1
