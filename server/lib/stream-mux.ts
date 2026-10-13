@@ -104,7 +104,7 @@ export interface MuxStreamLike {
   state?: string;
   sendHeaders(headers: Record<string, unknown>, endStream?: boolean): void;
   sendData(data: Buffer | string, endStream?: boolean): boolean;
-  reset(reason?: number): void;
+  reset(reason?: number | string): void;
   close(): void;
   _onHeaders?: ((headers: Record<string, unknown>, endStream: boolean) => void) | null;
   _onData?: ((chunk: Buffer) => void) | null;

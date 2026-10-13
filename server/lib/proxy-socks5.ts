@@ -357,7 +357,25 @@ function handleTCPConnect(
   if (client.mux) {
     const stream = client.mux.openTunnel(host, port, 128);
     if (!stream) {
-      logger.warn({ clientId: client.id, targetHost: host, targetPort: port }, 'SOCKS5 CONNECT rejected: openTunnel failed');
+      // Say WHY the multiplexer refused instead of only that it did. openTunnel() returns null for
+      // exactly two reasons: the connection is closed, or its stream table is full
+      // (MAX_CONCURRENT_STREAMS = 512). Both used to read "openTunnel failed", so the 2026-10-13
+      // outage looked like a dead proxy for hours. The numbers are what separates them: the table
+      // pinned at the cap while the node reports fewer active tunnels than its own limit means
+      // leaked stream entries, not load (a drained connectionSendWindow points at flow control
+      // instead). Both fields are O(1); building the full getStats() snapshot per failed CONNECT
+      // would be wasteful on a failing node.
+      logger.warn(
+        {
+          clientId: client.id,
+          targetHost: host,
+          targetPort: port,
+          openStreams: client.mux.streams.size,
+          connectionSendWindow: client.mux.connectionSendWindow,
+          pending: clientManager.pendingTunnels.size,
+        },
+        'SOCKS5 CONNECT rejected: openTunnel failed'
+      );
       socket.write(encodeReply(0x01));
       socket.end();
       return;

@@ -128,35 +128,7 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 }
         return;
       }
 
-      const type = asString(stream.headers?.type);
-
-      if (type === 'response' || asNumber(stream.headers?.statusCode) > 0) {
-        handleClientResponse(clientManager, stream, logger);
-        return;
-      }
-
-      if (type === 'tunnel_ready') {
-        handleTunnelReady(clientManager, stream, logger);
-        return;
-      }
-
-      if (type === 'tunnel_data') {
-        handleTunnelData(clientManager, stream, logger);
-        return;
-      }
-
-      if (type === 'tunnel_close') {
-        handleTunnelClose(clientManager, stream, logger);
-        return;
-      }
-
-      if (type === 'tunnel_error') {
-        handleTunnelError(clientManager, stream, logger);
-        return;
-      }
-
-      // Legacy JSON message handling
-      handleLegacyStream(clientManager, stream, logger);
+      dispatchClientStream(clientManager, stream, logger);
     });
 
     // Also handle legacy JSON messages (backward compatibility)
@@ -326,9 +298,84 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 }
 // Stream-based handlers (new protocol)
 // =============================================================================
 
+// The id a client frame names its stream by. A mux tunnel is opened by openTunnel(), which sets
+// stream.headers = { host, port } and no id, so the node echoes its own stream.id back as a NUMBER
+// (client.ts, handleMuxTunnel: `headers.id || stream.id`). asString() therefore yields '' and the
+// id falls back to String(stream.id). Every handler resolves the id this way, and so does the
+// ownership check in dispatchClientStream() - one helper keeps the two from drifting apart.
+function streamMsgId(stream: MuxStreamLike): string {
+  return asString(asRecord(stream.headers).id) || String(stream.id);
+}
+
+// Retire a stream the server no longer owns.
+//
+// StreamMux registers a stream for ANY id an incoming HEADERS frame carries, because the client
+// half needs that to learn about server-initiated requests (see StreamMux._handleFrame). On THIS
+// side every stream is opened by the server itself - the node never calls createStream/openTunnel -
+// so a frame naming an id with no pending tunnel or request behind it belongs to a stream that was
+// already retired: the SOCKS5 socket ended, the tunnel timed out, the HTTP request was aborted.
+// Letting it stand created an entry that nothing would ever remove again, because no socket, no
+// timeout and no close frame referred to it any more.
+//
+// 2026-10-13 incident: such resurrected entries crept up to MAX_CONCURRENT_STREAMS (512) and every
+// later SOCKS5 CONNECT failed with "openTunnel failed" for hours, while the node reported far fewer
+// active tunnels than its own limit - a leak, not load. The HTTP proxy kept working because a full
+// mux makes it fall back to its legacy JSON path; SOCKS5 has no fallback. RST_STREAM is the right
+// frame here: the node removes the stream, releases its tunnel slot and destroys the target socket
+// (client.ts, stream._onError) instead of holding that connection open forever.
+function releaseOrphanStream(stream: MuxStreamLike, logger: AppLogger, kind: string): void {
+  logger.debug({ streamId: stream.id, kind, state: stream.state }, 'Retiring a mux stream with no pending owner');
+  try {
+    stream.reset('no_pending_owner');
+  } catch (_) {
+    // A stream that cannot be reset must not take the whole connection down with it.
+  }
+}
+
+// Route one client-initiated stream to its handler. Split out of the WebSocketServer callback and
+// exported so the ownership rule above can be driven by a test through the real dispatcher instead
+// of a copy of it.
+export function dispatchClientStream(
+  clientManager: ClientManager,
+  stream: MuxStreamLike,
+  logger: AppLogger
+): void {
+  const headers = asRecord(stream.headers);
+  const type = asString(headers.type);
+  const msgId = streamMsgId(stream);
+
+  const isTunnelFrame =
+    type === 'tunnel_ready' || type === 'tunnel_data' || type === 'tunnel_close' || type === 'tunnel_error';
+  const isResponseFrame = type === 'response' || asNumber(headers.statusCode) > 0;
+
+  // Ownership comes first: without it a late frame resurrects the stream before the handler that
+  // would have ignored it (they all return early when no pending record matches) can release it.
+  if (isTunnelFrame) {
+    if (!clientManager.pendingTunnels.has(msgId)) {
+      releaseOrphanStream(stream, logger, type);
+      return;
+    }
+    if (type === 'tunnel_ready') return handleTunnelReady(clientManager, stream, logger);
+    if (type === 'tunnel_data') return handleTunnelData(clientManager, stream, logger);
+    if (type === 'tunnel_close') return handleTunnelClose(clientManager, stream, logger);
+    return handleTunnelError(clientManager, stream, logger);
+  }
+
+  if (isResponseFrame) {
+    if (!clientManager.pendingRequests.has(msgId)) {
+      releaseOrphanStream(stream, logger, 'response');
+      return;
+    }
+    return handleClientResponse(clientManager, stream, logger);
+  }
+
+  // Legacy JSON message handling
+  handleLegacyStream(clientManager, stream, logger);
+}
+
 function handleClientResponse(clientManager: ClientManager, stream: MuxStreamLike, _logger: AppLogger) {
   const headers = asRecord(stream.headers);
-  const msgId = asString(headers.id) || String(stream.id);
+  const msgId = streamMsgId(stream);
 
   const p = clientManager.pendingRequests.get(msgId);
   if (!p) return;
@@ -499,8 +546,7 @@ function armTunnelIdle(clientManager: ClientManager, p: PendingRecord, socket: N
 }
 
 function handleTunnelReady(clientManager: ClientManager, stream: MuxStreamLike, _logger: AppLogger) {
-  const headers = asRecord(stream.headers);
-  const msgId = asString(headers.id) || String(stream.id);
+  const msgId = streamMsgId(stream);
 
   const p = clientManager.pendingTunnels.get(msgId);
   if (!p) return;
@@ -579,8 +625,7 @@ function handleTunnelReady(clientManager: ClientManager, stream: MuxStreamLike, 
 }
 
 function handleTunnelData(clientManager: ClientManager, stream: MuxStreamLike, _logger: AppLogger) {
-  const headers = asRecord(stream.headers);
-  const msgId = asString(headers.id) || String(stream.id);
+  const msgId = streamMsgId(stream);
 
   const p = clientManager.pendingTunnels.get(msgId);
   if (!p || !p.socket || p.socket.destroyed) return;
@@ -594,8 +639,7 @@ function handleTunnelData(clientManager: ClientManager, stream: MuxStreamLike, _
 }
 
 function handleTunnelClose(clientManager: ClientManager, stream: MuxStreamLike, _logger: AppLogger) {
-  const headers = asRecord(stream.headers);
-  const msgId = asString(headers.id) || String(stream.id);
+  const msgId = streamMsgId(stream);
 
   const p = clientManager.pendingTunnels.get(msgId);
   if (!p) return;
@@ -607,7 +651,7 @@ function handleTunnelClose(clientManager: ClientManager, stream: MuxStreamLike, 
 
 function handleTunnelError(clientManager: ClientManager, stream: MuxStreamLike, logger: AppLogger) {
   const headers = asRecord(stream.headers);
-  const msgId = asString(headers.id) || String(stream.id);
+  const msgId = streamMsgId(stream);
 
   const p = clientManager.pendingTunnels.get(msgId);
   if (!p) return;
@@ -656,11 +700,12 @@ function handleTunnelError(clientManager: ClientManager, stream: MuxStreamLike, 
   if (p.client) p.client.pendingTunnels.delete(msgId);
 }
 
-// Handle a legacy JSON-shaped message delivered over a mux stream (payload in
-// the stream body) by dispatching to the JSON handler for that type.
-function handleLegacyStream(clientManager: ClientManager, stream: MuxStreamLike, _logger: AppLogger) {
-  // Unknown stream type - just close it
-  stream.close();
+// A stream whose header type is none of the ones above is not something this server ever opens -
+// it opens every stream it knows about - so it belongs to the same class of late frame as the ones
+// the dispatcher retires. Half-closing it (what this used to do) left the entry in mux.streams with
+// nothing left to remove it: closing an OPEN stream only moves it to half_closed_local.
+function handleLegacyStream(_clientManager: ClientManager, stream: MuxStreamLike, logger: AppLogger) {
+  releaseOrphanStream(stream, logger, 'unexpected');
 }
 
 // =============================================================================
