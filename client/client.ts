@@ -40,6 +40,15 @@ const CONFIG = loadClientConfig({
     process.env.CONFIG_PATH,
     path.join(process.cwd(), 'config.yaml'),
     path.join(process.cwd(), 'config.yml'),
+    // Next to the executable. When this runs from source __dirname already covers it, but in a
+    // packaged binary __dirname points INSIDE the snapshot - a virtual filesystem where a
+    // config.yaml placed by the operator can never appear - so "put config.yaml beside the exe",
+    // the most natural thing to try, silently did nothing unless the working directory happened to
+    // be the same. A Windows service (WinSW) or systemd unit starts with a different cwd, which is
+    // exactly when an operator fills in a config and sees it ignored. Listed after cwd so an
+    // explicit working directory still wins, and after CONFIG_PATH so an explicit path always wins.
+    path.join(path.dirname(process.execPath), 'config.yaml'),
+    path.join(path.dirname(process.execPath), 'config.yml'),
     path.join(__dirname, 'config.yaml'),
     path.join(__dirname, 'config.yml'),
   ],
