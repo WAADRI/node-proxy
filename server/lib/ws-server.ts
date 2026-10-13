@@ -456,7 +456,9 @@ function recordTunnelLog(clientManager: ClientManager, p: PendingRecord) {
       kind: 'tunnel',
       ts: p.startTime || endTs,
       ip: p.ip || '',
-      method: 'CONNECT',
+      // The proxy that carried the tunnel, not the HTTP method: SOCKS5 is not CONNECT, and
+      // labelling both the same made the log lie about which listener served the request.
+      method: p.type === 'socks5' ? 'SOCKS5' : 'CONNECT',
       url: (p.host || '') + (p.port ? ':' + p.port : ''),
       status: 0,
       ms: Math.max(0, endTs - (p.startTime || endTs)),
