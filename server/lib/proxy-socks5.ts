@@ -87,6 +87,18 @@ export function createSocks5Proxy(
       if (cleanupState.tunnelId && cleanupState.currentClient) {
         cleanupState.currentClient.pendingTunnels.delete(cleanupState.tunnelId);
         clientManager.pendingTunnels.delete(cleanupState.tunnelId);
+        // Release the MUX STREAM too, not only the pending slots. A tunnel that ends because the
+        // client went away, or because the tunnel_timeout below fired, used to leave its stream in
+        // mux.streams forever: a long-running server crept up to MAX_CONCURRENT_STREAMS, then
+        // createStream() returned null and EVERY later SOCKS5 CONNECT failed with "openTunnel
+        // failed" - while the HTTP proxy kept working because it uses a separate legacy path (see
+        // proxy-http.ts, it never calls openTunnel). The legacy path numbers tunnels with a uuid,
+        // so Number() yields NaN there and closeTunnel() simply finds nothing; it is idempotent,
+        // so repeated cleanup() calls are safe.
+        const streamId = Number(cleanupState.tunnelId);
+        if (Number.isInteger(streamId) && cleanupState.currentClient.mux) {
+          cleanupState.currentClient.mux.closeTunnel(streamId, 'socks5_closed');
+        }
         try {
           cleanupState.currentClient.ws.send(JSON.stringify({ type: 'tunnel_close', id: cleanupState.tunnelId }));
         } catch (_) {
