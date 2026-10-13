@@ -110,6 +110,23 @@ test('every SOCKS5 terminate path reaches the stream release (wiring)', () => {
       /Number\.isInteger\(streamId\)/.test(socks5),
     'the id must be validated before use: the legacy path numbers tunnels with a uuid'
   );
+  // The release above is only reachable while cleanupState holds the tunnel. These two assignments
+  // were missing for a while, which made closeTunnel() dead code and leaked one stream per tunnel
+  // until the 512 cap broke every SOCKS5 CONNECT - the source string above stayed green through all
+  // of it. The behaviour is covered end to end by socks5-tunnel-stream-release.test.ts; this pair of
+  // assertions is here so the wiring cannot silently disappear again.
+  assert.ok(
+    /cleanupState\.tunnelId = tunnelId;/.test(socks5),
+    'cleanup() cannot release a stream it was never told about'
+  );
+  assert.ok(
+    /cleanupState\.currentClient = client;/.test(socks5),
+    'and it cannot reach the client mux without the client either'
+  );
+  assert.ok(
+    /cleanupState: CleanupState/.test(socks5),
+    'handleTCPConnect must receive the state object it writes to'
+  );
   assert.ok(
     (socks5.match(/cleanup\(\)/g) || []).length >= 3,
     'socket close, timeout and error must all route through cleanup()'
