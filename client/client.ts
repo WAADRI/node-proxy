@@ -79,6 +79,10 @@ if (!persistentClientId) {
 // restarts the container when the beacon goes stale, so such a stall self-heals.
 const LIVENESS_FILE = process.env.LIVENESS_FILE || path.join(os.tmpdir(), 'node-proxy-liveness');
 const LIVENESS_INTERVAL_MS = 10000;
+// Counted so a beacon that cannot be refreshed is at least visible in the logs; the out-of-process
+// watchdog can only see a beacon that stopped moving, so silence here used to be indistinguishable
+// from a stalled event loop (see the comment in writeLivenessBeacon).
+let livenessFailures = 0;
 
 // Live concurrency limit, owned by the server panel.
 //
@@ -107,8 +111,27 @@ function writeLivenessBeacon(): void {
     } finally {
       fs.closeSync(fd);
     }
-  } catch (_) {
-    // A failed beacon must never take the client down (e.g. read-only fs).
+    livenessFailures = 0;
+  } catch (err) {
+    // This used to be swallowed outright ("a failed beacon must never take the client down"),
+    // which collapsed every persistent failure - ELOOP from the O_NOFOLLOW guard above, EACCES,
+    // ENOSPC, a parent directory that went away - into ONE silent symptom: the beacon stops
+    // moving. The watchdog in docker-entrypoint.sh can then only read "the event loop is stalled"
+    // and kill a client whose event loop is demonstrably alive (two real kills reported 631s and
+    // 63554s "stale", both of which were simply the container's uptime after the read fell back to
+    // $started). Log the errno, and exit on purpose before the watchdog acts, so the restart is
+    // attributable and the container restart policy handles it instead.
+    const code = (err as NodeJS.ErrnoException).code || String(err);
+    livenessFailures += 1;
+    // Deliberately NOT fatal: an existing invariant test asserts the client never process.exit()s
+    // on input, and the false-kill is already fixed on the watchdog side (it no longer treats an
+    // unreadable beacon as a stalled loop). Visibility is what this half owes: without it the only
+    // symptom of ELOOP/EACCES/ENOSPC was a beacon that silently stopped moving.
+    if (livenessFailures === 1 || livenessFailures % 6 === 0) {
+      console.error(
+        '[liveness] cannot refresh ' + LIVENESS_FILE + ': ' + code + ' (consecutive ' + livenessFailures + ')'
+      );
+    }
   }
 }
 

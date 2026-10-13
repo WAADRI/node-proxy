@@ -58,9 +58,19 @@ if [ "$#" -eq 0 ]; then
   set -- node client.ts
 fi
 
+# Hand the resolved path to the client explicitly: it reads LIVENESS_FILE, and its own default
+# goes through os.tmpdir(), which honours TMPDIR - so without this export the two sides can end up
+# watching different files.
+export LIVENESS_FILE="$BEACON"
+
 # A beacon left behind by an earlier run in the *same* container (a restart
 # reuses the filesystem) would look stalled at once and cause a restart loop.
-rm -f "$BEACON" 2>/dev/null || true
+if ! rm -f "$BEACON" 2>/dev/null; then
+  echo "[watchdog] warning: could not remove the stale beacon $BEACON (a leftover owned by another user?)"
+fi
+if [ -e "$BEACON" ]; then
+  echo "[watchdog] warning: $BEACON still exists after cleanup: $(ls -l "$BEACON" 2>&1)"
+fi
 
 "$@" &
 child=$!
@@ -68,6 +78,10 @@ started=$(date +%s)
 echo "[watchdog] supervising pid $child: $*"
 
 stopping=0
+missing=0
+# Missing/unreadable beacon checks tolerated before acting at all (36 x 5s = 180s). The client
+# exits by itself after ~60s of write failures, so this window only covers legacy clients.
+GRACE=36
 forward_stop() {
   stopping=1
   kill -TERM "$child" 2>/dev/null || true
@@ -86,16 +100,34 @@ while :; do
 
   [ "$stopping" -eq 1 ] && break
 
-  # No beacon yet counts as the beacon age since startup, so a client that never
-  # writes one is restarted too instead of being trusted forever.
+  # An unreadable beacon is NOT proof of a stalled event loop. The client only stops refreshing it
+  # when its own write fails (ELOOP from its O_NOFOLLOW guard, EACCES, ENOSPC, a parent that went
+  # away), and substituting $started for a missing value made `age` equal the container's uptime:
+  # two real kills were reported as "event loop stalled" at 631s and 63554s while the client was
+  # serving tunnels microseconds earlier. Treat missing/unreadable as unknown, say so, and give it a
+  # full grace window before acting; the client now exits by itself on persistent write failure,
+  # which is attributable instead of a mystery kill.
   last="$(cat "$BEACON" 2>/dev/null)"
   case "$last" in
-    '' | *[!0-9]*) last="$started" ;;
+    '' | *[!0-9]*)
+      missing=$((missing + 1))
+      if [ "$missing" -eq 1 ] || [ $((missing % 12)) -eq 0 ]; then
+        echo "[watchdog] beacon $BEACON unreadable/absent (check #${missing}, content='${last}')"
+      fi
+      if [ "$missing" -le "$GRACE" ]; then
+        continue
+      fi
+      echo "[watchdog] beacon $BEACON unreadable for ${missing} checks (> ${GRACE}); the client cannot report liveness"
+      age=$((missing * CHECK))
+      ;;
+    *)
+      missing=0
+      age=$(( $(date +%s) - last ))
+      ;;
   esac
-  age=$(( $(date +%s) - last ))
 
   if [ "$STALE" -gt 0 ] && [ "$age" -gt "$STALE" ]; then
-    echo "[watchdog] liveness beacon is ${age}s old (> ${STALE}s): event loop stalled, killing pid $child"
+    echo "[watchdog] killing pid $child: liveness unconfirmed for ${age}s (beacon='$BEACON' content='${last}', container up $(( $(date +%s) - started ))s)"
     kill -KILL "$child" 2>/dev/null || true
     wait "$child" 2>/dev/null || true
     exit 1
