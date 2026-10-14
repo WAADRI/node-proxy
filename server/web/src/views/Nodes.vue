@@ -202,10 +202,20 @@ const tableColumns = computed(() =>
         }
         case 'notes':
           return h('span', clickable(row, 'notes', ''), row.notes || h('span', { style: 'color: var(--np-text-muted)' }, '-'));
-        case 'req':
-          return row.pendingRequestsCount;
-        case 'tunnel':
-          return row.pendingTunnelsCount;
+        case 'req': {
+          // Same shape as the workbench tile: the occupancy that matters is the one the
+          // node reports (it is what its own concurrency limit and the least-loaded
+          // strategy are judged against), with the server's in-flight count as a floor.
+          // Showing only the server's number made a node carrying 90 tunnels read "0".
+          const reported = Number((row.clientStats || {}).activeRequests) || 0;
+          const pending = Number(row.pendingRequestsCount) || 0;
+          return h('span', { title: `节点自报 ${reported} / 服务端在途 ${pending}` }, Math.max(reported, pending));
+        }
+        case 'tunnel': {
+          const reported = Number((row.clientStats || {}).activeTunnels) || 0;
+          const pending = Number(row.pendingTunnelsCount) || 0;
+          return h('span', { title: `节点自报 ${reported} / 服务端在途 ${pending}` }, Math.max(reported, pending));
+        }
         case 'traffic':
           return h('span', {
             style: 'font-variant-numeric: tabular-nums',
