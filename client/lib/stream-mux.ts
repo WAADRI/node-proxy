@@ -498,6 +498,11 @@ class StreamMux {
   closeTunnel(streamId: number, reason: string | number = 0): void {
     const stream = this.streams.get(streamId);
     if (!stream) return;
+    // Keep this in step with the server copy: half-close first so the peer learns the tunnel is
+    // over from END_STREAM (Stream.close only sends it while the stream is still OPEN, and neither
+    // mux copy handles the TUNNEL_CLOSE frame below). A node that ends a tunnel without that
+    // END_STREAM leaves the server holding it until the connection drops.
+    stream.close();
     this._sendFrame(streamId, FRAME_TYPE.TUNNEL_CLOSE, { reason }, 0);
     stream.state = STREAM_STATE.CLOSED;
     this._removeStream(streamId);

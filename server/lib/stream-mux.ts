@@ -505,6 +505,16 @@ export class StreamMux {
   closeTunnel(streamId: number, reason: number | string = 0): void {
     const stream = this.streams.get(streamId);
     if (!stream) return;
+    // Half-close FIRST, so the peer learns the tunnel is over from END_STREAM. Stream.close() only
+    // sends that frame while the stream is still OPEN, so it has to happen before the state is
+    // forced to CLOSED below. The TUNNEL_CLOSE frame alone does not do it: neither mux copy has a
+    // branch for it (Stream._handleFrame handles HEADERS/DATA/RST_STREAM/WINDOW_UPDATE only), and
+    // the legacy JSON tunnel_close that mirrors it is keyed by a string that the node's numeric
+    // tunnel map never matches. Without the END_STREAM the node kept every ended tunnel's slot and
+    // its target socket: on 2026-10-14 the ten nodes reported 910 occupied slots (max_concurrent is
+    // 150 each) while the server held ~0 pending tunnels, and a node that reaches its limit answers
+    // "Client busy" to every new tunnel - the panel tile was the only place that showed it.
+    stream.close();
     this._sendFrame(streamId, FRAME_TYPE.TUNNEL_CLOSE, { reason }, 0);
     stream.state = STREAM_STATE.CLOSED;
     this._removeStream(streamId);

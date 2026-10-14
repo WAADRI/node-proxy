@@ -142,3 +142,21 @@ test('every SOCKS5 terminate path reaches the stream release (wiring)', () => {
     'the request log must name the proxy that served the tunnel, not hard-code CONNECT for both'
   );
 });
+
+test('both mux copies tell the peer the tunnel ended before dropping the stream', () => {
+  for (const rel of ['server/lib/stream-mux.ts', 'client/lib/stream-mux.ts']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', rel), 'utf8');
+    const at = src.indexOf('closeTunnel(streamId');
+    assert.ok(at > 0, rel + ' must define closeTunnel');
+    const body = src.slice(at, src.indexOf('\n  }', at));
+    const halfClose = body.indexOf('stream.close();');
+    assert.ok(
+      halfClose > 0,
+      rel + ' must half-close the stream: the peer ignores TUNNEL_CLOSE, so END_STREAM is what releases its slot'
+    );
+    assert.ok(
+      halfClose < body.indexOf('_sendFrame(streamId, FRAME_TYPE.TUNNEL_CLOSE'),
+      rel + ' must half-close while the stream is still OPEN - Stream.close() sends nothing once the state is CLOSED'
+    );
+  }
+});
