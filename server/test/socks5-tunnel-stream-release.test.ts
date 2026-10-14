@@ -79,6 +79,7 @@ type StreamMuxLike = {
 type MuxModule = {
   StreamMux: new (ws: unknown, options?: Record<string, unknown>) => StreamMuxLike;
   FRAME_TYPE: Record<string, number>;
+  FLAG: Record<string, number>;
 };
 
 type SocksServer = {
@@ -132,6 +133,28 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void
 // VER|CMD|RSV|ATYP|ADDR|PORT - a CONNECT to 127.0.0.1:443; the fake node never dials it.
 function connectRequest(): Buffer {
   return Buffer.from([0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0x01, 0xbb]);
+}
+
+// Frame types the mux sent, as { type, streamId, flags }: the flush batches small frames, so one
+// WebSocket message is either a single frame or [2B count][frame]... - decode both, the same way
+// the receiver does (StreamMux._handleFrame).
+function decodeFrames(sent: Buffer[]): { type: number; streamId: number; flags: number }[] {
+  const out: { type: number; streamId: number; flags: number }[] = [];
+  for (const buf of sent) {
+    if (buf.length < 13) continue;
+    if (buf.readUInt16BE(0) >= 2) {
+      let offset = 2;
+      while (offset + 13 <= buf.length) {
+        const length = buf.readUInt32BE(offset);
+        if (offset + 13 + length > buf.length) break;
+        out.push({ type: buf[offset + 4], streamId: buf.readUInt32BE(offset + 5), flags: buf.readUInt32BE(offset + 9) });
+        offset += 13 + length;
+      }
+    } else {
+      out.push({ type: buf[4], streamId: buf.readUInt32BE(5), flags: buf.readUInt32BE(9) });
+    }
+  }
+  return out;
 }
 
 type Fixture = {
@@ -224,10 +247,14 @@ async function openTunnel(port: number): Promise<{ sock: NodeNet.Socket; chunks:
 }
 
 test('a tunnel that the node never answers releases its stream on tunnel_timeout', async () => {
-  const fixture = await startProxy(200, false);
+  // Long enough to observe the pending tunnel and its stream id even while the whole suite runs in
+  // parallel; short enough to keep the test quick.
+  const fixture = await startProxy(1200, false);
+  const { FRAME_TYPE, FLAG } = await loadMux();
   const { sock, chunks } = await openTunnel(fixture.port);
   try {
     await waitFor(() => fixture.mux.streams.size === 1, 5000);
+    const streamId = [...fixture.mux.streams.keys()][0];
     assert.equal(fixture.pending.size, 1, 'the tunnel is pending until the node answers');
     assert.equal(fixture.tunnelIds.size, 1, 'the client bookkeeping knows the tunnel');
 
@@ -247,6 +274,19 @@ test('a tunnel that the node never answers releases its stream on tunnel_timeout
       [0x05, 0x03],
       'and the SOCKS5 client must have been told the tunnel timed out (reply 0x03)'
     );
+
+    // The NODE has to learn the tunnel is over. It ignores the TUNNEL_CLOSE frame (no branch for
+    // it in either mux copy) and the legacy JSON tunnel_close is keyed by a string its numeric
+    // tunnel map never matches, so END_STREAM is the only signal that releases its slot and
+    // destroys the target socket. Without it every ended tunnel leaks one node slot until the node
+    // reaches max_concurrent and answers "Client busy" to everything (2026-10-14: reported
+    // occupancy 910 while the server held ~0 pending tunnels).
+    assert.ok(
+      decodeFrames(fixture.ws.sent).some(
+        (f) => f.streamId === streamId && f.type === FRAME_TYPE.DATA && (f.flags & FLAG.END_STREAM) !== 0
+      ),
+      'the node must be told the tunnel ended with END_STREAM, or it leaks a tunnel slot per ended tunnel'
+    );
   } finally {
     sock.destroy();
     await fixture.close();
@@ -255,7 +295,7 @@ test('a tunnel that the node never answers releases its stream on tunnel_timeout
 
 test('a tunnel the node refuses releases its stream when the tunnel ends', async () => {
   const fixture = await startProxy(30000, true);
-  const { FRAME_TYPE } = await loadMux();
+  const { FRAME_TYPE, FLAG } = await loadMux();
   const { sock, chunks } = await openTunnel(fixture.port);
   try {
     await waitFor(() => fixture.mux.streams.size === 1, 5000);
@@ -276,6 +316,12 @@ test('a tunnel the node refuses releases its stream when the tunnel ends', async
       [...answered.subarray(2, 4)],
       [0x05, 0x01],
       'and the node-reported failure must reach it as reply 0x01'
+    );
+    assert.ok(
+      decodeFrames(fixture.ws.sent).some(
+        (f) => f.streamId === streamId && f.type === FRAME_TYPE.DATA && (f.flags & FLAG.END_STREAM) !== 0
+      ),
+      'and the node must still be told the tunnel ended, or it leaks its slot for a failed tunnel'
     );
   } finally {
     sock.destroy();
