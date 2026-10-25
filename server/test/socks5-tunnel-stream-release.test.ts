@@ -281,10 +281,16 @@ test('a tunnel that the node never answers releases its stream on tunnel_timeout
     // destroys the target socket. Without it every ended tunnel leaks one node slot until the node
     // reaches max_concurrent and answers "Client busy" to everything (2026-10-14: reported
     // occupancy 910 while the server held ~0 pending tunnels).
-    assert.ok(
+    // Frames are queued and flushed on a later setImmediate tick (stream-mux.ts
+    // _sendFrame/_flushSendBuffer). `streams.size === 0` above only says closeTunnel()
+    // ran; on a loaded CI runner the END_STREAM frame may not have been sent yet.
+    const endStreamSent = () =>
       decodeFrames(fixture.ws.sent).some(
         (f) => f.streamId === streamId && f.type === FRAME_TYPE.DATA && (f.flags & FLAG.END_STREAM) !== 0
-      ),
+      );
+    await waitFor(endStreamSent);
+    assert.ok(
+      endStreamSent(),
       'the node must be told the tunnel ended with END_STREAM, or it leaks a tunnel slot per ended tunnel'
     );
   } finally {
@@ -317,10 +323,13 @@ test('a tunnel the node refuses releases its stream when the tunnel ends', async
       [0x05, 0x01],
       'and the node-reported failure must reach it as reply 0x01'
     );
-    assert.ok(
+    const endStreamSent = () =>
       decodeFrames(fixture.ws.sent).some(
         (f) => f.streamId === streamId && f.type === FRAME_TYPE.DATA && (f.flags & FLAG.END_STREAM) !== 0
-      ),
+      );
+    await waitFor(endStreamSent);
+    assert.ok(
+      endStreamSent(),
       'and the node must still be told the tunnel ended, or it leaks its slot for a failed tunnel'
     );
   } finally {
