@@ -165,6 +165,13 @@ const clickable = (row, field, cls) => ({
   onClick: () => openEdit(row, field),
 });
 
+// Keep the real width of every visible column instead of a fixed 1500px. A fixed
+// scroll-x smaller than the sum squeezes columns and lets the sticky ops column
+// sit on top of neighbouring text.
+const tableScrollX = computed(() =>
+  ALL_COLUMNS.filter((c) => visibleKeys.value.includes(c.key)).reduce((sum, c) => sum + c.width, 0)
+);
+
 const tableColumns = computed(() =>
   ALL_COLUMNS.filter((c) => visibleKeys.value.includes(c.key)).map((c) => {
     const def = {
@@ -439,13 +446,13 @@ const cbRowClass = (row) => {
     <section class="nodes-table np-panel">
       <div class="nodes-table-head">
         <span class="nodes-table-title">节点列表</span>
-        <span class="nodes-table-hint">点击「区域 / 分组 / 标签 / 备注」单元格可直接编辑</span>
+        <span class="nodes-table-hint">点击「区域 / 分组 / 标签 / 备注」单元格可直接编辑 · 表格可左右滑动</span>
       </div>
       <NDataTable
         :columns="tableColumns"
         :data="filtered"
         :loading="loading"
-        :scroll-x="1500"
+        :scroll-x="tableScrollX"
         :row-class-name="cbRowClass"
         :bordered="false"
         :single-line="false"
@@ -592,6 +599,23 @@ const cbRowClass = (row) => {
   letter-spacing: 0.04em;
 }
 .nodes-table :deep(.n-data-table-td) { font-size: 12.5px; }
+/* The ops column is sticky. Naive paints every td with the theme's tdColor;
+   ours is transparent for the glass panel, so the cells scrolling underneath
+   showed through the button cell. Give the sticky column its own opaque
+   surface (and a divider) so the buttons always win the overlap. */
+.nodes-table :deep(.n-data-table-td--fixed-right) {
+  background: var(--np-sticky-bg) !important;
+  border-left: 1px solid var(--np-border-soft);
+  white-space: nowrap;
+}
+.nodes-table :deep(.n-data-table-th--fixed-right) {
+  background: var(--np-sticky-bg) !important;
+  border-left: 1px solid var(--np-border-soft);
+  z-index: 3;
+}
+.nodes-table :deep(.n-data-table-tr:hover .n-data-table-td--fixed-right) {
+  background: var(--np-sticky-bg-hover) !important;
+}
 
 .np-edit-head {
   display: flex;
