@@ -13,6 +13,8 @@
   --np-bg-soft: #0f1626;
   --np-panel-bg: rgba(15, 22, 38, 0.82);
   --np-panel-bg-strong: rgba(17, 24, 40, 0.94);
+  --np-sticky-bg: #0d1422;
+  --np-sticky-bg-hover: #121c2e;
   --np-bg-hover: rgba(76, 141, 255, 0.09);
   --np-border: #26314a;
   --np-border-soft: rgba(148, 163, 184, 0.13);
@@ -55,6 +57,8 @@
   --np-bg-soft: #ffffff;
   --np-panel-bg: rgba(255, 255, 255, 0.92);
   --np-panel-bg-strong: #ffffff;
+  --np-sticky-bg: #ffffff;
+  --np-sticky-bg-hover: #f3f7ff;
   --np-bg-hover: rgba(37, 99, 235, 0.06);
   --np-border: #d7e0ee;
   --np-border-soft: rgba(37, 99, 235, 0.1);
