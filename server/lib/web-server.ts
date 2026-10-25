@@ -274,7 +274,10 @@ function createWebServer(
       res.json({ logs: [] });
       return;
     }
-    res.json({ logs: hub.getRecent(limit) });
+    // The panel renders a live feed with the newest request on top, so expose
+    // newest-first here too. LogHub itself stays chronological for its other
+    // consumers/tests; reverse at the API boundary instead of changing them.
+    res.json({ logs: hub.getRecent(limit).reverse() });
   });
 
   // --- Network testing toolkit (issue #31): ping / tcping / http / dns / traceroute ---
