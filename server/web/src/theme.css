@@ -1,55 +1,155 @@
 /* ===========================================================================
- * Theme CSS - GitHub-inspired palette, driven by [data-theme] on <html>
+ * Theme CSS - Node-Proxy management panel
+ * ---------------------------------------------------------------------------
+ * A single design-token layer drives both themes. Components only reference
+ * these variables, so the dark / light palettes stay in lockstep.
  * =========================================================================== */
+
 :root,
 [data-theme='dark'] {
-  --np-bg: #0d1117;
-  --np-bg-soft: #161b22;
-  --np-bg-hover: #1c2128;
-  --np-border: #30363d;
-  --np-border-soft: #21262d;
-  --np-text: #e6edf3;
-  --np-text-2: #c9d1d9;
-  --np-text-muted: #8b949e;
-  --np-primary: #2f81f7;
-  --np-primary-hover: #58a6ff;
-  --np-success: #3fb950;
-  --np-warning: #d29922;
-  --np-danger: #f85149;
-  --np-danger-bg: rgba(248, 81, 73, 0.12);
-  --np-muted-chip: rgba(110, 118, 129, 0.2);
+  color-scheme: dark;
+
+  --np-bg: #070a12;
+  --np-bg-soft: #0f1626;
+  --np-panel-bg: rgba(15, 22, 38, 0.82);
+  --np-panel-bg-strong: rgba(17, 24, 40, 0.94);
+  --np-bg-hover: rgba(76, 141, 255, 0.09);
+  --np-border: #26314a;
+  --np-border-soft: rgba(148, 163, 184, 0.13);
+  --np-text: #f1f5fc;
+  --np-text-2: #c3cede;
+  --np-text-muted: #8391aa;
+
+  --np-primary: #4c8dff;
+  --np-primary-hover: #6ea4ff;
+  --np-primary-rgb: 76, 141, 255;
+  --np-violet: #a78bfa;
+  --np-violet-rgb: 139, 92, 246;
+  --np-cyan: #22d3ee;
+  --np-cyan-rgb: 34, 211, 238;
+  --np-success: #34d399;
+  --np-success-rgb: 52, 211, 153;
+  --np-warning: #fbbf24;
+  --np-warning-rgb: 251, 191, 36;
+  --np-danger: #fb7185;
+  --np-danger-rgb: 251, 113, 133;
+  --np-danger-bg: rgba(251, 113, 133, 0.12);
+  --np-muted-chip: rgba(148, 163, 184, 0.12);
+
+  --np-shadow: 0 10px 30px rgba(2, 6, 23, 0.34);
+  --np-shadow-lg: 0 24px 60px rgba(2, 6, 23, 0.5);
+  --np-glow: 0 0 0 1px rgba(var(--np-primary-rgb), 0.18), 0 12px 32px rgba(var(--np-primary-rgb), 0.16);
+  --np-radius: 16px;
+  --np-radius-sm: 10px;
+  --np-side-bg: linear-gradient(180deg, rgba(15, 22, 38, 0.97), rgba(7, 10, 18, 0.99));
+  --np-header-bg: rgba(8, 12, 22, 0.72);
+  --np-grid-line: rgba(148, 163, 184, 0.05);
+  --np-scroll-thumb: #2b3850;
+  --np-inset-highlight: rgba(255, 255, 255, 0.06);
 }
 
 [data-theme='light'] {
-  --np-bg: #ffffff;
-  --np-bg-soft: #f6f8fa;
-  --np-bg-hover: #eef1f4;
-  --np-border: #d0d7de;
-  --np-border-soft: #d8dee4;
-  --np-text: #1f2328;
-  --np-text-2: #3d444d;
-  --np-text-muted: #656d76;
-  --np-primary: #0969da;
-  --np-primary-hover: #0550ae;
-  --np-success: #1a7f37;
-  --np-warning: #9a6700;
-  --np-danger: #cf222e;
-  --np-danger-bg: rgba(207, 34, 46, 0.08);
-  --np-muted-chip: rgba(101, 109, 118, 0.14);
+  color-scheme: light;
+
+  --np-bg: #f3f6fc;
+  --np-bg-soft: #ffffff;
+  --np-panel-bg: rgba(255, 255, 255, 0.92);
+  --np-panel-bg-strong: #ffffff;
+  --np-bg-hover: rgba(37, 99, 235, 0.06);
+  --np-border: #d7e0ee;
+  --np-border-soft: rgba(37, 99, 235, 0.1);
+  --np-text: #0f1a2e;
+  --np-text-2: #3b4a63;
+  --np-text-muted: #6b7a93;
+
+  --np-primary: #2563eb;
+  --np-primary-hover: #1d4ed8;
+  --np-primary-rgb: 37, 99, 235;
+  --np-violet: #7c3aed;
+  --np-violet-rgb: 124, 58, 237;
+  --np-cyan: #0891b2;
+  --np-cyan-rgb: 8, 145, 178;
+  --np-success: #059669;
+  --np-success-rgb: 5, 150, 105;
+  --np-warning: #b45309;
+  --np-warning-rgb: 180, 83, 9;
+  --np-danger: #dc2626;
+  --np-danger-rgb: 220, 38, 38;
+  --np-danger-bg: rgba(220, 38, 38, 0.08);
+  --np-muted-chip: rgba(100, 116, 139, 0.1);
+
+  --np-shadow: 0 10px 30px rgba(30, 64, 175, 0.07);
+  --np-shadow-lg: 0 24px 60px rgba(30, 64, 175, 0.12);
+  --np-glow: 0 0 0 1px rgba(var(--np-primary-rgb), 0.14), 0 12px 30px rgba(var(--np-primary-rgb), 0.12);
+  --np-radius: 16px;
+  --np-radius-sm: 10px;
+  --np-side-bg: linear-gradient(180deg, #ffffff, #f7f9ff);
+  --np-header-bg: rgba(255, 255, 255, 0.76);
+  --np-grid-line: rgba(37, 99, 235, 0.035);
+  --np-scroll-thumb: #c4cfdf;
+  --np-inset-highlight: rgba(255, 255, 255, 0.9);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
 }
 
 body {
   margin: 0;
-  background: var(--np-bg);
+  min-height: 100vh;
+  background-color: var(--np-bg);
+  background-image:
+    radial-gradient(1100px 620px at 0% -8%, rgba(var(--np-primary-rgb), 0.15), transparent 58%),
+    radial-gradient(900px 520px at 100% 0%, rgba(var(--np-violet-rgb), 0.11), transparent 54%),
+    radial-gradient(700px 500px at 55% 105%, rgba(var(--np-cyan-rgb), 0.06), transparent 60%),
+    linear-gradient(var(--np-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--np-grid-line) 1px, transparent 1px);
+  background-size: auto, auto, auto, 48px 48px, 48px 48px;
+  background-attachment: fixed;
   color: var(--np-text);
   font-family:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', 'PingFang SC',
     'Microsoft YaHei', sans-serif;
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-/* Connection dot */
+::selection {
+  background: rgba(var(--np-primary-rgb), 0.28);
+  color: var(--np-text);
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+/* Reusable surface ---------------------------------------------------------- */
+.np-panel {
+  background: var(--np-panel-bg);
+  border: 1px solid var(--np-border-soft);
+  border-radius: var(--np-radius);
+  box-shadow: var(--np-shadow);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+
+.np-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--np-text-muted);
+}
+
+/* Connection dot ------------------------------------------------------------ */
 .np-dot {
   display: inline-block;
   width: 8px;
@@ -57,12 +157,43 @@ body {
   border-radius: 50%;
   flex: none;
 }
-.np-dot.alive { background: var(--np-success); box-shadow: 0 0 0 3px rgba(63, 185, 80, 0.18); }
-.np-dot.stale { background: var(--np-warning); box-shadow: 0 0 0 3px rgba(210, 153, 34, 0.18); }
-.np-dot.dead { background: var(--np-danger); }
-.np-dot.idle { background: var(--np-text-muted); }
+.np-dot.alive {
+  background: var(--np-success);
+  box-shadow: 0 0 0 3px rgba(var(--np-success-rgb), 0.16), 0 0 12px rgba(var(--np-success-rgb), 0.7);
+}
+.np-dot.stale {
+  background: var(--np-warning);
+  box-shadow: 0 0 0 3px rgba(var(--np-warning-rgb), 0.16);
+}
+.np-dot.dead {
+  background: var(--np-danger);
+  box-shadow: 0 0 0 3px rgba(var(--np-danger-rgb), 0.14);
+}
+.np-dot.idle {
+  background: var(--np-text-muted);
+}
 
-/* Circuit breaker badge */
+/* Live pill ----------------------------------------------------------------- */
+.np-live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--np-text-2);
+  background: rgba(var(--np-success-rgb), 0.08);
+  border: 1px solid rgba(var(--np-success-rgb), 0.18);
+  white-space: nowrap;
+}
+.np-live-pill.is-offline {
+  color: var(--np-danger);
+  background: var(--np-danger-bg);
+  border-color: rgba(var(--np-danger-rgb), 0.22);
+}
+
+/* Circuit breaker badge ----------------------------------------------------- */
 .np-cb {
   display: inline-flex;
   align-items: center;
@@ -74,10 +205,10 @@ body {
   white-space: nowrap;
 }
 .np-cb.open { background: var(--np-danger-bg); color: var(--np-danger); }
-.np-cb.half_open { background: rgba(210, 153, 34, 0.15); color: var(--np-warning); }
-.np-cb.closed { background: rgba(63, 185, 80, 0.15); color: var(--np-success); }
+.np-cb.half_open { background: rgba(var(--np-warning-rgb), 0.14); color: var(--np-warning); }
+.np-cb.closed { background: rgba(var(--np-success-rgb), 0.14); color: var(--np-success); }
 
-/* Tag chips */
+/* Tag chips ----------------------------------------------------------------- */
 .np-tag-chip {
   display: inline-flex;
   padding: 0 8px;
@@ -88,13 +219,54 @@ body {
   background: var(--np-muted-chip);
   color: var(--np-text-2);
   margin-right: 4px;
+  border: 1px solid transparent;
+}
+.np-group-chip {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--np-primary);
+  background: rgba(var(--np-primary-rgb), 0.1);
+  border: 1px solid rgba(var(--np-primary-rgb), 0.28);
 }
 
-/* Scrollbar */
+/* Scrollbar ----------------------------------------------------------------- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--np-scroll-thumb) transparent;
+}
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: var(--np-border); border-radius: 6px; }
+::-webkit-scrollbar-thumb {
+  background: var(--np-scroll-thumb);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--np-border); background-clip: padding-box; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-/* Traffic chart bars */
-.tc-bar.up { background: var(--np-primary); }
-.tc-bar.down { background: var(--np-warning); }
+/* Traffic chart bars -------------------------------------------------------- */
+.tc-bar.up {
+  background: linear-gradient(180deg, var(--np-primary-hover), var(--np-primary));
+}
+.tc-bar.down {
+  background: linear-gradient(180deg, var(--np-violet), rgba(var(--np-violet-rgb), 0.6));
+}
+
+/* Motion -------------------------------------------------------------------- */
+@keyframes np-rise {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

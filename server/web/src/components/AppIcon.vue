@@ -127,5 +127,48 @@ const props = defineProps({
       <path d="M2 17l10 5 10-5" />
       <path d="M2 12l10 5 10-5" />
     </template>
+    <!-- activity (requests / pulse) -->
+    <template v-else-if="props.name === 'activity'">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+    </template>
+    <!-- shield (circuit breaker) -->
+    <template v-else-if="props.name === 'shield'">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </template>
+    <!-- route (routing strategy) -->
+    <template v-else-if="props.name === 'route'">
+      <circle cx="6" cy="19" r="3" />
+      <circle cx="18" cy="5" r="3" />
+      <path d="M9 19h5a4 4 0 0 0 0-8H10a4 4 0 0 1 0-8h5" />
+    </template>
+    <!-- gauge (bandwidth) -->
+    <template v-else-if="props.name === 'gauge'">
+      <path d="M12 21a9 9 0 1 0-9-9" />
+      <path d="M3.6 14.5A9 9 0 0 0 12 21" />
+      <line x1="12" y1="12" x2="16.5" y2="7.5" />
+      <circle cx="12" cy="12" r="1.4" />
+    </template>
+    <!-- database (traffic bytes) -->
+    <template v-else-if="props.name === 'database'">
+      <ellipse cx="12" cy="5" rx="8" ry="3" />
+      <path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5" />
+      <path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
+    </template>
+    <!-- key (proxy passwords) -->
+    <template v-else-if="props.name === 'key'">
+      <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777z" />
+      <path d="M15.5 7.5l3 3L22 7l-3-3" />
+    </template>
+    <!-- arrow-down (newest first) -->
+    <template v-else-if="props.name === 'arrow-down'">
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <polyline points="19 12 12 19 5 12" />
+    </template>
+    <!-- layers (tunnels) -->
+    <template v-else-if="props.name === 'layers'">
+      <polygon points="12 2 2 7 12 12 22 7 12 2" />
+      <polyline points="2 17 12 22 22 17" />
+      <polyline points="2 12 12 17 22 12" />
+    </template>
   </svg>
 </template>

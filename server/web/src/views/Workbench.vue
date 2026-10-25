@@ -74,6 +74,11 @@ function cbText() {
   const open = (store.status.clients || []).filter((c) => c.circuitBreaker && c.circuitBreaker.state === 'open').length;
   return open > 0 ? open + ' 个熔断' : '正常';
 }
+function cbTone() {
+  if (!store.status) return 'success';
+  const open = (store.status.clients || []).some((c) => c.circuitBreaker && c.circuitBreaker.state === 'open');
+  return open ? 'danger' : 'success';
+}
 function bwText() {
   const b = store.status && store.status.bandwidth;
   return b ? (b.enabled ? '已开启' : '关闭') : '-';
@@ -84,7 +89,7 @@ function bwText() {
 // ---------------------------------------------------------------------------
 const traffic = ref(null); // { today, daily[], totals }
 const trafficLoading = ref(false);
-const trafficClientId = ref('');
+const trafficClientId = ref(null);
 const trafficTimer = null;
 
 const trafficOptions = () => {
@@ -150,41 +155,66 @@ onUnmounted(() => {
 
 <template>
   <div class="wb">
-    <!-- Ports -->
-    <div class="wb-ports">
-      <span class="wb-ports-label">
-        <AppIcon name="chart" :size="15" /> 代理端口
-      </span>
-      <span class="wb-port"><b>HTTP</b> :8080</span>
-      <span class="wb-port"><b>HTTPS</b> :8080 (CONNECT)</span>
-      <span class="wb-port"><b>SOCKS5</b> :1080</span>
-      <span class="wb-port"><b>Web</b> :3000</span>
-    </div>
+    <!-- Overview / endpoints -->
+    <section class="wb-hero np-panel">
+      <div class="wb-hero-copy">
+        <div class="wb-eyebrow">
+          <span class="np-dot" :class="store.wsState === 'connected' ? 'alive' : 'dead'"></span>
+          SYSTEM OVERVIEW
+        </div>
+        <h2>代理网关运行概览</h2>
+        <p>节点状态、请求吞吐与流量趋势，一屏掌握。</p>
+      </div>
+      <div class="wb-endpoints">
+        <div class="wb-endpoints-label">接入端口</div>
+        <div class="wb-endpoint-grid">
+          <span class="wb-endpoint" title="HTTP / HTTPS 共用 8080，HTTPS 通过 CONNECT 隧道"><b>HTTP</b><code>:8080</code></span>
+          <span class="wb-endpoint" title="HTTP / HTTPS 共用 8080，HTTPS 通过 CONNECT 隧道"><b>HTTPS</b><code>:8080</code></span>
+          <span class="wb-endpoint"><b>SOCKS5</b><code>:1080</code></span>
+          <span class="wb-endpoint"><b>Web</b><code>:3000</code></span>
+        </div>
+      </div>
+    </section>
 
     <!-- Stat cards row 1 -->
     <div class="wb-cards">
-      <StatCard label="在线节点" :value="stats.total()" />
-      <StatCard label="总请求数" :value="stats.pendingReqs()" unit="待处理" />
-      <StatCard :label="'活跃隧道'" :value="stats.tunnels()" :unit="stats.tunnelsUnit()" :hint="stats.tunnelsHint()" />
-      <StatCard label="服务器运行时间" :value="stats.uptime() ? formatUptime(stats.uptime()) : '-'" />
+      <StatCard label="在线节点" :value="stats.total()" unit="个" icon="server" tone="primary" />
+      <StatCard label="待处理请求" :value="stats.pendingReqs()" unit="个" icon="activity" tone="cyan" hint="各节点自报活跃请求数与服务端在途请求数的较大值之和" />
+      <StatCard
+        label="活跃隧道"
+        :value="stats.tunnels()"
+        :unit="stats.tunnelsUnit()"
+        :hint="stats.tunnelsHint()"
+        icon="layers"
+        tone="violet"
+      />
+      <StatCard label="服务器运行时间" :value="stats.uptime() ? formatUptime(stats.uptime()) : '-'" icon="clock" tone="success" />
     </div>
 
     <!-- Stat cards row 2 -->
     <div class="wb-cards">
-      <StatCard label="路由策略" :value="routingLabel()" />
-      <StatCard label="熔断器" :value="cbText()" />
-      <StatCard label="带宽限制" :value="bwText()" />
-      <StatCard label="总失败数" :value="stats.failed()" />
-      <StatCard label="总流量" :value="formatBytes(stats.trafficBytes())" hint="全部节点本进程会话累计流量（上行 + 下行）" />
+      <StatCard label="路由策略" :value="routingLabel()" icon="route" tone="primary" accent />
+      <StatCard label="熔断器" :value="cbText()" icon="shield" :tone="cbTone()" accent />
+      <StatCard label="带宽限制" :value="bwText()" icon="gauge" tone="warning" accent />
+      <StatCard label="总失败数" :value="stats.failed()" icon="alert" tone="danger" />
+      <StatCard
+        label="总流量"
+        :value="formatBytes(stats.trafficBytes())"
+        hint="全部节点本进程会话累计流量（上行 + 下行）"
+        icon="database"
+        tone="cyan"
+      />
     </div>
 
     <!-- Daily traffic -->
-    <div class="wb-traffic">
+    <div class="wb-traffic np-panel">
       <div class="wb-traffic-head">
         <div class="wb-traffic-title">
-          <AppIcon name="chart" :size="16" />
-          <b>每日流量统计</b>
-          <span class="wb-traffic-sub">近 7 天，上行 + 下行</span>
+          <span class="wb-traffic-icon"><AppIcon name="chart" :size="16" /></span>
+          <div>
+            <b>每日流量统计</b>
+            <span class="wb-traffic-sub">近 7 天，上行 + 下行</span>
+          </div>
         </div>
         <div class="wb-traffic-tools">
           <NSelect
@@ -207,39 +237,42 @@ onUnmounted(() => {
           <div class="ts-item">
             <span class="ts-label">{{ trafficSummary().scope }} · 今日</span>
             <span class="ts-value">
-              <span class="up">↑ {{ formatBytes(trafficSummary().todayUp) }}</span>
-              <span class="down">↓ {{ formatBytes(trafficSummary().todayDown) }}</span>
+              <span class="up"><i class="ts-arrow">↑</i>{{ formatBytes(trafficSummary().todayUp) }}</span>
+              <span class="down"><i class="ts-arrow">↓</i>{{ formatBytes(trafficSummary().todayDown) }}</span>
             </span>
           </div>
           <div class="ts-item">
             <span class="ts-label">近 7 天合计</span>
             <span class="ts-value">
-              <span class="up">↑ {{ formatBytes(trafficSummary().weekUp) }}</span>
-              <span class="down">↓ {{ formatBytes(trafficSummary().weekDown) }}</span>
+              <span class="up"><i class="ts-arrow">↑</i>{{ formatBytes(trafficSummary().weekUp) }}</span>
+              <span class="down"><i class="ts-arrow">↓</i>{{ formatBytes(trafficSummary().weekDown) }}</span>
             </span>
           </div>
           <div class="ts-item">
             <span class="ts-label">历史累计</span>
             <span class="ts-value">
-              <span class="up">↑ {{ formatBytes(trafficSummary().totalUp) }}</span>
-              <span class="down">↓ {{ formatBytes(trafficSummary().totalDown) }}</span>
+              <span class="up"><i class="ts-arrow">↑</i>{{ formatBytes(trafficSummary().totalUp) }}</span>
+              <span class="down"><i class="ts-arrow">↓</i>{{ formatBytes(trafficSummary().totalDown) }}</span>
             </span>
           </div>
         </div>
 
-        <div v-if="traffic && traffic.daily && traffic.daily.length" class="wb-chart">
-          <div
-            v-for="day in traffic.daily"
-            :key="day.date"
-            class="wb-day"
-            :title="day.date + ': 上行 ' + formatBytes(day.bytesSent || 0) + ' / 下行 ' + formatBytes(day.bytesReceived || 0)"
-          >
-            <div v-if="(day.bytesSent || 0) + (day.bytesReceived || 0) === 0" class="wb-day-zero">0</div>
-            <div v-else class="wb-day-bars">
-              <div class="tc-bar up" :style="{ height: Math.max(2, Math.round(((day.bytesSent || 0) / trafficMax()) * 130)) + 'px' }"></div>
-              <div class="tc-bar down" :style="{ height: Math.max(2, Math.round(((day.bytesReceived || 0) / trafficMax()) * 130)) + 'px' }"></div>
+        <div v-if="traffic && traffic.daily && traffic.daily.length" class="wb-chart-wrap">
+          <div class="wb-chart-grid" aria-hidden="true"></div>
+          <div class="wb-chart">
+            <div
+              v-for="day in traffic.daily"
+              :key="day.date"
+              class="wb-day"
+              :title="day.date + ': 上行 ' + formatBytes(day.bytesSent || 0) + ' / 下行 ' + formatBytes(day.bytesReceived || 0)"
+            >
+              <div v-if="(day.bytesSent || 0) + (day.bytesReceived || 0) === 0" class="wb-day-zero">0</div>
+              <div v-else class="wb-day-bars">
+                <div class="tc-bar up" :style="{ height: Math.max(3, Math.round(((day.bytesSent || 0) / trafficMax()) * 132)) + 'px' }"></div>
+                <div class="tc-bar down" :style="{ height: Math.max(3, Math.round(((day.bytesReceived || 0) / trafficMax()) * 132)) + 'px' }"></div>
+              </div>
+              <span class="wb-day-label">{{ day.date.slice(5) }}</span>
             </div>
-            <span class="wb-day-label">{{ day.date.slice(5) }}</span>
           </div>
         </div>
         <div v-else class="wb-chart-empty">暂无数据</div>
@@ -255,59 +288,153 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.wb { display: flex; flex-direction: column; gap: 14px; }
-.wb-ports {
+.wb {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Overview banner ----------------------------------------------------------- */
+.wb-hero {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  background: var(--np-bg-soft);
-  border: 1px solid var(--np-border-soft);
-  border-radius: 10px;
-  padding: 10px 14px;
+  justify-content: space-between;
+  gap: 26px;
+  padding: 20px 24px;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(520px 160px at 0% 0%, rgba(var(--np-primary-rgb), 0.17), transparent 70%),
+    radial-gradient(420px 180px at 100% 100%, rgba(var(--np-violet-rgb), 0.11), transparent 70%),
+    var(--np-panel-bg);
 }
-.wb-ports-label {
+.wb-hero::after {
+  content: '';
+  position: absolute;
+  right: -60px;
+  top: -90px;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  border: 1px solid rgba(var(--np-primary-rgb), 0.12);
+  box-shadow: 0 0 0 38px rgba(var(--np-primary-rgb), 0.035), 0 0 0 76px rgba(var(--np-primary-rgb), 0.02);
+  pointer-events: none;
+}
+.wb-hero-copy { position: relative; z-index: 1; min-width: 0; }
+.wb-eyebrow {
   display: inline-flex;
   align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--np-text-muted);
+}
+.wb-hero h2 {
+  margin: 7px 0 5px;
+  font-size: 20px;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+.wb-hero p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--np-text-muted);
+}
+.wb-endpoints {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 0 2px 22px;
+  border-left: 1px solid var(--np-border-soft);
+}
+.wb-endpoints-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--np-text-muted);
+}
+.wb-endpoint-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
-  font-weight: 600;
-  margin-right: 4px;
 }
-.wb-port {
+.wb-endpoint {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  background: rgba(148, 163, 184, 0.07);
+  border: 1px solid var(--np-border-soft);
+  white-space: nowrap;
+}
+.wb-endpoint b {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--np-text-muted);
+}
+.wb-endpoint code {
   font-family: 'Fira Code', Consolas, monospace;
-  font-size: 12px;
-  color: var(--np-text-2);
-  background: var(--np-muted-chip);
-  border-radius: 6px;
-  padding: 3px 8px;
+  font-size: 11.5px;
+  color: var(--np-text);
 }
-.wb-port b { color: var(--np-text); margin-right: 2px; }
+.wb-endpoint small {
+  font-size: 9px;
+  color: var(--np-text-muted);
+  letter-spacing: 0.04em;
+}
+
+/* Cards --------------------------------------------------------------------- */
 .wb-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
   gap: 12px;
 }
+
+/* Daily traffic ------------------------------------------------------------- */
 .wb-traffic {
-  background: var(--np-bg-soft);
-  border: 1px solid var(--np-border-soft);
-  border-radius: 12px;
-  padding: 16px 18px;
+  position: relative;
+  overflow: hidden;
+  padding: 18px 20px 16px;
 }
 .wb-traffic-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 12px;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 .wb-traffic-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+}
+.wb-traffic-title b {
+  display: block;
+  font-size: 14px;
+}
+.wb-traffic-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--np-primary);
+  background: rgba(var(--np-primary-rgb), 0.1);
+  border: 1px solid rgba(var(--np-primary-rgb), 0.16);
+  flex: none;
 }
 .wb-traffic-sub {
-  font-size: 12px;
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
   color: var(--np-text-muted);
 }
 .wb-traffic-tools {
@@ -319,52 +446,108 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 .ts-item {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  background: var(--np-bg);
+  gap: 6px;
+  background: rgba(148, 163, 184, 0.045);
   border: 1px solid var(--np-border-soft);
-  border-radius: 8px;
-  padding: 8px 12px;
+  border-radius: 11px;
+  padding: 10px 13px;
 }
-.ts-label { font-size: 12px; color: var(--np-text-muted); }
-.ts-value { font-size: 13px; display: flex; gap: 12px; font-variant-numeric: tabular-nums; }
+.ts-label {
+  font-size: 11.5px;
+  color: var(--np-text-muted);
+}
+.ts-value {
+  font-size: 13px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.ts-value .up,
+.ts-value .down {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
 .ts-value .up { color: var(--np-primary); }
-.ts-value .down { color: var(--np-warning); }
+.ts-value .down { color: var(--np-violet); }
+.ts-arrow {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-style: normal;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(var(--np-primary-rgb), 0.1);
+}
+.ts-value .down .ts-arrow {
+  background: rgba(var(--np-violet-rgb), 0.12);
+}
+.wb-chart-wrap {
+  position: relative;
+  min-height: 176px;
+  border-bottom: 1px solid var(--np-border-soft);
+  padding-top: 4px;
+}
+.wb-chart-grid {
+  position: absolute;
+  inset: 4px 0 22px;
+  background-image: repeating-linear-gradient(
+    to top,
+    transparent 0,
+    transparent 43px,
+    var(--np-border-soft) 43px,
+    var(--np-border-soft) 44px
+  );
+  opacity: 0.55;
+  pointer-events: none;
+}
 .wb-chart {
+  position: relative;
+  z-index: 1;
   display: flex;
   gap: 10px;
   align-items: flex-end;
-  min-height: 170px;
-  border-bottom: 1px solid var(--np-border-soft);
+  min-height: 172px;
   padding: 6px 2px 0;
   overflow-x: auto;
 }
 .wb-day {
   flex: 1;
-  min-width: 42px;
+  min-width: 46px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
-  gap: 4px;
-  height: 160px;
+  gap: 5px;
+  height: 164px;
 }
 .wb-day-bars {
   display: flex;
   align-items: flex-end;
-  gap: 3px;
+  gap: 4px;
 }
-.tc-bar { width: 9px; border-radius: 2px 2px 0 0; }
-.tc-bar.up { background: var(--np-primary); }
-.tc-bar.down { background: var(--np-warning); }
+.tc-bar {
+  width: 13px;
+  border-radius: 5px 5px 2px 2px;
+  transition: transform 0.18s ease, filter 0.18s ease;
+}
+.wb-day:hover .tc-bar {
+  transform: translateY(-2px);
+  filter: brightness(1.12);
+}
 .wb-day-zero {
   font-size: 11px;
   color: var(--np-text-muted);
-  height: 130px;
+  height: 132px;
   display: flex;
   align-items: center;
 }
@@ -372,28 +555,46 @@ onUnmounted(() => {
   font-size: 11px;
   color: var(--np-text-muted);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .wb-chart-empty {
   text-align: center;
   color: var(--np-text-muted);
   font-size: 13px;
-  padding: 34px 0;
+  padding: 44px 0;
 }
 .wb-legend {
   display: flex;
-  gap: 16px;
-  margin-top: 8px;
-  font-size: 12px;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 11.5px;
   color: var(--np-text-2);
+}
+.wb-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.06);
+  border: 1px solid var(--np-border-soft);
 }
 .wb-legend i {
   display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-  margin-right: 4px;
-  vertical-align: -1px;
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
 }
-.wb-legend .tc-bar.up { background: var(--np-primary); }
-.wb-legend .tc-bar.down { background: var(--np-warning); }
+
+@media (max-width: 900px) {
+  .wb-hero { flex-direction: column; align-items: stretch; gap: 16px; padding: 18px; }
+  .wb-endpoints { padding: 14px 0 0; border-left: 0; border-top: 1px solid var(--np-border-soft); }
+  .wb-endpoint-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .wb-endpoint { justify-content: center; }
+}
+@media (max-width: 600px) {
+  .wb-hero h2 { font-size: 18px; }
+  .wb-endpoint-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wb-traffic { padding: 15px 14px 14px; }
+}
 </style>

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, h, ref } from 'vue';
 import { NButton, NCard, NCheckbox, NCheckboxGroup, NCollapse, NCollapseItem, NDataTable, NInput, NInputNumber, NProgress, NSelect, NSpace, NTag, NText, useMessage } from 'naive-ui';
+import AppIcon from '../components/AppIcon.vue';
 import { startNetworkTest, getNetworkTestTask, fetchNetworkTestTypes } from '../api';
 import { store } from '../store';
 
@@ -186,7 +187,20 @@ const isTraceroute = computed(() => selectedType.value === 'traceroute');
 
 <template>
   <div class="network-test">
-    <NCard title="网络测试（由所选节点执行）" size="small">
+    <section class="nt-hero np-panel">
+      <span class="nt-hero-icon"><AppIcon name="radar" :size="20" /></span>
+      <div class="nt-hero-copy">
+        <div class="nt-eyebrow">NETWORK TOOLKIT</div>
+        <h2>网络测试</h2>
+        <p>从服务端或任意在线节点发起 Ping / TCPing / HTTP / DNS / 路由追踪</p>
+      </div>
+      <span class="nt-hero-badge">
+        <i class="np-dot" :class="onlineClients.length ? 'alive' : 'idle'"></i>
+        {{ onlineClients.length }} 个节点在线
+      </span>
+    </section>
+
+    <NCard title="测试配置" size="small" class="nt-card">
       <NSpace vertical>
         <!-- Type selector -->
         <div class="nt-row">
@@ -312,13 +326,78 @@ const isTraceroute = computed(() => selectedType.value === 'traceroute');
 
 <style scoped>
 .network-test {
-  max-width: 1040px;
+  max-width: 1080px;
   margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.nt-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  background:
+    radial-gradient(420px 150px at 0% 0%, rgba(var(--np-violet-rgb), 0.14), transparent 70%),
+    var(--np-panel-bg);
+}
+.nt-hero-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: var(--np-violet);
+  background: rgba(var(--np-violet-rgb), 0.1);
+  border: 1px solid rgba(var(--np-violet-rgb), 0.18);
+}
+.nt-hero-copy { min-width: 0; flex: 1; }
+.nt-eyebrow {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--np-text-muted);
+}
+.nt-hero h2 {
+  margin: 4px 0 3px;
+  font-size: 19px;
+  letter-spacing: -0.02em;
+}
+.nt-hero p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--np-text-muted);
+}
+.nt-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--np-text-2);
+  background: rgba(148, 163, 184, 0.07);
+  border: 1px solid var(--np-border-soft);
+}
+.nt-card :deep(.n-card-header) {
+  border-bottom: 1px solid var(--np-border-soft);
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+}
+.nt-card :deep(.n-card__content) {
+  padding-top: 0;
 }
 .nt-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+@media (max-width: 700px) {
+  .nt-hero { flex-wrap: wrap; padding: 16px; }
+  .nt-hero-copy { flex-basis: calc(100% - 60px); }
 }
 </style>
