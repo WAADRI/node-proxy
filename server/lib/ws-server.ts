@@ -501,7 +501,11 @@ function recordTunnelLog(clientManager: ClientManager, p: PendingRecord) {
   try {
     hub.record({
       kind: 'tunnel',
-      ts: p.startTime || endTs,
+      // Stamp the entry when it is recorded (tunnel close), like HTTP requests do.
+      // Using p.startTime here made a long-lived tunnel look OLDER than requests
+      // logged while it was still open, so a newest-first feed appeared unsorted.
+      // The full lifetime is still available in `ms` below.
+      ts: endTs,
       ip: p.ip || '',
       // The proxy that carried the tunnel, not the HTTP method: SOCKS5 is not CONNECT, and
       // labelling both the same made the log lie about which listener served the request.
