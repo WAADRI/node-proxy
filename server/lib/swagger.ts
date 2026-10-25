@@ -630,7 +630,7 @@ const swaggerSpec = {
     '/logs': {
       get: {
         tags: ['Logs'],
-        summary: 'Recent proxied request log',
+        summary: 'Recent proxied request log, newest first',
         security: [{ BearerAuth: [] }],
         parameters: [{ name: 'limit', in: 'query', required: false, schema: { type: 'integer', maximum: 500 } }],
         responses: { '200': { description: 'Log entries', content: { 'application/json': { schema: { type: 'object', properties: { logs: { type: 'array', items: { type: 'object' } } } } } } } },

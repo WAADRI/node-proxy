@@ -344,6 +344,7 @@ const pwUsage = computed(() => {
     <!-- Routing -->
     <div class="s-group">
       <div class="s-group-head">
+        <span class="s-group-icon"><AppIcon name="route" :size="15" /></span>
         <h3>路由策略</h3>
         <NTag size="small" :bordered="false" type="info">即时生效</NTag>
         <span v-if="!editable.routing" class="s-no-perm">无权限修改</span>
@@ -371,6 +372,7 @@ const pwUsage = computed(() => {
     <!-- Circuit breaker -->
     <div class="s-group">
       <div class="s-group-head">
+        <span class="s-group-icon"><AppIcon name="shield" :size="15" /></span>
         <h3>熔断器参数</h3>
         <NTag size="small" :bordered="false" type="info">即时生效</NTag>
         <span v-if="!editable.circuit_breaker" class="s-no-perm">无权限修改</span>
@@ -404,6 +406,7 @@ const pwUsage = computed(() => {
     <!-- Bandwidth -->
     <div class="s-group">
       <div class="s-group-head">
+        <span class="s-group-icon"><AppIcon name="gauge" :size="15" /></span>
         <h3>带宽限制</h3>
         <NTag size="small" :bordered="false" type="info">即时生效</NTag>
         <span v-if="!editable.bandwidth" class="s-no-perm">无权限修改</span>
@@ -433,6 +436,7 @@ const pwUsage = computed(() => {
     <!-- Client params -->
     <div class="s-group">
       <div class="s-group-head">
+        <span class="s-group-icon"><AppIcon name="server" :size="15" /></span>
         <h3>客户端超时 / 并发</h3>
         <NTag size="small" :bordered="false" type="info">即时生效</NTag>
         <span v-if="!editable.client" class="s-no-perm">无权限修改</span>
@@ -466,6 +470,7 @@ const pwUsage = computed(() => {
     <!-- Cache -->
     <div class="s-group">
       <div class="s-group-head">
+        <span class="s-group-icon"><AppIcon name="database" :size="15" /></span>
         <h3>缓存 TTL</h3>
         <NTag size="small" :bordered="false" type="info">即时生效</NTag>
         <span v-if="!editable.cache" class="s-no-perm">无权限修改</span>
@@ -487,6 +492,7 @@ const pwUsage = computed(() => {
     <!-- Proxy passwords (multi-password routing, issue #53) -->
     <div class="s-group">
       <div class="s-group-head">
+        <span class="s-group-icon"><AppIcon name="key" :size="15" /></span>
         <h3>代理密码（分流）</h3>
         <NTag size="small" :bordered="false" type="info">即时生效</NTag>
       </div>
@@ -545,6 +551,7 @@ const pwUsage = computed(() => {
     <!-- Restart-only read-only -->
     <div class="s-group">
       <div class="s-group-head">
+        <span class="s-group-icon"><AppIcon name="list" :size="15" /></span>
         <h3>只读信息（重启后生效）</h3>
         <NTag size="small" :bordered="false" type="warning">仅显示</NTag>
       </div>
@@ -587,23 +594,53 @@ const pwUsage = computed(() => {
 </template>
 
 <style scoped>
-.settings { display: flex; flex-direction: column; gap: 14px; max-width: 980px; }
-.settings-sub { color: var(--np-text-muted); font-size: 13px; margin: 0 0 2px; }
+.settings { display: flex; flex-direction: column; gap: 16px; max-width: 1020px; }
+.settings-sub {
+  color: var(--np-text-muted);
+  font-size: 12.5px;
+  margin: 0 2px 2px;
+  padding: 10px 14px;
+  border-left: 3px solid rgba(var(--np-primary-rgb), 0.45);
+  background: rgba(var(--np-primary-rgb), 0.045);
+  border-radius: 0 10px 10px 0;
+}
 .settings-sub b { color: var(--np-text-2); }
 .s-group {
-  background: var(--np-bg-soft);
+  position: relative;
+  overflow: hidden;
+  background: var(--np-panel-bg);
   border: 1px solid var(--np-border-soft);
-  border-radius: 12px;
-  padding: 16px 18px;
+  border-radius: 16px;
+  padding: 18px 20px;
+  box-shadow: var(--np-shadow);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.s-group:hover {
+  border-color: rgba(var(--np-primary-rgb), 0.22);
+  box-shadow: 0 18px 40px rgba(2, 6, 23, 0.18);
 }
 .s-group-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--np-border-soft);
 }
-.s-group-head h3 { margin: 0; font-size: 14px; }
-.s-no-perm { font-size: 12px; color: var(--np-danger); }
+.s-group-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: var(--np-primary);
+  background: rgba(var(--np-primary-rgb), 0.1);
+  border: 1px solid rgba(var(--np-primary-rgb), 0.16);
+}
+.s-group-head h3 { margin: 0; font-size: 14.5px; letter-spacing: -0.01em; }
+.s-no-perm { font-size: 12px; color: var(--np-danger); margin-left: auto; }
 .s-strategy-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -611,21 +648,27 @@ const pwUsage = computed(() => {
 }
 .s-strategy {
   text-align: left;
-  border: 1px solid var(--np-border);
-  border-radius: 10px;
-  background: var(--np-bg);
+  border: 1px solid var(--np-border-soft);
+  border-radius: 11px;
+  background: rgba(148, 163, 184, 0.04);
   padding: 12px 14px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   color: var(--np-text);
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
 }
-.s-strategy:hover:not(:disabled) { border-color: var(--np-primary); }
+.s-strategy:hover:not(:disabled) {
+  border-color: rgba(var(--np-primary-rgb), 0.42);
+  background: rgba(var(--np-primary-rgb), 0.05);
+  transform: translateY(-1px);
+}
 .s-strategy.selected {
-  border-color: var(--np-primary);
-  background: var(--np-primary);
+  border-color: rgba(var(--np-primary-rgb), 0.6);
+  background: linear-gradient(135deg, rgba(var(--np-primary-rgb), 0.95), rgba(124, 92, 246, 0.9));
   color: #fff;
+  box-shadow: 0 10px 24px rgba(var(--np-primary-rgb), 0.24);
 }
 .s-strategy.selected .s-so-desc { color: rgba(255, 255, 255, 0.85); }
 .s-strategy:disabled { cursor: not-allowed; opacity: 0.55; }
@@ -659,11 +702,11 @@ const pwUsage = computed(() => {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  background: var(--np-bg);
+  background: rgba(148, 163, 184, 0.045);
   border: 1px solid var(--np-border-soft);
-  border-radius: 8px;
-  padding: 9px 12px;
-  font-size: 13px;
+  border-radius: 9px;
+  padding: 10px 12px;
+  font-size: 12.5px;
   color: var(--np-text-muted);
 }
 .s-ro-item b { color: var(--np-text); font-weight: 600; }
@@ -682,21 +725,21 @@ const pwUsage = computed(() => {
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 12px;
-  background: var(--np-bg);
-  border: 1px solid var(--np-border-soft);
-  border-radius: 10px;
+  background: rgba(var(--np-primary-rgb), 0.04);
+  border: 1px solid rgba(var(--np-primary-rgb), 0.16);
+  border-radius: 11px;
   padding: 12px 14px;
   margin-bottom: 12px;
 }
 .pw-add-field { margin-bottom: 0; }
 .pw-add-btns { display: flex; gap: 8px; padding-bottom: 2px; }
 .pw-empty {
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--np-text-muted);
-  background: var(--np-bg);
-  border: 1px dashed var(--np-border-soft);
-  border-radius: 10px;
-  padding: 18px 14px;
+  background: rgba(148, 163, 184, 0.035);
+  border: 1px dashed var(--np-border);
+  border-radius: 11px;
+  padding: 20px 14px;
   text-align: center;
 }
 .pw-row {
@@ -704,11 +747,16 @@ const pwUsage = computed(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  background: var(--np-bg);
+  background: rgba(148, 163, 184, 0.04);
   border: 1px solid var(--np-border-soft);
-  border-radius: 10px;
+  border-radius: 11px;
   padding: 10px 12px;
   margin-bottom: 8px;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+.pw-row:hover {
+  border-color: rgba(var(--np-primary-rgb), 0.22);
+  background: rgba(var(--np-primary-rgb), 0.035);
 }
 .pw-pass { display: flex; align-items: center; gap: 6px; }
 .pw-pass .n-input { font-family: 'Fira Code', Consolas, monospace; font-size: 12px; }

@@ -67,6 +67,7 @@ function showAllCols() {
 // ---------------------------------------------------------------------------
 const clients = computed(() => (store.status ? store.status.clients || [] : []));
 const loading = computed(() => !store.status);
+const onlineCount = computed(() => clients.value.filter((c) => Date.now() - c.lastSeen < 30000).length);
 
 const search = ref('');
 const groupFilter = ref(null);
@@ -382,12 +383,12 @@ const cbRowClass = (row) => {
 <template>
   <div class="nodes">
     <!-- Toolbar -->
-    <div class="nodes-toolbar">
+    <div class="nodes-toolbar np-panel">
       <NInput
         v-model:value="search"
         clearable
         placeholder="搜索节点 (ID / 主机名 / IP)..."
-        style="width: 280px"
+        style="width: 300px"
       >
         <template #prefix><AppIcon name="search" :size="14" /></template>
       </NInput>
@@ -428,27 +429,36 @@ const cbRowClass = (row) => {
         </div>
       </NPopover>
 
-      <span class="nodes-count">共 {{ clients.length }} 个节点</span>
+      <span class="nodes-count">
+        <i class="np-dot" :class="onlineCount > 0 ? 'alive' : 'idle'"></i>
+        在线 <b>{{ onlineCount }}</b> / 共 {{ clients.length }} 个节点
+      </span>
     </div>
 
     <!-- Table -->
-    <NDataTable
-      :columns="tableColumns"
-      :data="filtered"
-      :loading="loading"
-      :scroll-x="1500"
-      :row-class-name="cbRowClass"
-      :bordered="false"
-      :single-line="false"
-      class="np-table"
-      :row-props="() => ({})"
-    >
-      <template #empty>
-        <div style="padding: 34px 0; color: var(--np-text-muted); text-align: center">
-          {{ clients.length === 0 ? '等待客户端节点连接...' : '没有匹配的节点' }}
-        </div>
-      </template>
-    </NDataTable>
+    <section class="nodes-table np-panel">
+      <div class="nodes-table-head">
+        <span class="nodes-table-title">节点列表</span>
+        <span class="nodes-table-hint">点击「区域 / 分组 / 标签 / 备注」单元格可直接编辑</span>
+      </div>
+      <NDataTable
+        :columns="tableColumns"
+        :data="filtered"
+        :loading="loading"
+        :scroll-x="1500"
+        :row-class-name="cbRowClass"
+        :bordered="false"
+        :single-line="false"
+        class="np-table"
+        :row-props="() => ({})"
+      >
+        <template #empty>
+          <div style="padding: 34px 0; color: var(--np-text-muted); text-align: center">
+            {{ clients.length === 0 ? '等待客户端节点连接...' : '没有匹配的节点' }}
+          </div>
+        </template>
+      </NDataTable>
+    </section>
 
     <!-- Edit node modal -->
     <NModal
@@ -507,27 +517,33 @@ const cbRowClass = (row) => {
 </template>
 
 <style scoped>
-.nodes { display: flex; flex-direction: column; gap: 12px; }
+.nodes { display: flex; flex-direction: column; gap: 14px; }
 .nodes-toolbar {
   display: flex;
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+  padding: 14px 16px;
 }
 .np-cols-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 30px;
-  padding: 0 10px;
-  border-radius: 6px;
+  height: 34px;
+  padding: 0 11px;
+  border-radius: 9px;
   border: 1px solid var(--np-border-soft);
-  background: var(--np-bg-soft);
+  background: rgba(148, 163, 184, 0.05);
   color: var(--np-text-2);
-  font-size: 13px;
+  font-size: 12.5px;
   cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
 }
-.np-cols-btn:hover { border-color: var(--np-primary); color: var(--np-text); }
+.np-cols-btn:hover {
+  border-color: rgba(var(--np-primary-rgb), 0.4);
+  background: var(--np-bg-hover);
+  color: var(--np-text);
+}
 .np-cols-panel { width: 220px; }
 .np-cols-item {
   padding: 3px 2px;
@@ -540,7 +556,42 @@ const cbRowClass = (row) => {
   border-top: 1px solid var(--np-border-soft);
   text-align: right;
 }
-.nodes-count { font-size: 13px; color: var(--np-text-muted); }
+.nodes-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--np-text-muted);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.05);
+  border: 1px solid var(--np-border-soft);
+}
+.nodes-count b { color: var(--np-text); }
+.nodes-table {
+  padding: 4px 4px 2px;
+  overflow: hidden;
+}
+.nodes-table-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 16px 9px;
+  flex-wrap: wrap;
+}
+.nodes-table-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--np-text-2);
+}
+.nodes-table-hint { font-size: 11px; color: var(--np-text-muted); }
+.nodes-table :deep(.n-data-table-th) {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.nodes-table :deep(.n-data-table-td) { font-size: 12.5px; }
 
 .np-edit-head {
   display: flex;
