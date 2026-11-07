@@ -71,12 +71,23 @@ func main() {
 	// Panel + client WebSocket on the web port (TS shape: /ws upgrade on the
 	// same server as the panel).
 	mux := http.NewServeMux()
+	srv.HandlePanelRoutes(mux)
 	srv.HandlePanelAPI(mux)
 	mux.HandleFunc("/ws", srv.HandleClientWS)
+	mux.HandleFunc("/web-ws", srv.HandleWebWS)
 	// /metrics is public, matching the TS server (Grafana compat).
 	mux.Handle("/metrics", srv.Metrics.Handler(srv))
 	acmeMgr := server.BuildACMEManager(cfg, cfg.ACME)
-	webSrv := &http.Server{Addr: net.JoinHostPort(cfg.Host, fmt.Sprint(cfg.WebPort)), Handler: mux}
+	// The panel's api.js calls /api/v1/* (the OpenAPI mount); the TS server
+	// mounts the same router at both prefixes - alias it the same way.
+	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/") {
+			r.URL.Path = strings.Replace(r.URL.Path, "/api/v1", "/api", 1)
+		}
+		mux.ServeHTTP(w, r)
+	})
+	srv.Mgr.StartTrafficSampler(ctx)
+	webSrv := &http.Server{Addr: net.JoinHostPort(cfg.Host, fmt.Sprint(cfg.WebPort)), Handler: root}
 	go func() {
 		if acmeMgr != nil {
 			log.Infof("web/panel serving HTTPS via ACME for %v (HTTP-01 on :80)", cfg.ACME.Domains)

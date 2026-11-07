@@ -4,3 +4,4 @@
 /dist/
 runtime-overrides.json
 runtime-audit.jsonl
+panel/node_modules/

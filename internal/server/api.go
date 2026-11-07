@@ -39,9 +39,10 @@ func (s *Server) HandlePanelAPI(mux *http.ServeMux) {
 	perm("/api/broadcast", "client:list", s.handleBroadcast)
 	perm("/api/tags", "client:list", s.handleTags)
 	perm("/api/client/", "client:list", s.handleClientRoutes) // actions gate finer inside
+	perm("/api/kick/", "client:kick", s.handleKickAlias)
 	perm("/api/circuit-breaker/status", "circuit:view", s.handleBreakerStatus)
 	perm("/api/bandwidth/stats", "proxy:stats", s.handleBandwidthStats)
-	perm("/api/traffic", "proxy:stats", s.handleTrafficTotal)
+	perm("/api/traffic", "proxy:stats", s.handleTrafficDaily)
 	perm("/api/mux/stats", "proxy:stats", s.handleMuxStats)
 	perm("/api/users", "user:list", s.handleUsersList)
 	perm("/api/users/", "user:modify", s.handleUsersSub)
@@ -86,13 +87,20 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		user := s.Users.Authenticate(body.Username, body.Password)
 		if user == nil {
 			s.Log.Warnf("panel login failed for %q", body.Username)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "message": "登录失败，请检查用户名和密码"})
 			return
 		}
 	}
 	claims := fmt.Sprintf(`{"sub":%q,"exp":%d}`,
 		body.Username, time.Now().Add(24*time.Hour).Unix())
-	_ = json.NewEncoder(w).Encode(map[string]string{"token": jwtHS256(claims, secretKey)})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success":  true,
+		"token":    jwtHS256(claims, secretKey),
+		"redirect": "/app/",
+	})
 }
 
 func (s *Server) requireJWT(next http.Handler) http.Handler {
@@ -150,6 +158,13 @@ func jwtValid(token string, key []byte) bool {
 // ---------------------------------------------------------------------------
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.buildStatusPayload())
+}
+
+// buildStatusPayload assembles the /api/status body (shared with the panel's
+// live WebSocket feed, which pushes the same shape).
+func (s *Server) buildStatusPayload() map[string]any {
 	clients := s.Mgr.All()
 	list := make([]map[string]any, 0, len(clients))
 	for _, c := range clients {
@@ -188,8 +203,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		list = append(list, item)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	return map[string]any{
 		"total":     len(clients),
 		"clients":   list,
 		"strategy":  s.Mgr.Strategy(),
@@ -200,7 +214,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"bytesUp":   totalBytesUp.Load(),
 			"bytesDown": totalBytesDn.Load(),
 		},
-	})
+	}
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -386,7 +400,7 @@ func (s *Server) handleClientRoutes(w http.ResponseWriter, r *http.Request) {
 				}
 				meta.Tags = tags
 			case "group":
-				meta.Group = asStringAny(body["value"])
+				meta.Group = asStringAny(firstNonEmpty(asStringAnyV(body["value"]), asStringAnyV(body["group"])))
 			case "weight":
 				wv, _ := toFloat(body["weight"])
 				if wv < 0 || wv > 100 {
@@ -475,6 +489,29 @@ func (s *Server) handleClientRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleKickAlias backs the panel's POST /api/kick/:id shortcut.
+func (s *Server) handleKickAlias(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := s.userFrom(r)
+	if !HasPermission(user, "client:kick") {
+		jsonError(w, "Permission denied: client:kick", http.StatusForbidden)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/kick/")
+	c := s.Mgr.Get(id)
+	if c == nil || c.WS == nil {
+		jsonError(w, "Client not found", http.StatusNotFound)
+		return
+	}
+	c.WS.Close()
+	s.Mgr.Remove(id, c.WS)
+	s.Log.Infof("client kicked: %s", id)
+	writeOK(w)
+}
+
 func (s *Server) handleBroadcast(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Message string `json:"message"`
@@ -561,6 +598,22 @@ func (s *Server) handleTrafficTotal(w http.ResponseWriter, r *http.Request) {
 		"up":   totalBytesUp.Load(),
 		"down": totalBytesDn.Load(),
 	})
+}
+
+// handleTrafficDaily serves GET /api/traffic?days=7&client_id=<id> with the
+// shape the panel Workbench charts (TS getTrafficDaily/getTrafficTotals).
+func (s *Server) handleTrafficDaily(w http.ResponseWriter, r *http.Request) {
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+	if days < 1 || days > 30 {
+		days = 7
+	}
+	clientID := r.URL.Query().Get("client_id")
+	if clientID != "" && s.Mgr.Get(clientID) == nil {
+		jsonError(w, "Unknown client", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.Mgr.TrafficSeries(days, clientID))
 }
 
 func (s *Server) handleMuxStats(w http.ResponseWriter, r *http.Request) {
@@ -773,6 +826,13 @@ func jsonError(w http.ResponseWriter, msg string, code int) {
 func writeOK(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"success": true}`))
+}
+
+func asStringAnyV(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 func asStringAny(v any) string {

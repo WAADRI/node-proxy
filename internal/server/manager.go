@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"math/rand"
 	"strings"
 	"sync"
@@ -108,6 +109,10 @@ type Manager struct {
 	metaFor          func(string) *clientMeta
 	udpAssocs        map[string]*udpAssoc
 	onError          func(string)
+	dailyTotals      map[string]struct {
+		Sent, Recv, Requests int64
+	}
+	reqLogHook func(requestLogEntry)
 
 	idleTimeout time.Duration // tunnel idle teardown (config client.tunnel_idle_timeout default 60s)
 }
@@ -134,7 +139,10 @@ func NewManager(cfg *Config, log Logger) *Manager {
 		strategy:         "random",
 		reqLog:           make([]requestLogEntry, 0, requestLogCap),
 		udpAssocs:        make(map[string]*udpAssoc),
-		idleTimeout:      60 * time.Second,
+		dailyTotals: make(map[string]struct {
+			Sent, Recv, Requests int64
+		}),
+		idleTimeout: 60 * time.Second,
 	}
 }
 
@@ -658,11 +666,22 @@ const requestLogCap = 500
 
 func (m *Manager) logRequest(e requestLogEntry) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if len(m.reqLog) >= requestLogCap {
 		m.reqLog = m.reqLog[1:]
 	}
 	m.reqLog = append(m.reqLog, e)
+	fn := m.reqLogHook
+	m.mu.Unlock()
+	if fn != nil {
+		fn(e)
+	}
+}
+
+// OnRequestLog registers a live-feed hook (the panel WebSocket broadcast).
+func (m *Manager) OnRequestLog(fn func(requestLogEntry)) {
+	m.mu.Lock()
+	m.reqLogHook = fn
+	m.mu.Unlock()
 }
 
 // RecentRequests returns up to limit entries, oldest first (the API layer
@@ -676,6 +695,93 @@ func (m *Manager) RecentRequests(limit int) []requestLogEntry {
 	out := make([]requestLogEntry, limit)
 	copy(out, m.reqLog[len(m.reqLog)-limit:])
 	return out
+}
+
+// trafficSample records one periodic sample; per-day deltas accumulate into
+// dailyTotals so the panel chart shows real series (in-memory; restarts
+// reset history - the storage module will persist when it lands).
+func (m *Manager) StartTrafficSampler(ctx context.Context) {
+	t := time.NewTicker(30 * time.Second)
+	go func() {
+		var lastUp, lastDn, lastReq int64
+		for {
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return
+			case <-t.C:
+				m.mu.Lock()
+				up := totalBytesUp.Load()
+				dn := totalBytesDn.Load()
+				req := totalRequests.Load()
+				dUp, dDn, dReq := up-lastUp, dn-lastDn, req-lastReq
+				if dUp < 0 {
+					dUp = 0
+				}
+				if dDn < 0 {
+					dDn = 0
+				}
+				if dReq < 0 {
+					dReq = 0
+				}
+				lastUp, lastDn, lastReq = up, dn, req
+				day := time.Now().Format("2006-01-02")
+				cur := m.dailyTotals[day]
+				cur.Sent += dUp
+				cur.Recv += dDn
+				cur.Requests += dReq
+				m.dailyTotals[day] = cur
+				m.mu.Unlock()
+			}
+		}
+	}()
+}
+
+// TrafficSeries builds the /api/traffic payload: daily buckets for the last
+// N days (current day live), today's numbers and grand totals.
+func (m *Manager) TrafficSeries(days int, clientID string) map[string]any {
+	type dayPoint struct {
+		Date          string `json:"date"`
+		BytesSent     int64  `json:"bytesSent"`
+		BytesReceived int64  `json:"bytesReceived"`
+		Requests      int64  `json:"requests,omitempty"`
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	daily := make([]dayPoint, 0, days)
+	today := dayPoint{}
+	now := time.Now()
+	for i := days - 1; i >= 0; i-- {
+		date := now.AddDate(0, 0, -i).Format("2006-01-02")
+		p := dayPoint{Date: date}
+		if agg, ok := m.dailyTotals[date]; ok {
+			p.BytesSent, p.BytesReceived, p.Requests = agg.Sent, agg.Recv, agg.Requests
+		}
+		if i == 0 {
+			today = p
+		}
+		daily = append(daily, p)
+	}
+	totals := map[string]any{
+		"bytesSent":     totalBytesUp.Load(),
+		"bytesReceived": totalBytesDn.Load(),
+		"requests":      totalRequests.Load(),
+	}
+	_ = clientID
+	return map[string]any{
+		"days":     days,
+		"clientId": nilIfEmpty(clientID),
+		"today":    map[string]any{"bytesSent": today.BytesSent, "bytesReceived": today.BytesReceived},
+		"daily":    daily,
+		"totals":   totals,
+	}
+}
+
+func nilIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // UDP association registry (TS clientManager.udpAssociations).

@@ -103,7 +103,13 @@ github.com/WAADRI/node-proxy（Node/TS 多节点代理聚合网关）的 Go 重�
         尺寸校验 → 原子换名替换（Windows rename dance，失败回滚）→ 退出交由 supervisor 重启
       - 已知偏差：ping 无 ICMP 模式（TCP 回退）、traceroute 不支持、审计单文件无轮转、
         更新应用需要 release 内含 Go 平台资产（当前 TS 仓库 release 无二进制资产，打资产后生效）
-- [ ] Web 面板：沿用现有 Vue3 代码，仅对接新后端（/api/status 已对齐核心字段）
+- [x] **Web 面板**（panel/，沿用 nodejs 分支的 Vue3 + naive-ui 代码原样对接 Go 后端）：
+      `go:embed` 打进服务端单二进制（登录页 /login、SPA /app、/web-ws 实时推送 status+log）。
+      **浏览器实测通过**：登录 → 工作台（节点数/端口/策略/熔断/流量图）→ 节点管理（17 列表格实时状态）
+      → 设置五组（保存提示"已保存并即时生效"）。过程中对齐的接口差异：登录响应形状（success/token/redirect）、
+      **/api/v1/* 前缀别名**（TS 把同一路由器挂两处，面板走 v1）、/api/kick/:id 快捷路由、
+      group 元数据字段、**/api/traffic?days= 每日流量序列**（Manager 30s 采样器）
+      重新构建：`cd panel && npm ci && npm run build`（dist 已入库，开箱即用）
 
 ## E2E 冒烟与性能对照（已完成，2026-11-07）
 

@@ -48,6 +48,9 @@ type Server struct {
 	NetTest        *NetTestManager
 	// GitHubAPIBase is injectable for tests ("https://api.github.com" when empty).
 	GitHubAPIBase string
+	WS            *webHub
+
+	wsOnce sync.Once
 }
 
 // upgrader caps message size like TS (16 MiB = 1024 x mux max frame).
