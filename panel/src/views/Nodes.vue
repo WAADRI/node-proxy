@@ -42,7 +42,8 @@ function loadVisibleKeys() {
       }
     }
   } catch (_) {}
-  return ALL_COLUMNS.map((c) => c.key);
+  // Sensible defaults instead of all 17 columns (users can re-enable any).
+  return ['status', 'id', 'host', 'ip', 'platform', 'region', 'tags', 'req', 'tunnel', 'ms', 'active', 'ops'];
 }
 
 const visibleKeys = ref(loadVisibleKeys());
@@ -191,8 +192,12 @@ const tableColumns = computed(() =>
             row.id.length > 8 ? row.id.substring(0, 8) + '…' : row.id);
         case 'host':
           return ctx.info.hostname || '-';
-        case 'ip':
-          return ctx.info.ip || ctx.info.localIp || '-';
+        case 'ip': {
+          // The node reports addr:port; the column means the address.
+          const raw = String(ctx.info.ip || ctx.info.localIp || '');
+          const bracket = raw.match(/^\[([^\]]+)\]/);
+          return bracket ? bracket[1] : raw.split(':')[0] || '-';
+        }
         case 'platform':
           return (ctx.info.platform || '-') + (ctx.info.arch ? ' (' + ctx.info.arch + ')' : '');
         case 'region':

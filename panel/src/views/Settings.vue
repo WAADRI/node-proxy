@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
+import { onBeforeRouteLeave } from 'vue-router';
 import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag, useMessage } from 'naive-ui';
 import AppIcon from '../components/AppIcon.vue';
 import ConfirmDialog from '../components/ConfirmDialog.vue';
@@ -77,12 +78,24 @@ function setFromRuntime() {
     clMaxConcurrent: r.client ? r.client.max_concurrent : null,
     cacheTtlMs: r.cache ? r.cache.default_ttl : null,
   };
+  savedSnapshot.value = JSON.stringify(fieldValues.value);
 }
 onMounted(load);
 
 // re-sync form fields whenever fresh GET data arrives (incl. after save)
 watch(data, (d) => {
   if (d) setFromRuntime();
+});
+
+// --- unsaved-changes guard ---------------------------------------------------
+const savedSnapshot = ref('');
+const dirty = computed(() => savedSnapshot.value !== '' && JSON.stringify(fieldValues.value) !== savedSnapshot.value);
+onBeforeRouteLeave(() => {
+  if (!dirty.value) return true;
+  return window.confirm('有未保存的设置更改，离开将丢失。确定离开吗？');
+});
+window.addEventListener('beforeunload', (e) => {
+  if (dirty.value) e.preventDefault();
 });
 
 // --- save / reset ------------------------------------------------------------
@@ -339,6 +352,7 @@ const pwUsage = computed(() => {
   <div v-if="data" class="settings">
     <p class="settings-sub">
       修改<b>即时生效</b>并持久化，重启后自动恢复。「恢复默认」回到 config.yaml 的初始值。
+      <span v-if="dirty" class="settings-dirty">● 有未保存的更改</span>
     </p>
 
     <!-- Routing -->
@@ -594,6 +608,11 @@ const pwUsage = computed(() => {
 </template>
 
 <style scoped>
+.settings-dirty {
+  margin-left: 10px;
+  color: #d97706;
+  font-weight: 600;
+}
 .settings { display: flex; flex-direction: column; gap: 16px; max-width: 1020px; }
 .settings-sub {
   color: var(--np-text-muted);

@@ -188,6 +188,17 @@
       margin-top: 12px;
       min-height: 18px;
     }
+    .http-warn {
+      color: #b45309;
+      background: rgba(217, 119, 6, 0.08);
+      border: 1px solid rgba(217, 119, 6, 0.35);
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.5;
+      text-align: center;
+      padding: 8px 10px;
+      margin-top: 12px;
+    }
     .hint {
       display: flex;
       align-items: center;
@@ -265,6 +276,9 @@
         </div>
         <button type="submit" class="btn" id="loginBtn">登 录</button>
         <div class="error-msg" id="errorMsg"></div>
+        <div class="http-warn" id="httpWarn" hidden>
+          当前为 HTTP 明文连接，凭据可能被窃听。配置 HTTPS（ACME）后此提示自动消失。
+        </div>
       </form>
       <div class="hint">
         <span class="dot">服务在线</span>
@@ -272,6 +286,11 @@
       </div>
     </div>
   </div>
+  <script>
+    if (window.location.protocol === 'http:') {
+      document.getElementById('httpWarn').hidden = false;
+    }
+  </script>
   <script src="/login.js"></script>
 </body>
 </html>

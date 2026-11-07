@@ -366,6 +366,7 @@ onMounted(() => {
                 </span>
                 <button
                   class="np-icon-btn"
+                  :aria-label="store.theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'"
                   :title="store.theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'"
                   @click="toggleTheme()"
                 >
