@@ -112,7 +112,17 @@ github.com/WAADRI/node-proxy（Node/TS 多节点代理聚合网关）的 Go 重�
         - 侧栏版本号显示真实构建版本（status.server.version，ldflags 注入）
         - 修复两个回归：**隧道 OnData 二次注册覆盖回写回调**（TLS/明文响应无法回到代理客户端，
           metrics 轮引入、浏览器评审暴露）+ NetTestManager 构造器丢 srv 字段
-      - 已知偏差：ping 无 ICMP 模式（TCP 回退）、traceroute 不支持、审计单文件无轮转
+      - **ICMP ping + traceroute**（第九轮，可选重写项清零）：
+        - ping 走真 ICMP：Windows 用 iphlpapi `IcmpSendEcho`（免管理员），Linux 用非特权
+          ping socket（ping_group_range）/ raw ICMP 回退，其余平台保持 TCP 回退（mode=tcp）
+        - traceroute：Windows 同一 IcmpSendEcho 引擎按 TTL 递增探测（TIME_EXCEEDED 定位跳点，
+          免管理员）；Linux raw ICMP + UDP TTL（root/CAP_NET_RAW，对齐 TS raw-socket 要求）；
+          结果 `{ok, hops:[{ttl,ip,ms}], detail}` 与 TS TracerouteHop 对齐
+        - **活体验证**：回环 1 跳直达；真实路径跳点含网关/公网路由器（Windows 实测）
+        - **审计轮转**：10 MiB 封顶 → `runtime-audit.jsonl.1` 单代保留
+      - **Docker**：双端 Dockerfile（多阶段：panel node 构建 → Go 静态编译 → alpine）+
+        `docker-compose.yml`（凭据必填环境变量）+ release 工作流打 tag 自动推
+        `ghcr.io/waadri/node-proxy-{server,client}:<tag>`
 - [x] **Web 面板**（panel/，沿用 nodejs 分支的 Vue3 + naive-ui 代码原样对接 Go 后端）：
       `go:embed` 打进服务端单二进制（登录页 /login、SPA /app、/web-ws 实时推送 status+log）。
       **浏览器实测通过**：登录 → 工作台（节点数/端口/策略/熔断/流量图）→ 节点管理（17 列表格实时状态）

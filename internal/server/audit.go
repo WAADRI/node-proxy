@@ -61,8 +61,14 @@ func (a *AuditLog) Log(e AuditEntry) {
 	}
 }
 
-// appendLine appends one JSON line, creating the file as needed.
+const auditMaxBytes = 10 << 20 // rotate at 10 MiB, keep one generation
+
+// appendLine appends one JSON line, rotating the file at the size cap
+// (runtime-audit.jsonl -> runtime-audit.jsonl.1, single generation).
 func appendLine(path string, data []byte) {
+	if info, err := os.Stat(path); err == nil && info.Size()+int64(len(data))+1 > auditMaxBytes {
+		_ = os.Rename(path, path+".1")
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return

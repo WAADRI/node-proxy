@@ -19,22 +19,30 @@ func httpCtx(timeoutMS int) (context.Context, context.CancelFunc) {
 
 // NetTestResult mirrors the TS NetTestResult shape the panel renders.
 type NetTestResult struct {
-	OK        bool     `json:"ok"`
-	Mode      string   `json:"mode,omitempty"`
-	MS        float64  `json:"ms,omitempty"`
-	Port      int      `json:"port,omitempty"`
-	Status    int      `json:"status,omitempty"`
-	Size      int      `json:"size,omitempty"`
-	SpeedKBps float64  `json:"speedKBps,omitempty"`
-	Detail    string   `json:"detail,omitempty"`
-	Note      string   `json:"note,omitempty"`
-	Extra     []dnsRec `json:"extra,omitempty"`
-	Error     string   `json:"error,omitempty"`
+	OK        bool            `json:"ok"`
+	Mode      string          `json:"mode,omitempty"`
+	MS        float64         `json:"ms,omitempty"`
+	Port      int             `json:"port,omitempty"`
+	Status    int             `json:"status,omitempty"`
+	Size      int             `json:"size,omitempty"`
+	SpeedKBps float64         `json:"speedKBps,omitempty"`
+	Detail    string          `json:"detail,omitempty"`
+	Note      string          `json:"note,omitempty"`
+	Extra     []dnsRec        `json:"extra,omitempty"`
+	Hops      []tracerouteHop `json:"hops,omitempty"`
+	Error     string          `json:"error,omitempty"`
 }
 
 type dnsRec struct {
 	Type  string `json:"type"`
 	Value string `json:"value"`
+}
+
+// tracerouteHop mirrors the TS TracerouteHop shape.
+type tracerouteHop struct {
+	TTL int     `json:"ttl"`
+	IP  string  `json:"ip"`
+	MS  float64 `json:"ms"`
 }
 
 // netTestBusy guards concurrent tasks (TS: one at a time per node).
@@ -106,6 +114,9 @@ func (c *Client) handleNetTest(data []byte) {
 func runNetTest(testType, target string, options map[string]any) NetTestResult {
 	switch testType {
 	case "ping":
+		if res, ok := netTestPingICMP(target, options); ok {
+			return res
+		}
 		return netTestPing(target, options) // TCP fallback (mode "tcp")
 	case "tcping":
 		return netTestTcping(target, options)
@@ -114,7 +125,7 @@ func runNetTest(testType, target string, options map[string]any) NetTestResult {
 	case "dns":
 		return netTestDNS(target, options)
 	case "traceroute":
-		return NetTestResult{OK: false, Error: "traceroute is not supported by this go node"}
+		return netTestTraceroute(target, options)
 	default:
 		return NetTestResult{OK: false, Error: "unknown test type " + testType}
 	}
@@ -256,4 +267,80 @@ func netTestDNS(target string, options map[string]any) NetTestResult {
 		extra = append(extra, rec)
 	}
 	return NetTestResult{OK: true, MS: ms, Extra: extra, Note: fmt.Sprintf("%d records", len(ips))}
+}
+
+// netTestPing uses real ICMP where the platform allows it (Windows via
+// IcmpSendEcho, Linux via ping sockets / raw ICMP), TCP fallback otherwise
+// (TS parity: its `raw` module did the same dance).
+func netTestPingICMP(target string, options map[string]any) (NetTestResult, bool) {
+	count := optInt(options, "count", 3)
+	if count < 1 || count > 10 {
+		count = 3
+	}
+	timeout := optInt(options, "timeout", 2000)
+	host := hostOf(target)
+	times, ok := icmpPingRTT(host, count, timeout)
+	if !ok {
+		return NetTestResult{}, false
+	}
+	var sum, mn, mx float64
+	n := 0
+	mn = 1 << 30
+	for _, ms := range times {
+		if ms <= 0 {
+			continue
+		}
+		n++
+		sum += ms
+		if ms < mn {
+			mn = ms
+		}
+		if ms > mx {
+			mx = ms
+		}
+	}
+	if n == 0 {
+		return NetTestResult{OK: false, Mode: "icmp", Error: "all probes lost", Detail: host}, true
+	}
+	avg := sum / float64(n)
+	return NetTestResult{
+		OK: true, Mode: "icmp", MS: avg,
+		Detail: fmt.Sprintf("min %dms / avg %dms / max %dms (%d/%d 回)", int(mn), int(avg), int(mx), n, count),
+		Note:   host,
+	}, true
+}
+
+// netTestTraceroute mirrors the TS _udpTraceroute result:
+// {ok, hops:[{ttl,ip,ms}], detail:"1. ip ms\n..."}.
+func netTestTraceroute(target string, options map[string]any) NetTestResult {
+	host, _ := hostPortOf(target, 443)
+	maxHops := optInt(options, "maxHops", 30)
+	if maxHops < 1 || maxHops > 30 {
+		maxHops = 30
+	}
+	timeout := optInt(options, "timeout", 2000)
+	hops, ok := icmpTraceroute(host, maxHops, timeout)
+	if !ok {
+		return NetTestResult{OK: false, Error: "traceroute 需要 ICMP raw socket（Windows 管理员 / Linux root+CAP_NET_RAW）。当前平台不可用"}
+	}
+	lines := make([]string, 0, len(hops))
+	for _, h := range hops {
+		if h.IP == "" {
+			lines = append(lines, fmt.Sprintf("%d. *  超时", h.TTL))
+		} else {
+			lines = append(lines, fmt.Sprintf("%d. %s  %dms", h.TTL, h.IP, int(h.MS)))
+		}
+	}
+	return NetTestResult{OK: true, Detail: stringsJoin(lines, "\n"), Hops: hops}
+}
+
+func stringsJoin(parts []string, sep string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += sep
+		}
+		out += p
+	}
+	return out
 }

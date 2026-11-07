@@ -143,3 +143,32 @@ func TestAuditPersistence(t *testing.T) {
 		t.Fatal("audit file not created")
 	}
 }
+
+// TestAuditRotation drives the size cap: the file renames to .1 and the new
+// one starts fresh.
+func TestAuditRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runtime-audit.jsonl")
+	a := NewAuditLog(100)
+	a.LoadFromFile(path)
+	a.SetPersistPath(path)
+
+	big := strings.Repeat("x", 1024)
+	for i := 0; i < 3; i++ {
+		a.Log(AuditEntry{Time: int64(i), Method: "GET", URL: "http://x/" + big, Status: "success"})
+	}
+	if _, err := os.Stat(path + ".1"); err == nil {
+		t.Fatal("rotated too early")
+	}
+	// Push past the 10 MiB cap.
+	for i := 0; i < (10<<20)/1024+2; i++ {
+		a.Log(AuditEntry{Time: int64(i), Method: "GET", URL: "http://x/" + big, Status: "success"})
+	}
+	if _, err := os.Stat(path + ".1"); err != nil {
+		t.Fatal("expected rotation to .1 at the size cap")
+	}
+	// The fresh file keeps receiving records.
+	if info, err := os.Stat(path); err != nil || info.Size() > 12<<20 {
+		t.Fatalf("fresh audit file size = %v", info)
+	}
+}

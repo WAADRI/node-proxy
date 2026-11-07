@@ -1,0 +1,21 @@
+# node-proxy-go server: panel (3000), HTTP proxy (8080), SOCKS5 (1080).
+# Credentials MUST come from the environment - see README.
+services:
+  server:
+    build: .
+    image: ghcr.io/waadri/node-proxy-server:latest
+    ports:
+      - "3000:3000"
+      - "8080:8080"
+      - "1080:1080"
+    environment:
+      NP_AUTH_TOKEN: ${NP_AUTH_TOKEN:?set NP_AUTH_TOKEN}
+      NP_AUTH_WEB_USERNAME: ${NP_AUTH_WEB_USERNAME:-admin}
+      NP_AUTH_WEB_PASSWORD: ${NP_AUTH_WEB_PASSWORD:?set NP_AUTH_WEB_PASSWORD}
+      # NP_ACME_DOMAINS / NP_ACME_EMAIL enable automatic HTTPS for the panel
+    volumes:
+      - runtime:/app
+    restart: unless-stopped
+
+volumes:
+  runtime:
