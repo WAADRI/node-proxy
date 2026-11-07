@@ -1,6 +1,7 @@
 # node-proxy-go
 
 github.com/WAADRI/node-proxy（Node/TS 多节点代理聚合网关）的 Go 重写。
+> Node.js 原版实现保留在本仓库的 [`nodejs` 分支](https://github.com/WAADRI/node-proxy/tree/nodejs)。
 
 既定方针：**客户端先行、协议字节级兼容、strangler 渐进迁移**。不做插件系统，运行时唯一
 动态变更是配置热重载（沿用面板白名单 + SQLite overrides 模式）。
