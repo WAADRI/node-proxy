@@ -200,21 +200,85 @@ func (s *Server) buildStatusPayload() map[string]any {
 			"pendingTunnelsCount":  snap["pendingTunnelsCount"],
 			"clientStats":          snap["stats"],
 			"mux":                  muxStats,
+			// TS getStats() contract fields the panel renders:
+			"circuitBreaker":       map[string]any{"state": "closed"},
+			"avgResponseTime":      snap["rtt"],
+			"bandwidthUtilization": 0,
 		}
 		list = append(list, item)
 	}
+	// Shape follows the TS getStats() contract field-for-field (the panel
+	// reads status.server.uptime, status.routing.strategy, status.bandwidth,
+	// per-client circuitBreaker, ...). Extra keys kept for other consumers.
+	now := time.Now()
+	bw := map[string]any{"enabled": false, "stats": map[string]any{}}
+	if s.Bandwidth != nil {
+		bw = map[string]any{"enabled": s.Bandwidth.enabled, "stats": s.Bandwidth.Stats()}
+	}
 	return map[string]any{
-		"total":     len(clients),
-		"clients":   list,
+		"total":   len(clients),
+		"clients": list,
+		"server": map[string]any{
+			"startTime":          startTime.UnixMilli(),
+			"uptime":             int64(now.Sub(startTime).Seconds()),
+			"totalRequests":      totalRequests.Load(),
+			"totalTunnels":       totalTunnels.Load(),
+			"totalBytesSent":     totalBytesUp.Load(),
+			"totalBytesReceived": totalBytesDn.Load(),
+			"failedRequests":     totalErrors.Load(),
+			"pendingRequests":    s.Mgr.CountPendingRequests(),
+			"pendingTunnels":     s.Mgr.CountPendingTunnels(),
+		},
+		// legacy/extra shapes kept for other consumers:
+		"uptimeSec": int64(now.Sub(startTime).Seconds()),
 		"strategy":  s.Mgr.Strategy(),
-		"uptimeSec": int64(time.Since(startTime).Seconds()),
 		"totals": map[string]any{
 			"requests":  totalRequests.Load(),
 			"tunnels":   totalTunnels.Load(),
 			"bytesUp":   totalBytesUp.Load(),
 			"bytesDown": totalBytesDn.Load(),
 		},
+		"routing": map[string]any{
+			"strategy":            s.Mgr.Strategy(),
+			"availableStrategies": routingStrategies,
+		},
+		"tags":   s.allTags(),
+		"groups": s.allGroups(),
+		"circuitBreaker": map[string]any{
+			"enabled": true,
+			"config":  s.Settings.List()["circuit_breaker"],
+		},
+		"bandwidth": bw,
 	}
+}
+
+// allTags / allGroups feed the status contract (TS getAllTags/getAllGroups).
+func (s *Server) allTags() []string {
+	set := map[string]bool{}
+	for _, c := range s.Mgr.All() {
+		for _, t := range c.Tags {
+			set[t] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for t := range set {
+		out = append(out, t)
+	}
+	return out
+}
+
+func (s *Server) allGroups() []string {
+	set := map[string]bool{}
+	for _, c := range s.Mgr.All() {
+		if c.Group != "" {
+			set[c.Group] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for g := range set {
+		out = append(out, g)
+	}
+	return out
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {

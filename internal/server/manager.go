@@ -335,6 +335,7 @@ func (m *Manager) TrackSuccess(id string) {
 }
 
 func (m *Manager) TrackError(id string) {
+	totalErrors.Add(1)
 	if m.onError != nil {
 		m.onError(id)
 	}
@@ -510,6 +511,7 @@ var (
 	totalTunnels  atomic.Int64
 	totalBytesUp  atomic.Int64
 	totalBytesDn  atomic.Int64
+	totalErrors   atomic.Int64
 	startTime     = time.Now()
 )
 
