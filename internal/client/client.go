@@ -333,7 +333,7 @@ func (c *Client) systemInfo() map[string]any {
 		"platform":    runtime.GOOS,
 		"arch":        runtime.GOARCH,
 		"cpuCount":    runtime.NumCPU(),
-		"version":     "3.0.0",
+		"version":     Version,
 		"clientId":    c.cfg.ClientID,
 		"supportsMux": true,
 		"pid":         os.Getpid(),

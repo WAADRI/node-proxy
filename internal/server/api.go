@@ -653,7 +653,7 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := s.ApplyUpdate()
 	if err != nil {
-		out = map[string]any{"success": false, "error": err.Error(), "currentVersion": "3.0.0-go"}
+		out = map[string]any{"success": false, "error": err.Error(), "currentVersion": Version}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(out)
@@ -670,7 +670,7 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	latest, url, err := s.checkLatestRelease()
-	out := map[string]any{"success": err == nil, "currentVersion": "3.0.0-go"}
+	out := map[string]any{"success": err == nil, "currentVersion": Version}
 	if err != nil {
 		out["error"] = err.Error()
 	} else {
@@ -740,7 +740,7 @@ func atoiDefault(s string, def int) int {
 
 func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"supported": false, "currentVersion": "3.0.0-go"})
+	_ = json.NewEncoder(w).Encode(map[string]any{"supported": false, "currentVersion": Version})
 }
 
 func (s *Server) handleEmptyList(field string) http.HandlerFunc {

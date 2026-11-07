@@ -1,5 +1,7 @@
 # node-proxy-go
 
+[![CI](https://github.com/WAADRI/node-proxy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WAADRI/node-proxy/actions/workflows/ci.yml)
+
 github.com/WAADRI/node-proxy（Node/TS 多节点代理聚合网关）的 Go 重写。
 > Node.js 原版实现保留在本仓库的 [`nodejs` 分支](https://github.com/WAADRI/node-proxy/tree/nodejs)。
 
@@ -172,6 +174,14 @@ go test ./...
 # TS 仓库有更新后重新生成 golden（需 Node >= 23.6 与一份 node-proxy 克隆）
 node tools/gen-goldens/gen-goldens.mjs <node-proxy克隆目录> internal/streammux/testdata/golden.json
 ```
+
+## CI / 发布
+
+- **CI**（`ci.yml`）：push/PR 到 main 时跑 gofmt 检查、`go vet`、全量 `-race` 测试、五平台交叉编译检查。
+  互操作测试在 CI 上自动跳过（无 TS 仓库时 skip 的设计在此兑现）。
+- **发布**（`release.yml`）：打 `v*` tag 自动构建五平台（windows/linux/darwin × amd64/arm64）双端二进制
+  并创建 GitHub Release，资产命名与 `update/apply` 的 `assetNameFor` 精确匹配（含 sha256sum），
+  版本号经 ldflags 注入——**打完 tag 自更新链路即刻可用**。
 
 ## 目录
 
