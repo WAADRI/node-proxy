@@ -75,8 +75,17 @@ func main() {
 	mux.HandleFunc("/ws", srv.HandleClientWS)
 	// /metrics is public, matching the TS server (Grafana compat).
 	mux.Handle("/metrics", srv.Metrics.Handler(srv))
+	acmeMgr := server.BuildACMEManager(cfg, cfg.ACME)
 	webSrv := &http.Server{Addr: net.JoinHostPort(cfg.Host, fmt.Sprint(cfg.WebPort)), Handler: mux}
 	go func() {
+		if acmeMgr != nil {
+			log.Infof("web/panel serving HTTPS via ACME for %v (HTTP-01 on :80)", cfg.ACME.Domains)
+			go http.ListenAndServe(":80", acmeMgr.HTTPHandler(nil))
+			if err := webSrv.ListenAndServeTLS("", ""); err != nil && ctx.Err() == nil {
+				log.Errorf("web server: %v", err)
+			}
+			return
+		}
 		log.Infof("web/panel listening on %s (ws at /ws)", webSrv.Addr)
 		if err := webSrv.ListenAndServe(); err != nil && ctx.Err() == nil {
 			log.Errorf("web server: %v", err)

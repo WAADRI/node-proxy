@@ -59,6 +59,7 @@ func (s *Server) HandlePanelAPI(mux *http.ServeMux) {
 	perm("/api/audit/stats", "audit:query", s.handleAuditStats)
 	perm("/api/update/status", "proxy:config", s.handleUpdateStatus)
 	perm("/api/update/check", "proxy:config", s.handleUpdateCheck)
+	perm("/api/update/apply", "proxy:config", s.handleUpdateApply)
 	perm("/api/network-test/types", "nettest:run", s.handleNetTestTypes)
 	perm("/api/network-test", "nettest:run", s.handleNetTestStart)
 	mux.Handle("/api/network-test/", s.requirePerm("nettest:run", http.HandlerFunc(s.handleNetTestGet)))
@@ -643,6 +644,25 @@ func (s *Server) handleNetTestGet(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "task": task})
 }
 
+// handleUpdateApply downloads and swaps in the latest release binary; the
+// process exits shortly after so the supervisor restarts it.
+func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	out, err := s.ApplyUpdate()
+	if err != nil {
+		out = map[string]any{"success": false, "error": err.Error(), "currentVersion": "3.0.0-go"}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(out)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
 // handleUpdateCheck queries the TS project's latest release (GitHub API).
 func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -663,7 +683,11 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 
 // checkLatestRelease talks to the GitHub API through HTTPS_PROXY when set.
 func (s *Server) checkLatestRelease() (string, string, error) {
-	req, err := http.NewRequest("GET", "https://api.github.com/repos/WAADRI/node-proxy/releases/latest", nil)
+	base := s.GitHubAPIBase
+	if base == "" {
+		base = "https://api.github.com"
+	}
+	req, err := http.NewRequest("GET", base+"/repos/WAADRI/node-proxy/releases/latest", nil)
 	if err != nil {
 		return "", "", err
 	}

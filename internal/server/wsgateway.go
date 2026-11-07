@@ -46,6 +46,8 @@ type Server struct {
 	Bandwidth      *BandwidthLimiter
 	Audit          *AuditLog
 	NetTest        *NetTestManager
+	// GitHubAPIBase is injectable for tests ("https://api.github.com" when empty).
+	GitHubAPIBase string
 }
 
 // upgrader caps message size like TS (16 MiB = 1024 x mux max frame).

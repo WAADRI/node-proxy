@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -32,6 +33,8 @@ type Config struct {
 	RequestTimeout time.Duration // client.request_timeout, default 30s
 	TunnelTimeout  time.Duration // client.tunnel_timeout, default 35s (must stay above the node's 12s)
 	MaxConcurrent  int           // per-node default cap (panel-adjustable later)
+
+	ACME ACMEConfig
 }
 
 type WebAuth struct {
@@ -164,6 +167,24 @@ func applyYAML(cfg *Config, path string) error {
 		ms(cfg, client_, "tunnel_timeout", &cfg.TunnelTimeout)
 		int_(cfg, client_, "max_concurrent_requests", &cfg.MaxConcurrent)
 	}
+	if acmeS, ok := doc["acme"].(map[string]any); ok {
+		if b, ok := acmeS["enabled"].(bool); ok {
+			cfg.ACME.Enabled = b
+		}
+		if s, ok := acmeS["email"].(string); ok {
+			cfg.ACME.Email = s
+		}
+		if b, ok := acmeS["staging"].(bool); ok {
+			cfg.ACME.Staging = b
+		}
+		if arr, ok := acmeS["domains"].([]any); ok {
+			for _, d := range arr {
+				if s, ok := d.(string); ok && strings.TrimSpace(s) != "" {
+					cfg.ACME.Domains = append(cfg.ACME.Domains, s)
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -204,6 +225,20 @@ func applyEnv(cfg *Config) {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.SOCKS5Port = n
 		}
+	}
+	if v := os.Getenv("NP_ACME_EMAIL"); v != "" {
+		cfg.ACME.Email = v
+	}
+	if v := os.Getenv("NP_ACME_DOMAINS"); v != "" {
+		cfg.ACME.Enabled = true
+		for _, d := range strings.Split(v, ",") {
+			if d = strings.TrimSpace(d); d != "" {
+				cfg.ACME.Domains = append(cfg.ACME.Domains, d)
+			}
+		}
+	}
+	if v := os.Getenv("NP_ACME_STAGING"); v == "1" || v == "true" {
+		cfg.ACME.Staging = true
 	}
 }
 

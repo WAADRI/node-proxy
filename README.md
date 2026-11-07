@@ -92,8 +92,14 @@ github.com/WAADRI/node-proxy（Node/TS 多节点代理聚合网关）的 Go 重�
         - **活体验收：Go 服务端调度真实 TS 客户端完成 tcping**（结果跨实现回传）
       - **审计持久化**：JSONL 追加写（runtime-audit.jsonl）+ 启动重放尾部，查询跨重启
       - **update/check 转正**：实时查询 GitHub releases/latest（走 HTTPS_PROXY），返回 latest/url
+      - **ACME 证书**（第七轮）：`acme:` 配置段（enabled/email/staging/domains）+ `NP_ACME_*`
+        环境变量；autocert 管理 Let's Encrypt 证书（staging 目录可切），HTTP-01 挑战挂 :80，
+        面板自动切 HTTPS
+      - **自动更新应用**：`POST /api/update/apply`（proxy:config 权限）——查最新 release →
+        版本串注入防护（TS issue #120 同款）→ 下载平台资产（node-proxy-server-<os>-<arch>）→
+        尺寸校验 → 原子换名替换（Windows rename dance，失败回滚）→ 退出交由 supervisor 重启
       - 已知偏差：ping 无 ICMP 模式（TCP 回退）、traceroute 不支持、审计单文件无轮转、
-        update 仅 check 不自动应用、ACME 未做 = 后续可选模块
+        更新应用需要 release 内含 Go 平台资产（当前 TS 仓库 release 无二进制资产，打资产后生效）
 - [ ] Web 面板：沿用现有 Vue3 代码，仅对接新后端（/api/status 已对齐核心字段）
 
 ## E2E 冒烟与性能对照（已完成，2026-11-07）
