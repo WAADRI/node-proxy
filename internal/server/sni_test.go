@@ -9,8 +9,8 @@ import (
 func buildClientHello(sni string) []byte {
 	name := []byte(sni)
 	// server_name list: listLen(2) { name_type(0x00) nameLen(2) name }
-	list := []byte{byte(len(name)+3) >> 8, byte(len(name) + 3)}
-	list = append(list, 0x00, byte(len(name))>>8, byte(len(name)))
+	list := []byte{byte(int(len(name)+3) >> 8), byte(len(name) + 3)}
+	list = append(list, 0x00, byte(int(len(name))>>8), byte(len(name)))
 	list = append(list, name...)
 
 	ext := make([]byte, 4+len(list))
@@ -23,20 +23,20 @@ func buildClientHello(sni string) []byte {
 	ch = append(ch, 0x00)                   // session id len 0
 	ch = append(ch, 0x00, 0x02, 0x13, 0x01) // one cipher suite
 	ch = append(ch, 0x01, 0x00)             // one compression method
-	ch = append(ch, byte(len(ext))>>8, byte(len(ext)))
+	ch = append(ch, byte(int(len(ext))>>8), byte(len(ext)))
 	ch = append(ch, ext...)
 
 	hs := make([]byte, 4)
 	hs[0] = 0x01
-	hs[1] = byte(len(ch) >> 16)
-	hs[2] = byte(len(ch) >> 8)
+	hs[1] = byte(int(len(ch)) >> 16)
+	hs[2] = byte(int(len(ch)) >> 8)
 	hs[3] = byte(len(ch))
 	body := append(hs, ch...)
 
 	rec := make([]byte, 5)
 	rec[0] = 0x16
 	rec[1], rec[2] = 0x03, 0x01
-	rec[3] = byte(len(body) >> 8)
+	rec[3] = byte(int(len(body)) >> 8)
 	rec[4] = byte(len(body))
 	return append(rec, body...)
 }
