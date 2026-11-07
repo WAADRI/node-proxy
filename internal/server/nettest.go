@@ -8,13 +8,14 @@ import (
 )
 
 // NetTestTask tracks one network-test run (TS NetworkTestManager): dispatched
-// to zero or more nodes (or run server-side later), results collected per
-// (clientId, target).
+// to online nodes, results collected per (clientId, target). Server-local
+// execution was removed by decision (2026-11-07) - tests always run on nodes;
+// omitting the clients selection means "all online nodes".
 type NetTestTask struct {
 	ID        string            `json:"id"`
 	Type      string            `json:"type"`
 	Targets   []string          `json:"targets"`
-	Mode      string            `json:"mode"` // server | nodes
+	Mode      string            `json:"mode"` // nodes
 	Clients   []string          `json:"clients"`
 	Expect    int               `json:"expect"`
 	State     string            `json:"state"` // queued | running | done
@@ -23,7 +24,7 @@ type NetTestTask struct {
 	Error     string            `json:"error,omitempty"`
 	Labels    map[string]string `json:"clientLabels,omitempty"`
 
-	doneSeen map[string]bool // clientId -> done received
+	doneSeen map[string]bool
 }
 
 // NetTestReport is one (node, target) result.
@@ -42,7 +43,7 @@ type NetTestManager struct {
 }
 
 func NewNetTestManager(srv *Server) *NetTestManager {
-	return &NetTestManager{tasks: map[string]*NetTestTask{}, srv: srv}
+	return &NetTestManager{srv: srv, tasks: map[string]*NetTestTask{}}
 }
 
 var netTestTypes = []string{"ping", "tcping", "http", "dns", "traceroute"}
@@ -50,7 +51,7 @@ var netTestTypes = []string{"ping", "tcping", "http", "dns", "traceroute"}
 const netTestMaxTargets = 20
 
 // Start validates and creates a task, dispatching to the requested nodes
-// (clients nil = server-local, "all" = every online node, [ids] = selection).
+// (clients nil or "all" = every online node; a list = those nodes).
 func (m *NetTestManager) Start(testType string, targets []string, options map[string]any, clients any) (string, error) {
 	valid := false
 	for _, t := range netTestTypes {
@@ -77,14 +78,13 @@ func (m *NetTestManager) Start(testType string, targets []string, options map[st
 	}
 
 	var clientIDs []string
-	mode := "server"
 	switch c := clients.(type) {
 	case string:
 		if c == "all" {
 			for _, node := range m.srv.Mgr.All() {
 				clientIDs = append(clientIDs, node.ID)
 			}
-		} else {
+		} else if c != "" {
 			clientIDs = []string{c}
 		}
 	case []any:
@@ -94,15 +94,19 @@ func (m *NetTestManager) Start(testType string, targets []string, options map[st
 			}
 		}
 	case nil:
-		// server-local
+		// omitted -> all online nodes
 	default:
 		return "", fmt.Errorf("invalid clients value")
 	}
-	if len(clientIDs) > 0 {
-		mode = "nodes"
-	} else if clients != nil {
-		return "", fmt.Errorf("没有可用的在线节点（clients 为空）")
+	if len(clientIDs) == 0 {
+		for _, node := range m.srv.Mgr.All() {
+			clientIDs = append(clientIDs, node.ID)
+		}
+		if len(clientIDs) == 0 {
+			return "", fmt.Errorf("没有可用的在线节点")
+		}
 	}
+	mode := "nodes"
 
 	task := &NetTestTask{
 		ID: newID()[:12], Type: testType, Targets: list,
@@ -110,46 +114,34 @@ func (m *NetTestManager) Start(testType string, targets []string, options map[st
 		CreatedAt: time.Now().UnixMilli(), Results: []NetTestReport{},
 		Labels: map[string]string{}, doneSeen: map[string]bool{},
 	}
-	if mode == "nodes" {
-		task.Expect = len(clientIDs) * len(list)
-		for _, cid := range clientIDs {
-			task.Labels[cid] = cid
-		}
-	} else {
-		task.Clients = []string{"server"}
-		task.Expect = len(list)
+	task.Expect = len(clientIDs) * len(list)
+	for _, cid := range clientIDs {
+		task.Labels[cid] = cid
 	}
 
 	m.mu.Lock()
 	m.tasks[task.ID] = task
 	m.mu.Unlock()
 
-	if mode == "nodes" {
-		task.State = "running"
-		payload, _ := json.Marshal(map[string]any{
-			"type":    "net_test",
-			"taskId":  task.ID,
-			"payload": map[string]any{"type": testType, "targets": list, "options": options},
-		})
-		sent := 0
-		for _, cid := range clientIDs {
-			if node := m.srv.Mgr.Get(cid); node != nil && node.WS != nil && node.WS.sendText(payload) {
-				sent++
-			}
+	payload, _ := json.Marshal(map[string]any{
+		"type":    "net_test",
+		"taskId":  task.ID,
+		"payload": map[string]any{"type": testType, "targets": list, "options": options},
+	})
+	sent := 0
+	for _, cid := range clientIDs {
+		if node := m.srv.Mgr.Get(cid); node != nil && node.WS != nil && node.WS.sendText(payload) {
+			sent++
 		}
-		if sent == 0 {
-			m.mu.Lock()
-			task.State = "done"
-			task.Error = "no target node accepted the task"
-			m.mu.Unlock()
-			return task.ID, nil
-		}
-	} else {
-		// Server-local run lands with the server probe module; report an
-		// explicit state so the panel is never left waiting.
-		task.State = "done"
-		task.Error = "server-local execution lands with the server probe module"
 	}
+	if sent == 0 {
+		m.mu.Lock()
+		task.State = "done"
+		task.Error = "no target node accepted the task"
+		m.mu.Unlock()
+		return task.ID, nil
+	}
+	task.State = "running"
 	return task.ID, nil
 }
 
@@ -182,16 +174,12 @@ func (m *NetTestManager) HandleDone(taskID, clientID, errMsg string) {
 	}
 	if len(task.Results) >= task.Expect || len(task.doneSeen) >= len(task.Clients) {
 		task.State = "done"
-		if task.Error != "" {
-			// keep the error for the panel
-		}
 	}
 }
 
-// Get returns a snapshot.
+// Get returns a task snapshot.
 func (m *NetTestManager) Get(id string) *NetTestTask {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	t := m.tasks[id]
-	return t
+	return m.tasks[id]
 }

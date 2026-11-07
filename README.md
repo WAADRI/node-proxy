@@ -101,8 +101,18 @@ github.com/WAADRI/node-proxy（Node/TS 多节点代理聚合网关）的 Go 重�
       - **自动更新应用**：`POST /api/update/apply`（proxy:config 权限）——查最新 release →
         版本串注入防护（TS issue #120 同款）→ 下载平台资产（node-proxy-server-<os>-<arch>）→
         尺寸校验 → 原子换名替换（Windows rename dance，失败回滚）→ 退出交由 supervisor 重启
-      - 已知偏差：ping 无 ICMP 模式（TCP 回退）、traceroute 不支持、审计单文件无轮转、
-        更新应用需要 release 内含 Go 平台资产（当前 TS 仓库 release 无二进制资产，打资产后生效）
+      - **面板评审修复 + SNI 嗅探**（第八轮）：
+        - **/api/status 对齐 TS getStats 契约**（工作台曾显示 "-" 的四个字段全激活：server.uptime/
+          routing.strategy/bandwidth/failedRequests + 每客户端 circuitBreaker/avgResponseTime）
+        - **SNI 嗅探**（issue #107 对齐）：CONNECT/SOCKS5 隧道解析 TLS ClientHello 提取 server_name，
+          请求日志记录 method=SOCKS5|CONNECT + ip + sni + ms；**活体验证：经代理的 TLS 握手
+          sni=localhost 出现在面板日志**（CONNECT/SOCKS5 双路径 + 单测覆盖解析器）
+        - 面板日志契约补齐：seq（去重合并键）/ts（面板时间列）/ms/ip/sni 字段
+        - 网络测试删除服务端执行模式（永远在在线节点上执行，缺省 = 全部节点）
+        - 侧栏版本号显示真实构建版本（status.server.version，ldflags 注入）
+        - 修复两个回归：**隧道 OnData 二次注册覆盖回写回调**（TLS/明文响应无法回到代理客户端，
+          metrics 轮引入、浏览器评审暴露）+ NetTestManager 构造器丢 srv 字段
+      - 已知偏差：ping 无 ICMP 模式（TCP 回退）、traceroute 不支持、审计单文件无轮转
 - [x] **Web 面板**（panel/，沿用 nodejs 分支的 Vue3 + naive-ui 代码原样对接 Go 后端）：
       `go:embed` 打进服务端单二进制（登录页 /login、SPA /app、/web-ws 实时推送 status+log）。
       **浏览器实测通过**：登录 → 工作台（节点数/端口/策略/熔断/流量图）→ 节点管理（17 列表格实时状态）

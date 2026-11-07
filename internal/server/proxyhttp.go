@@ -237,7 +237,7 @@ func (s *Server) handlePlainHTTP(w http.ResponseWriter, r *http.Request) {
 	case res := <-resCh:
 		status, _ := res.headers["statusCode"].(float64)
 		s.Mgr.logRequest(requestLogEntry{
-			Time: time.Now().UnixMilli(), Method: r.Method, URL: targetURL,
+			Ts: time.Now().UnixMilli(), Method: r.Method, URL: targetURL,
 			Status: int(status), Duration: time.Since(started).Milliseconds(),
 			ClientID: client.ID, Bytes: len(res.body),
 		})
@@ -277,6 +277,12 @@ func (s *Server) handlePlainHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			s.Cache.Set(cacheKey, int(statusCode), hdrCopy, res.body, 0)
 		}
+		s.Mgr.logRequest(requestLogEntry{
+			Ts: time.Now().UnixMilli(), IP: srcIP, Method: r.Method, URL: targetURL,
+			Status: int(statusCode), MS: time.Since(started).Milliseconds(),
+			Duration: time.Since(started).Milliseconds(),
+			ClientID: client.ID, Bytes: len(res.body),
+		})
 		if s.Audit != nil {
 			st := "success"
 			if statusCode >= 400 {
@@ -291,7 +297,7 @@ func (s *Server) handlePlainHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case <-r.Context().Done():
 		s.Mgr.logRequest(requestLogEntry{
-			Time: time.Now().UnixMilli(), Method: r.Method, URL: targetURL,
+			Ts: time.Now().UnixMilli(), Method: r.Method, URL: targetURL,
 			Status: 499, Duration: time.Since(started).Milliseconds(), ClientID: client.ID,
 		})
 	}
@@ -411,6 +417,8 @@ func openNodeTunnel(s *Server, conn net.Conn, client *ClientNode, host string, p
 		host:      host,
 		port:      port,
 		head:      head,
+		ip:        peerIP(conn),
+		startTime: time.Now(),
 		deadline:  time.Now().Add(s.Cfg.TunnelTimeout),
 	}
 	already, _ := s.Mgr.AddPending(tunnelID, p)

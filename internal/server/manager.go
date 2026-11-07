@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,11 +70,14 @@ type pendingRecord struct {
 	startTime time.Time
 
 	// tunnel
-	socket deadlineReadWriteCloser
-	host   string
-	port   int
-	ready  bool
-	head   []byte // extra bytes read after CONNECT (pipelined request start)
+	socket  deadlineReadWriteCloser
+	host    string
+	port    int
+	ready   bool
+	head    []byte // extra bytes read after CONNECT (pipelined request start)
+	ip      string // proxy client address (log column)
+	sni     string // TLS server_name sniffed from the ClientHello
+	logOnce sync.Once
 
 	// request
 	onResponse func(headers map[string]any, body []byte)
@@ -113,6 +117,7 @@ type Manager struct {
 		Sent, Recv, Requests int64
 	}
 	reqLogHook func(requestLogEntry)
+	logSeq     int64
 
 	idleTimeout time.Duration // tunnel idle teardown (config client.tunnel_idle_timeout default 60s)
 }
@@ -655,19 +660,57 @@ func (c *ClientNode) pendingLoad() int64 {
 
 // requestLog is a bounded newest-appended ring of proxy request records.
 type requestLogEntry struct {
-	Time     int64  `json:"time"`
+	Seq      int64  `json:"seq"` // monotonic id; the panel dedupes/merges on it
+	Ts       int64  `json:"ts"`  // epoch ms (the panel renders row.ts)
+	IP       string `json:"ip,omitempty"`
 	Method   string `json:"method"`
 	URL      string `json:"url"`
+	SNI      string `json:"sni,omitempty"`
 	Status   int    `json:"status"`
+	MS       int64  `json:"ms"` // panel column name (same value as Duration)
 	Duration int64  `json:"duration"`
 	ClientID string `json:"clientId,omitempty"`
 	Bytes    int    `json:"bytes,omitempty"`
+}
+
+// logTunnel records one finished tunnel (TS recordTunnelLog): method carries
+// the listener (SOCKS5 vs CONNECT), status stays 0, sni from the ClientHello.
+func (m *Manager) logTunnel(p *pendingRecord) {
+	p.logOnce.Do(func() {
+		end := time.Now()
+		m.logRequest(requestLogEntry{
+			Ts:       end.UnixMilli(),
+			IP:       p.ip,
+			Method:   tunnelMethodName(p.tunnelTyp),
+			URL:      p.host + ":" + strconv.Itoa(p.port),
+			SNI:      p.sni,
+			Status:   0,
+			MS:       end.Sub(p.startTime).Milliseconds(),
+			ClientID: tunnelClientID(p),
+		})
+	})
+}
+
+func tunnelMethodName(typ string) string {
+	if typ == "socks5" {
+		return "SOCKS5"
+	}
+	return "CONNECT"
+}
+
+func tunnelClientID(p *pendingRecord) string {
+	if p.client != nil {
+		return p.client.ID
+	}
+	return ""
 }
 
 const requestLogCap = 500
 
 func (m *Manager) logRequest(e requestLogEntry) {
 	m.mu.Lock()
+	m.logSeq++
+	e.Seq = m.logSeq
 	if len(m.reqLog) >= requestLogCap {
 		m.reqLog = m.reqLog[1:]
 	}

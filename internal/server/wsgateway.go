@@ -340,6 +340,9 @@ func (sess *ClientSession) handleText(data []byte, clientIP string) {
 }
 
 func (sess *ClientSession) sendText(data []byte) bool {
+	if sess == nil {
+		return false
+	}
 	sess.mu.Lock()
 	closed := sess.closed
 	sess.mu.Unlock()
@@ -546,19 +549,31 @@ func (s *Server) completeTunnelReady(st *streammux.Stream, id string) {
 		}
 	}
 
-	// Socket -> stream.
+	// Socket -> stream. The first chunk is sniffed for a TLS ClientHello SNI
+	// (best-effort, forwarded unchanged either way).
 	if p.socket != nil {
 		go func() {
 			buf := make([]byte, 32*1024)
+			first := true
 			for {
 				n, err := p.socket.Read(buf)
 				if n > 0 {
+					if first {
+						first = false
+						if sni := parseClientHelloSNI(buf[:n]); sni != "" {
+							s.Mgr.mu.Lock()
+							p.sni = sni
+							s.Mgr.mu.Unlock()
+						}
+					}
 					if !st.SendData(buf[:n], false) {
+						s.Mgr.logTunnel(p)
 						return
 					}
 					totalBytesUp.Add(int64(n))
 				}
 				if err != nil {
+					s.Mgr.logTunnel(p)
 					st.Close()
 					return
 				}
@@ -566,23 +581,30 @@ func (s *Server) completeTunnelReady(st *streammux.Stream, id string) {
 		}()
 	}
 
-	// Stream -> socket.
+	// Stream -> socket. ONE OnData handler: the field is single-slot, and a
+	// second registration (the metrics hook used to do that) silently
+	// replaced the socket write - responses never reached the proxy client.
+	clientID := ""
+	if p.client != nil {
+		clientID = p.client.ID
+	}
 	st.OnData(func(chunk []byte) {
 		if p.socket != nil {
 			_, _ = p.socket.Write(chunk)
 			totalBytesDn.Add(int64(len(chunk)))
 		}
+		if s.Metrics != nil && clientID != "" {
+			s.Metrics.ObserveBytes("down", clientID, float64(len(chunk)))
+		}
 	})
-	if s.Metrics != nil && p.client != nil {
-		clientID := p.client.ID
-		st.OnData(func(chunk []byte) { s.Metrics.ObserveBytes("down", clientID, float64(len(chunk))) })
-	}
 	st.OnEnd(func() {
+		s.Mgr.logTunnel(p)
 		if p.socket != nil {
 			_ = p.socket.Close() // TS ends its half; we own both halves here
 		}
 	})
 	st.OnError(func(reason any) {
+		s.Mgr.logTunnel(p)
 		if p.socket != nil {
 			_ = p.socket.Close()
 		}

@@ -324,7 +324,7 @@ onMounted(() => {
                 </span>
                 <b>{{ uptimeText }}</b>
               </div>
-              <div class="np-side-version">Node-Proxy v3.0 · MIT</div>
+              <div class="np-side-version">Node-Proxy {{ store.status && store.status.server && store.status.server.version ? store.status.server.version : 'v3.0' }} · MIT</div>
             </div>
           </aside>
 
