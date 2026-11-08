@@ -11,9 +11,12 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/WAADRI/node-proxy-go/internal/client"
+	"github.com/WAADRI/node-proxy-go/internal/selfupdate"
 	"github.com/WAADRI/node-proxy-go/internal/streammux"
 )
 
@@ -50,7 +53,14 @@ func main() {
 	flag.StringVar(&cfg.Tags, "tags", cfg.Tags, "comma separated tags (TAGS)")
 	flag.BoolVar(&cfg.TLSRejectUnauthorized, "tls-verify", cfg.TLSRejectUnauthorized, "verify server TLS certificate")
 	quiet := flag.Bool("quiet", false, "only log warnings and errors")
+	force := flag.Bool("update-force", false, "apply update even when not newer")
+	selfUpdate := flag.Bool("update", false, "check GitHub releases, apply a newer build and exit")
 	flag.Parse()
+
+	if *selfUpdate {
+		runSelfUpdate(cfg, *force)
+		return
+	}
 
 	var log streammuxLogger = consoleLogger{}
 	if *quiet {
@@ -66,6 +76,72 @@ func main() {
 		fmt.Fprintf(os.Stderr, "client exited: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runSelfUpdate applies a newer client build (checksum-verified) and exits;
+// the supervisor or service wrapper restarts the process.
+func runSelfUpdate(cfg *client.Config, force bool) {
+	apiBases := []string{selfupdate.DefaultAPIBase}
+	dlPrefixes := []string{}
+	if m := os.Getenv("NP_UPDATE_API_BASES"); m != "" {
+		apiBases = splitList(m)
+	}
+	if m := os.Getenv("NP_UPDATE_DOWNLOAD_PREFIXES"); m != "" {
+		dlPrefixes = splitList(m)
+	}
+	latest, _, err := selfupdate.FetchLatest(apiBases)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "update check failed:", err)
+		os.Exit(1)
+	}
+	if !force && !selfupdate.IsNewer(latest, client.Version) {
+		fmt.Fprintf(os.Stderr, "already up to date (%s, latest %s)\n", client.Version, latest)
+		return
+	}
+	version, err := selfupdate.SafeVersion(latest)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	asset := selfupdate.AssetName("node-proxy-client", runtime.GOOS, runtime.GOARCH)
+	checksumURLs := selfupdate.AssetCandidates(selfupdate.Repo, latest, "checksums.sha256", dlPrefixes)
+	checksums, err := selfupdate.FetchChecksums(checksumURLs)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "checksums unavailable:", err)
+		os.Exit(1)
+	}
+	want, known := checksums[asset]
+	if !known {
+		fmt.Fprintf(os.Stderr, "release %s has no checksum for %s\n", latest, asset)
+		os.Exit(1)
+	}
+	exePath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	tmp := exePath + ".new"
+	urls := selfupdate.AssetCandidates(selfupdate.Repo, latest, asset, dlPrefixes)
+	if err := selfupdate.DownloadVerified(urls, tmp, want); err != nil {
+		fmt.Fprintln(os.Stderr, "download failed:", err)
+		os.Exit(1)
+	}
+	backup, err := selfupdate.SwapBinaryAt(exePath, tmp)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "swap failed:", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "updated to %s (backup: %s); restart the client to run the new build\n", version, backup)
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 type quietLogger struct{}

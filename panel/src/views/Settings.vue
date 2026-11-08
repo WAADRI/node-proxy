@@ -4,7 +4,13 @@ import { onBeforeRouteLeave } from 'vue-router';
 import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag, useMessage } from 'naive-ui';
 import AppIcon from '../components/AppIcon.vue';
 import ConfirmDialog from '../components/ConfirmDialog.vue';
-import { fetchSettings, saveSettingsGroup, resetSettingsGroup } from '../api';
+import {
+  fetchSettings,
+  saveSettingsGroup,
+  resetSettingsGroup,
+  checkUpdate,
+  applyUpdate,
+} from '../api';
 import {
   fetchProxyPasswords,
   createProxyPassword,
@@ -97,6 +103,47 @@ onBeforeRouteLeave(() => {
 window.addEventListener('beforeunload', (e) => {
   if (dirty.value) e.preventDefault();
 });
+
+// --- self-update -------------------------------------------------------------
+const upd = ref({ checking: false, applying: false, latest: null, upToDate: null, error: '', applied: false });
+
+async function runCheck() {
+  upd.value.checking = true;
+  upd.value.error = '';
+  try {
+    const res = await checkUpdate();
+    upd.value.latest = res.latest || null;
+    upd.value.upToDate = !!res.upToDate;
+    if (res.error) upd.value.error = res.error;
+  } catch (err) {
+    upd.value.error = err.message || String(err);
+  } finally {
+    upd.value.checking = false;
+  }
+}
+
+async function runApply(force = false) {
+  if (!window.confirm('更新会校验下载、替换二进制并立即重启服务端（约数秒不可用）。确定执行吗？')) return;
+  upd.value.applying = true;
+  upd.value.error = '';
+  try {
+    const res = await applyUpdate(force);
+    if (res.upToDate) {
+      upd.value.upToDate = true;
+      upd.value.latest = res.latest || upd.value.latest;
+    } else if (res.success) {
+      upd.value.applied = true; // the server exits right about now
+    } else {
+      upd.value.error = res.error || '未知错误';
+    }
+  } catch (err) {
+    // The process exits mid-response on success; a network error here is
+    // ambiguous - tell the user to wait and reload.
+    upd.value.error = '请求中断：服务端可能正在重启，稍后刷新页面确认。';
+  } finally {
+    upd.value.applying = false;
+  }
+}
 
 // --- save / reset ------------------------------------------------------------
 function collectPayload(group) {
@@ -355,6 +402,31 @@ const pwUsage = computed(() => {
       <span v-if="dirty" class="settings-dirty">● 有未保存的更改</span>
     </p>
 
+    <!-- Self-update -->
+    <section class="np-panel upd-card">
+      <h3>系统更新</h3>
+      <p class="upd-copy">
+        当前版本 <b>{{ upd.applied ? '已更新（重启中）' : 'v3.0-go（构建注入）' }}</b>
+        <template v-if="upd.latest"> · 最新版本 <b>{{ upd.latest }}</b>
+          <NTag :type="upd.upToDate ? 'success' : 'warning'" size="small">
+            {{ upd.upToDate ? '已是最新' : '有可用更新' }}
+          </NTag>
+        </template>
+      </p>
+      <p v-if="upd.error" class="upd-error">{{ upd.error }}</p>
+      <p v-if="upd.applied" class="upd-note">二进制已替换，服务端正在重启——几秒后刷新页面重新登录。</p>
+      <div class="upd-actions">
+        <NButton size="small" :loading="upd.checking" @click="runCheck">检查更新</NButton>
+        <NButton
+          size="small"
+          type="warning"
+          :loading="upd.applying"
+          :disabled="upd.checking || (upd.upToDate === true)"
+          @click="runApply(false)"
+        >应用更新</NButton>
+      </div>
+    </section>
+
     <!-- Routing -->
     <div class="s-group">
       <div class="s-group-head">
@@ -608,6 +680,27 @@ const pwUsage = computed(() => {
 </template>
 
 <style scoped>
+.upd-card {
+  margin-top: 18px;
+}
+.upd-copy {
+  color: var(--muted, #64748b);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.upd-error {
+  color: var(--danger, #ef4444);
+  font-size: 12.5px;
+}
+.upd-note {
+  color: #059669;
+  font-size: 12.5px;
+}
+.upd-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
 .settings-dirty {
   margin-left: 10px;
   color: #d97706;

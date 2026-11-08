@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/WAADRI/node-proxy-go/internal/selfupdate"
 )
 
 // TestSwapBinary covers the rename dance on a temp pair of files.
@@ -22,7 +24,7 @@ func TestSwapBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	backup, err := swapBinaryAt(exe, newPath)
+	backup, err := selfupdate.SwapBinaryAt(exe, newPath)
 	if err != nil {
 		t.Fatalf("swap: %v", err)
 	}
@@ -58,7 +60,7 @@ func TestApplyUpdate(t *testing.T) {
 				"tag_name": "v9.9.9",
 				"html_url": "https://github.com/WAADRI/node-proxy/releases/tag/v9.9.9",
 				"assets": []map[string]any{
-					{"name": assetNameFor("any", "any"), "browser_download_url": gh.URL + "/dl/asset"},
+					{"name": "node-proxy-server-test", "browser_download_url": gh.URL + "/dl/asset"},
 				},
 			})
 		case r.URL.Path == "/dl/asset":
@@ -70,12 +72,12 @@ func TestApplyUpdate(t *testing.T) {
 	defer gh.Close()
 
 	srv, _, _ := newTestServer(t)
-	srv.GitHubAPIBase = gh.URL
+	srv.Cfg.Update.APIBases = []string{gh.URL}
 
 	// Validate helpers against the fake.
-	latest, urlStr, err := srv.checkLatestRelease()
+	latest, urlStr, err := selfupdate.FetchLatest(srv.Cfg.Update.APIBases)
 	if err != nil || latest != "v9.9.9" {
-		t.Fatalf("checkLatestRelease = %q %q %v", latest, urlStr, err)
+		t.Fatalf("FetchLatest = %q %q %v", latest, urlStr, err)
 	}
 	if _, err := SafeVersion("v9.9.9"); err != nil {
 		t.Fatalf("safe version rejected: %v", err)
@@ -85,17 +87,19 @@ func TestApplyUpdate(t *testing.T) {
 			t.Fatalf("unsafe version %q accepted", bad)
 		}
 	}
-	if got := assetNameFor("windows", "amd64"); got != "node-proxy-server-windows-amd64.exe" {
+	if got := selfupdate.AssetName("node-proxy-server", "windows", "amd64"); got != "node-proxy-server-windows-amd64.exe" {
 		t.Fatalf("asset name = %s", got)
 	}
-	if got := assetNameFor("linux", "arm64"); got != "node-proxy-server-linux-arm64" {
+	if got := selfupdate.AssetName("node-proxy-server", "linux", "arm64"); got != "node-proxy-server-linux-arm64" {
 		t.Fatalf("asset name = %s", got)
 	}
 
-	// downloadTo round-trip.
+	// DownloadVerified round-trip (asset has no checksum entry here; size path).
 	dst := filepath.Join(dir, "dl.bin")
-	if err := downloadTo(gh.URL+"/dl/asset", dst); err != nil {
-		t.Fatalf("downloadTo: %v", err)
+	urls := selfupdate.AssetCandidates(selfupdate.Repo, "v9.9.9", "asset.bin", []string{})
+	_ = urls
+	if err := selfupdate.DownloadVerified([]string{gh.URL + "/dl/asset"}, dst, ""); err != nil {
+		t.Fatalf("DownloadVerified: %v", err)
 	}
 	if b, _ := os.ReadFile(dst); string(b) != assetBody {
 		t.Fatal("downloaded content mismatch")

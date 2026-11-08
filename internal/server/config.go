@@ -35,6 +35,20 @@ type Config struct {
 	MaxConcurrent  int           // per-node default cap (panel-adjustable later)
 
 	ACME ACMEConfig
+
+	// Update sources: mirrors tried in order before the GitHub defaults
+	// (domestic access to api.github.com / github.com release downloads is
+	// unreliable; prefix-style mirrors like ghfast.top are supported).
+	Update UpdateConfig
+}
+
+// UpdateConfig holds the self-update source configuration.
+type UpdateConfig struct {
+	// APIBases: base URLs implementing the GitHub API verbatim.
+	APIBases []string
+	// DownloadPrefixes: prefixes prepended to the canonical
+	// https://github.com/... asset URL (e.g. https://ghfast.top).
+	DownloadPrefixes []string
 }
 
 type WebAuth struct {
@@ -167,6 +181,22 @@ func applyYAML(cfg *Config, path string) error {
 		ms(cfg, client_, "tunnel_timeout", &cfg.TunnelTimeout)
 		int_(cfg, client_, "max_concurrent_requests", &cfg.MaxConcurrent)
 	}
+	if upS, ok := doc["update"].(map[string]any); ok {
+		if arr, ok := upS["api_bases"].([]any); ok {
+			for _, b := range arr {
+				if s, ok := b.(string); ok && strings.TrimSpace(s) != "" {
+					cfg.Update.APIBases = append(cfg.Update.APIBases, s)
+				}
+			}
+		}
+		if arr, ok := upS["download_prefixes"].([]any); ok {
+			for _, b := range arr {
+				if s, ok := b.(string); ok && strings.TrimSpace(s) != "" {
+					cfg.Update.DownloadPrefixes = append(cfg.Update.DownloadPrefixes, s)
+				}
+			}
+		}
+	}
 	if acmeS, ok := doc["acme"].(map[string]any); ok {
 		if b, ok := acmeS["enabled"].(bool); ok {
 			cfg.ACME.Enabled = b
@@ -239,6 +269,20 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("NP_ACME_STAGING"); v == "1" || v == "true" {
 		cfg.ACME.Staging = true
+	}
+	if v := os.Getenv("NP_UPDATE_API_BASES"); v != "" {
+		for _, b := range strings.Split(v, ",") {
+			if b = strings.TrimSpace(b); b != "" {
+				cfg.Update.APIBases = append(cfg.Update.APIBases, b)
+			}
+		}
+	}
+	if v := os.Getenv("NP_UPDATE_DOWNLOAD_PREFIXES"); v != "" {
+		for _, b := range strings.Split(v, ",") {
+			if b = strings.TrimSpace(b); b != "" {
+				cfg.Update.DownloadPrefixes = append(cfg.Update.DownloadPrefixes, b)
+			}
+		}
 	}
 }
 

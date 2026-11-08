@@ -761,44 +761,8 @@ func (s *Server) handleNetTestGet(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "task": task})
 }
 
-// handleUpdateApply downloads and swaps in the latest release binary; the
-// process exits shortly after so the supervisor restarts it.
-func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	out, err := s.ApplyUpdate()
-	if err != nil {
-		out = map[string]any{"success": false, "error": err.Error(), "currentVersion": Version}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(out)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
-}
+// handleUpdateCheck / handleUpdateApply live in update.go (selfupdate).
 
-// handleUpdateCheck queries the TS project's latest release (GitHub API).
-func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	latest, url, err := s.checkLatestRelease()
-	out := map[string]any{"success": err == nil, "currentVersion": Version}
-	if err != nil {
-		out["error"] = err.Error()
-	} else {
-		out["latest"] = latest
-		out["url"] = url
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
-}
-
-// checkLatestRelease talks to the GitHub API through HTTPS_PROXY when set.
 func (s *Server) checkLatestRelease() (string, string, error) {
 	base := s.GitHubAPIBase
 	if base == "" {

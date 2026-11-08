@@ -91,3 +91,8 @@ export const deleteProxyPassword = (id) =>
   apiFetch('/api/v1/proxy-passwords/' + encodeURIComponent(id), { method: 'DELETE' });
 export const regenerateProxyPassword = (id) =>
   apiFetch('/api/v1/proxy-passwords/' + encodeURIComponent(id) + '/regenerate', { method: 'POST' });
+
+// --- Self-update (server binary; apply restarts the process) ---------------
+export const checkUpdate = () => apiFetch('/api/update/check', { method: 'POST' });
+export const applyUpdate = (force = false) =>
+  apiFetch('/api/update/apply' + (force ? '?force=1' : ''), { method: 'POST' });
