@@ -10,7 +10,16 @@ import (
 
 // Options configures a session. Zero values select the protocol defaults
 // shared with the TS implementation.
+// CompressionConfig is the session compression configuration.
+type CompressionConfig struct {
+	Enabled bool
+	MinSize int // payloads below this go raw (default 512)
+}
+
 type Options struct {
+	// CompressInitiator marks this side as the WS dialer, which sends the
+	// compression offer (the acceptor replies instead).
+	CompressInitiator bool
 	// InitialWindow is the per-stream send/receive window (default 64 KiB).
 	InitialWindow int
 	// ConnectionWindow is the connection-level window (default 1 MiB).
@@ -24,6 +33,12 @@ type Options struct {
 	// OnGoaway fires when the peer sends GOAWAY. The session ignores further
 	// sends afterwards, exactly like the TS mux.
 	OnGoaway func(lastStreamID int64)
+	// Compression enables the Go-only negotiated zstd payload compression
+	// (DATA/TUNNEL_DATA; TS peers never negotiate so never receive it).
+	// Initiator=true sends the COMPRESS offer (the WS dialer side); the
+	// accepting side leaves it false and answers.
+	Compression *CompressionConfig
+
 	// OnText fires for inbound WS text frames - the JSON control plane
 	// (auth/heartbeat/stats in the real deployment). The session itself never
 	// parses them; without OnText they are ignored, mirroring the TS default.
@@ -61,6 +76,9 @@ type Conn struct {
 	sendSignal chan struct{} // new frames queued or window credited
 	done       chan struct{} // closed when the session shuts down
 	startOnce  sync.Once
+
+	compress   *Compression
+	compressMu sync.RWMutex
 }
 
 // NewConn starts a session over tr: read loop, writer loop and the periodic
@@ -84,7 +102,15 @@ func NewConn(tr Transport, opts Options) *Conn {
 		sendSignal:     make(chan struct{}, 1),
 		done:           make(chan struct{}),
 	}
+	if opts.Compression != nil && opts.Compression.Enabled {
+		c.compress = NewCompression(opts.Compression.MinSize)
+	}
 	c.startOnce.Do(func() {
+		if c.compress != nil && opts.CompressInitiator {
+			// Dialer side: offer immediately; compression starts only after
+			// the peer selects, so TS peers just ignore this frame.
+			c.enqueueLocked(NewFrame(TypeCompress, 0, 0, OfferFramePayload()))
+		}
 		go c.readLoop()
 		go c.writerLoop()
 		go c.windowCheckLoop()
@@ -371,6 +397,21 @@ func (c *Conn) readLoop() {
 			}
 			continue // drop, keep the connection alive (TS policy)
 		}
+		// Inbound payloads may be zstd-compressed (negotiated connections):
+		// inflate flagged frames before any window accounting or dispatch.
+		for i := range frames {
+			if frames[i].Flags&FlagCompressed != 0 && c.compress != nil {
+				out, derr := c.compress.DecompressPayload(frames[i].Payload, true)
+				if derr != nil {
+					if c.log != nil {
+						c.log.Warnf("streammux: decompress failed on %s frame: %v", frames[i].Type, derr)
+					}
+					break // drop the rest of this message
+				}
+				frames[i].Payload = out
+				frames[i].Flags &^= FlagCompressed
+			}
+		}
 		c.dispatch(frames)
 	}
 }
@@ -396,6 +437,8 @@ func (c *Conn) dispatch(frames []Frame) {
 			c.checkConnectionWindowLocked()
 		}
 		switch {
+		case f.Type == TypeCompress:
+			c.handleCompressFrameLocked(f)
 		case f.StreamID == 0:
 			if fn := c.handleConnectionFrameLocked(f); fn != nil {
 				fire = append(fire, fn)
@@ -439,6 +482,72 @@ func (c *Conn) dispatch(frames []Frame) {
 
 		for _, fn := range fire {
 			fn()
+		}
+	}
+}
+
+// handleCompressFrameLocked processes the negotiation handshake:
+// initiator sends an offer, acceptor replies with the selection. Called from
+// the read loop; the negotiated algorithm gates both directions.
+func (c *Conn) handleCompressFrameLocked(f Frame) {
+	if c.compress == nil {
+		return // compression disabled on this side
+	}
+	var payload struct {
+		Offer  []string `json:"offer"`
+		Select string   `json:"select"`
+	}
+	if err := json.Unmarshal(f.Payload, &payload); err != nil {
+		return
+	}
+	c.compressMu.Lock()
+	defer c.compressMu.Unlock()
+	if c.compress.Enabled() {
+		return // already negotiated
+	}
+	if len(payload.Offer) > 0 {
+		algo := Negotiate(payload.Offer)
+		if algo == "" {
+			return // no common algorithm: stay uncompressed
+		}
+		c.compress.Enable(algo)
+		if sel := SelectFramePayload(algo); sel != nil {
+			c.enqueueLocked(NewFrame(TypeCompress, 0, 0, sel))
+		}
+		if c.log != nil {
+			c.log.Infof("streammux: compression enabled (%s)", algo)
+		}
+		return
+	}
+	if payload.Select != "" {
+		c.compress.Enable(payload.Select)
+		if c.log != nil {
+			c.log.Infof("streammux: compression enabled (%s)", payload.Select)
+		}
+	}
+}
+
+// compressOutgoing rewrites bulk-frame payloads with the negotiated
+// compression, setting FlagCompressed. Must run in the writer goroutine.
+func (c *Conn) compressOutgoing(batch []Frame) {
+	c.compressMu.RLock()
+	on := c.compress != nil && c.compress.Enabled()
+	c.compressMu.RUnlock()
+	if !on {
+		return
+	}
+	for i := range batch {
+		f := &batch[i]
+		if f.Flags&FlagCompressed != 0 {
+			continue
+		}
+		if f.Type != TypeData && f.Type != TypeTunnelData {
+			continue // control/headers frames stay raw
+		}
+		out := c.compress.CompressPayload(f.Payload)
+		if len(out) > 0 && len(out) < len(f.Payload) {
+			f.Payload = out
+			f.Flags |= FlagCompressed
 		}
 	}
 }
@@ -591,6 +700,8 @@ func (c *Conn) writerLoop() {
 			c.sendQueue = c.sendQueue[cut:]
 			c.connSendWindow -= dataBytes
 		}
+
+		c.compressOutgoing(batch)
 
 		var (
 			wire []byte

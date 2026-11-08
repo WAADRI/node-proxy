@@ -201,6 +201,20 @@ go test ./...
 node tools/gen-goldens/gen-goldens.mjs <node-proxy克隆目录> internal/streammux/testdata/golden.json
 ```
 
+## 中转流量压缩（Go 扩展，向后兼容）
+
+服务器↔节点之间的 StreamMux 载荷支持 **zstd 逐帧压缩**（Go-only 协议扩展）：
+
+- **协商制**：连接发起方发 `COMPRESS(0x0E)` offer，接受方回 select；未协商的连接
+  一律裸传——**TS 对端永远收不到压缩帧**（未知帧类型在 TS 侧本就被忽略），wire 向后兼容。
+- **逐帧标志**：`FlagCompressed(0x10)` 标在 DATA/TUNNEL_DATA 帧上；单帧独立压缩
+  （EncodeAll/DecodeAll，无跨帧状态，丢帧不损坏流）。
+- **带宽/CPU 权衡**：SpeedFastest 档（吞吐优先）；载荷 <512B 或压缩率 <10% 自动跳过
+  （TLS 隧道内已是密文，压不动就不浪费 CPU）。
+- 配置：`compress.enabled`（默认开）/ `NP_COMPRESS_ENABLED`；实测 258KB 文本 → 1348B
+  线上传输。
+
+## CI / 发布
 ## CI / 发布
 
 - **CI**（`ci.yml`）：push/PR 到 main 时跑 gofmt 检查、`go vet`、全量 `-race` 测试、五平台交叉编译检查。

@@ -4,6 +4,7 @@ go 1.27
 
 require (
 	github.com/gorilla/websocket v1.5.3
+	github.com/klauspost/compress v1.20.3
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.49.0

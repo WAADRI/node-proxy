@@ -43,6 +43,10 @@ const (
 	TypeTunnelOpen   FrameType = 0x0b // SOCKS5 tunnel open request
 	TypeTunnelData   FrameType = 0x0c // tunnel data (raw)
 	TypeTunnelClose  FrameType = 0x0d // tunnel close
+	// TypeCompress is a Go-only protocol extension (negotiated; TS peers
+	// never see it - unknown frame types are ignored on their side):
+	// connection-level payload compression negotiation.
+	TypeCompress FrameType = 0x0e // compression negotiation (offer/select)
 )
 
 func (t FrameType) String() string {
@@ -78,12 +82,17 @@ func (t FrameType) String() string {
 	}
 }
 
-// Frame flags (the 4-byte flags field), mirroring FLAG in TypeScript.
+// Frame flags (the 4-byte flags field), mirroring FLAG in TypeScript plus
+// one Go-only extension bit: FlagCompressed marks DATA/TUNNEL_DATA payloads
+// compressed with the negotiated algorithm (set only after negotiation, so
+// TS peers never receive it).
 const (
-	FlagEndStream  uint32 = 0x01
-	FlagEndHeaders uint32 = 0x02
-	FlagPriority   uint32 = 0x04
-	FlagPadded     uint32 = 0x08
+	FlagEndStream   uint32 = 0x01
+	FlagEndHeaders  uint32 = 0x02
+	FlagPriority    uint32 = 0x04
+	FlagPadded      uint32 = 0x08
+	FlagCompressed  uint32 = 0x10 // payload compressed (Go-only, negotiated)
+	FlagPriorityOld uint32 = 0x00 // reserved, unused
 )
 
 // Protocol limits shared by both TS endpoints. A Go peer must stay within
