@@ -15,6 +15,7 @@ import (
 // ClientNode is one registered client connection.
 type ClientNode struct {
 	ID     string
+	regSeq int            // registration order (stable sort key for the panel)
 	WS     *ClientSession // set after registration; nil never after add()
 	Mux    *streammux.Conn
 	Info   map[string]any
@@ -156,6 +157,7 @@ func (m *Manager) Add(ws *ClientSession, info map[string]any) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.nextNum++
+	regSeq := m.nextNum
 	id, _ := info["clientId"].(string)
 	if id == "" {
 		id = "node-" + strings.ToLower(randSuffix())
@@ -189,7 +191,9 @@ func (m *Manager) Add(ws *ClientSession, info map[string]any) string {
 	if existed {
 		node.Stats = old.Stats
 		node.RTT = old.RTT
+		node.regSeq = old.regSeq // keep the original registration order
 	}
+	node.regSeq = regSeq
 	m.clients[id] = node
 	if m.log != nil && existed {
 		m.log.Infof("client re-registered: %s (replacing stale session)", id)
@@ -252,12 +256,19 @@ func (m *Manager) Get(id string) *ClientNode {
 	return m.clients[id]
 }
 
+// All returns clients sorted by registration order (stable for the panel;
+// Go map iteration is randomised and would make nodes jump on every poll).
 func (m *Manager) All() []*ClientNode {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]*ClientNode, 0, len(m.clients))
 	for _, c := range m.clients {
 		out = append(out, c)
+	}
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j].regSeq < out[j-1].regSeq; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
 	}
 	return out
 }

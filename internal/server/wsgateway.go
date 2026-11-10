@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -706,10 +707,14 @@ func (s *Server) retireOrphan(st *streammux.Stream, kind string) {
 	st.Reset("no_pending_owner")
 }
 
-// clientIPFromRequest starts from the raw peer; X-Forwarded-For is honored
-// only up to the declared trusted hops (issue #117 semantics).
+// clientIPFromRequest starts from the raw TCP peer; X-Forwarded-For is
+// honored only up to the declared trusted hops (issue #117 semantics).
 func clientIPFromRequest(r *http.Request, trustedHops int) string {
-	ip := stripV6Mapped(r.RemoteAddr)
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := unmapIPv4(host)
 	if trustedHops <= 0 {
 		return ip
 	}
@@ -718,22 +723,23 @@ func clientIPFromRequest(r *http.Request, trustedHops int) string {
 		return ip
 	}
 	parts := strings.Split(xff, ",")
-	// rightmost trusted hops entry
+	// Rightmost trusted hops entry (leftmost is client-controllable).
 	idx := len(parts) - trustedHops
 	if idx < 0 {
 		idx = 0
 	}
-	return stripV6Mapped(strings.TrimSpace(parts[idx]))
+	return unmapIPv4(strings.TrimSpace(parts[idx]))
 }
 
-func stripV6Mapped(s string) string {
-	if i := strings.LastIndex(s, ":"); i >= 0 && strings.Count(s, ":") >= 2 {
-		s = s[i+1:]
+// unmapIPv4 strips the ::ffff: prefix from IPv4-mapped IPv6 addresses.
+func unmapIPv4(s string) string {
+	if ip := net.ParseIP(s); ip != nil {
+		if v4 := ip.To4(); v4 != nil {
+			return v4.String()
+		}
+		return ip.String()
 	}
-	if j := strings.LastIndex(s, "]"); j >= 0 {
-		_ = j
-	}
-	return strings.TrimSpace(s)
+	return s
 }
 
 // domainTagFor resolves the domain-rule tag for a target host ("" when none).
