@@ -126,9 +126,18 @@ func (c *Client) dialOnce(ctx context.Context) error {
 	}
 
 	var session *streammux.Conn
-	session = streammux.NewConn(wstransport.Wrap(wsConn), streammux.Options{
+	tr := wstransport.Wrap(wsConn)
+	var transport streammux.Transport = tr
+	if c.cfg.WSTransportWrap != nil {
+		transport = c.cfg.WSTransportWrap(tr)
+	}
+	session = streammux.NewConn(transport, streammux.Options{
 		Logger: c.log,
-		OnText: c.handleText,
+		Compression: &streammux.CompressionConfig{
+			Enabled: c.cfg.CompressEnabled,
+		},
+		CompressInitiator: true, // the client dials the server
+		OnText:            c.handleText,
 		OnStream: func(s *streammux.Stream) {
 			if !c.authed.Load() {
 				// Issue #129 gate: refuse streams before authentication.

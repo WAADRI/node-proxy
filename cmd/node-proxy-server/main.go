@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/WAADRI/node-proxy-go/internal/server"
+	"github.com/WAADRI/node-proxy-go/internal/streammux"
 )
 
 type stderrLogger struct{}
@@ -70,6 +71,9 @@ func main() {
 
 	// Panel + client WebSocket on the web port (TS shape: /ws upgrade on the
 	// same server as the panel).
+	srv.ClientWSOptions = func(o *streammux.Options) {
+		o.Compression = &streammux.CompressionConfig{Enabled: cfg.CompressEnabled}
+	}
 	mux := http.NewServeMux()
 	srv.HandlePanelRoutes(mux)
 	srv.HandlePanelAPI(mux)

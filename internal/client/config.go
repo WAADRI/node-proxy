@@ -35,6 +35,22 @@ type Config struct {
 	RequestTimeout        time.Duration // 30s
 	TunnelTimeout         time.Duration // 12s (must stay under the server's 35s wait)
 	MaxConcurrentRequests int           // 100
+
+	// CompressEnabled negotiates zstd payload compression on the mux when
+	// the server supports it (Go-only extension). Default on.
+	CompressEnabled bool
+
+	// WSTransportWrap optionally wraps the client's WebSocket transport
+	// (byte counters in tests / metrics).
+	WSTransportWrap func(tr WSTransport) WSTransport
+}
+
+// WSTransport is the transport surface the wrap hook sees.
+type WSTransport interface {
+	ReadMessage() (data []byte, isText bool, err error)
+	WriteMessage(data []byte) error
+	WriteTextMessage(data []byte) error
+	Close() error
 }
 
 // Load builds the config with TS precedence: defaults < config.yaml <
@@ -67,6 +83,7 @@ func Default() *Config {
 		RequestTimeout:        30 * time.Second,
 		TunnelTimeout:         12 * time.Second,
 		MaxConcurrentRequests: 100,
+		CompressEnabled:       true,
 	}
 }
 
@@ -83,6 +100,9 @@ func applyEnv(cfg *Config) error {
 	}
 	if v := envFirst("TAGS"); v != "" {
 		cfg.Tags = v
+	}
+	if v := envFirst("COMPRESS_ENABLED", "NP_COMPRESS_ENABLED"); v != "" {
+		cfg.CompressEnabled = strings.EqualFold(v, "true") || v == "1"
 	}
 	if v := envFirst("TLS_REJECT_UNAUTHORIZED"); v != "" {
 		b, err := strconv.ParseBool(strings.ToLower(v))

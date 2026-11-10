@@ -36,6 +36,11 @@ type Config struct {
 
 	ACME ACMEConfig
 
+	// Compress controls the negotiated zstd payload compression on the
+	// server<->node StreamMux connection (Go-only extension; TS peers never
+	// negotiate it). Default on.
+	CompressEnabled bool
+
 	// Update sources: mirrors tried in order before the GitHub defaults
 	// (domestic access to api.github.com / github.com release downloads is
 	// unreliable; prefix-style mirrors like ghfast.top are supported).
@@ -181,6 +186,11 @@ func applyYAML(cfg *Config, path string) error {
 		ms(cfg, client_, "tunnel_timeout", &cfg.TunnelTimeout)
 		int_(cfg, client_, "max_concurrent_requests", &cfg.MaxConcurrent)
 	}
+	if cS, ok := doc["compress"].(map[string]any); ok {
+		if b, ok := cS["enabled"].(bool); ok {
+			cfg.CompressEnabled = b
+		}
+	}
 	if upS, ok := doc["update"].(map[string]any); ok {
 		if arr, ok := upS["api_bases"].([]any); ok {
 			for _, b := range arr {
@@ -269,6 +279,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("NP_ACME_STAGING"); v == "1" || v == "true" {
 		cfg.ACME.Staging = true
+	}
+	if v := os.Getenv("NP_COMPRESS_ENABLED"); v != "" {
+		cfg.CompressEnabled = v == "1" || strings.EqualFold(v, "true")
 	}
 	if v := os.Getenv("NP_UPDATE_API_BASES"); v != "" {
 		for _, b := range strings.Split(v, ",") {

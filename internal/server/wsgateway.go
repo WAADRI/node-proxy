@@ -46,6 +46,9 @@ type Server struct {
 	Bandwidth      *BandwidthLimiter
 	Audit          *AuditLog
 	NetTest        *NetTestManager
+	// ClientWSOptions is applied to every accepted client session's mux
+	// options (main injects compression config here).
+	ClientWSOptions func(*streammux.Options)
 	// GitHubAPIBase is injectable for tests ("https://api.github.com" when empty).
 	GitHubAPIBase string
 	WS            *webHub
@@ -69,7 +72,7 @@ func (s *Server) HandleClientWS(w http.ResponseWriter, r *http.Request) {
 
 	clientIP := clientIPFromRequest(r, s.Cfg.TrustedProxyHops)
 
-	sess.mux.Store(streammux.NewConn(wstransport.Wrap(ws), streammux.Options{
+	opts := streammux.Options{
 		OnStream: func(st *streammux.Stream) {
 			sess.mu.Lock()
 			authed := sess.authed
@@ -83,7 +86,11 @@ func (s *Server) HandleClientWS(w http.ResponseWriter, r *http.Request) {
 		OnText: func(data []byte) {
 			sess.handleText(data, clientIP)
 		},
-	}))
+	}
+	if s.ClientWSOptions != nil {
+		s.ClientWSOptions(&opts)
+	}
+	sess.mux.Store(streammux.NewConn(wstransport.Wrap(ws), opts))
 
 	// Server-side liveness: mux ping every 30s updates the node RTT (TS
 	// pingInterval). A node whose heartbeats stop gets reaped below.
@@ -210,7 +217,9 @@ func (sess *ClientSession) handleText(data []byte, clientIP string) {
 				}{"limits", s.Cfg.MaxConcurrent})
 				sess.sendText(lim)
 			} else {
-				s.Log.Warnf("client auth failed from %s", clientIP)
+				if s.Log != nil {
+					s.Log.Warnf("client auth failed from %s", clientIP)
+				}
 				sess.sendText([]byte(`{"type":"auth_error","message":"Invalid token"}`))
 				_ = sess.ws.Close()
 			}
@@ -242,7 +251,9 @@ func (sess *ClientSession) handleText(data []byte, clientIP string) {
 			ClientID string `json:"clientId"`
 		}{"info_ok", id})
 		sess.sendText(ok)
-		s.Log.Infof("client registered: %s (mux=%v, ip=%s)", id, supportsMux, clientIP)
+		if s.Log != nil {
+			s.Log.Infof("client registered: %s (mux=%v, ip=%s)", id, supportsMux, clientIP)
+		}
 
 	case "heartbeat", "pong":
 		sess.mu.Lock()
