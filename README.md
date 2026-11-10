@@ -106,6 +106,24 @@ cp config.yaml.example config.yaml   # 按需填写
 ./node-proxy-client
 ```
 
+不使用 Docker 时，同目录放一个 `config.yaml` 或直接环境变量启动即可（两者与上面等价）。
+
+**Docker 方式**：
+
+```bash
+export SERVER_URL='ws://服务器:3000/ws'
+export AUTH_TOKEN='你的令牌'
+export CLIENT_ID='my-node-1'      # 可选，固定节点 ID
+
+docker compose -f docker-compose.client.yml up -d
+```
+
+或直接拉 GHCR 镜像：
+
+```bash
+docker run -d --name node-proxy-client --restart unless-stopped   -e SERVER_URL='ws://服务器:3000/ws'   -e AUTH_TOKEN='你的令牌'   -e CLIENT_ID='my-node-1'   ghcr.io/waadri/node-proxy-client:latest
+```
+
 ### 3. 使用与验证
 
 浏览器或应用程序配置代理：

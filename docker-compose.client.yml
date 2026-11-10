@@ -1,0 +1,27 @@
+# 客户端节点部署：在每台要作为代理出口的机器上运行。
+# 前置环境变量：SERVER_URL 和 AUTH_TOKEN 必填，其余可选。
+#
+#   export SERVER_URL='ws://服务器:3000/ws'
+#   export AUTH_TOKEN='你的令牌'
+#   docker compose -f docker-compose.client.yml up -d
+#
+# 注意：容器重建后节点 ID 默认会变。固定 ID 请设 CLIENT_ID 环境变量，
+# 或挂载一个持久化卷（volume 已预配好，会自动记住）。
+
+services:
+  client:
+    image: ghcr.io/waadri/node-proxy-client:latest
+    container_name: node-proxy-client
+    environment:
+      SERVER_URL: ${SERVER_URL:?set SERVER_URL}
+      AUTH_TOKEN: ${AUTH_TOKEN:?set AUTH_TOKEN}
+      CLIENT_ID: ${CLIENT_ID:-}
+      REGION: ${REGION:-}
+      TAGS: ${TAGS:-}
+      COMPRESS_ENABLED: ${COMPRESS_ENABLED:-true}
+    volumes:
+      - client-id:/home/nodeproxy/.node-proxy-client-id
+    restart: unless-stopped
+
+volumes:
+  client-id:

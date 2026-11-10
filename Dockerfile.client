@@ -6,7 +6,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /out/node-proxy-client ./cmd/node-proxy-client
 
 FROM alpine:3.20
-RUN adduser -D -H nodeproxy
+RUN adduser -D -h /home/nodeproxy nodeproxy
 COPY --from=build /out/node-proxy-client /usr/local/bin/node-proxy-client
 USER nodeproxy
 ENTRYPOINT ["node-proxy-client"]
