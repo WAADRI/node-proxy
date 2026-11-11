@@ -16,8 +16,10 @@ COPY --from=panel /panel/dist ./panel/dist
 RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /out/node-proxy-server ./cmd/node-proxy-server
 
 FROM alpine:3.20
-RUN adduser -D -H nodeproxy
+RUN adduser -D -h /home/nodeproxy nodeproxy
+RUN mkdir -p /app && chown nodeproxy:nodeproxy /app
 COPY --from=build /out/node-proxy-server /usr/local/bin/node-proxy-server
+WORKDIR /app
 USER nodeproxy
 EXPOSE 3000 8080 1080
 ENTRYPOINT ["node-proxy-server"]

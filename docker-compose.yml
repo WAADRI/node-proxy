@@ -1,5 +1,20 @@
 # node-proxy-go server: panel (3000), HTTP proxy (8080), SOCKS5 (1080).
-# Credentials MUST come from the environment - see README.
+#
+# 两种配置方式（二选一或混用）：
+#
+# 方式一：环境变量（下方 environment 中的 ${...} 写法，配合 .env 文件或 shell export）
+#
+# 方式二：config.yaml 文件挂载
+#   1. 复制 config.server.yaml.example 为 config.yaml 按需填写
+#   2. 取消 volumes 中 config.yaml 那行的注释
+#   3. 不需要再设置 environment 中的 NP_AUTH_* 变量（yaml 里的值会被读取）
+#   4. config.local.yaml 放在同一目录会自动作为覆盖层
+#
+# 运行时文件（runtime-overrides.json / runtime-audit.jsonl）持久化在
+# runtime 卷中，容器重建不会丢失面板设置和审计日志。
+#
+# 凭据 MUST come from the environment - see README.
+
 services:
   server:
     build: .
@@ -9,11 +24,18 @@ services:
       - "8080:8080"
       - "1080:1080"
     environment:
-      NP_AUTH_TOKEN: ${NP_AUTH_TOKEN:?set NP_AUTH_TOKEN}
+      NP_AUTH_TOKEN: ${NP_AUTH_TOKEN:-}
       NP_AUTH_WEB_USERNAME: ${NP_AUTH_WEB_USERNAME:-admin}
-      NP_AUTH_WEB_PASSWORD: ${NP_AUTH_WEB_PASSWORD:?set NP_AUTH_WEB_PASSWORD}
-      # NP_ACME_DOMAINS / NP_ACME_EMAIL enable automatic HTTPS for the panel
+      NP_AUTH_WEB_PASSWORD: ${NP_AUTH_WEB_PASSWORD:-}
+      # NP_COMPRESS_ENABLED: "true"
+      # NP_UPDATE_API_BASES: https://api.github.com
+      # NP_UPDATE_DOWNLOAD_PREFIXES: https://ghfast.top
+      # NP_ACME_DOMAINS: proxy.example.com
+      # NP_ACME_EMAIL: ops@example.com
     volumes:
+      # 方式二：取消注释挂载 config.yaml（路径相对于 compose 文件所在目录）
+      # - ./config.yaml:/app/config.yaml:ro
+      # 运行时文件持久化（面板设置、审计日志等）
       - runtime:/app
     restart: unless-stopped
 
