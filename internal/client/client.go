@@ -126,6 +126,9 @@ func (c *Client) dialOnce(ctx context.Context) error {
 	}
 
 	var session *streammux.Conn
+	kaCancel := wstransport.StartKeepalive(wsConn, 25*time.Second, 60*time.Second)
+	defer kaCancel()
+
 	tr := wstransport.Wrap(wsConn)
 	var transport streammux.Transport = tr
 	if c.cfg.WSTransportWrap != nil {
