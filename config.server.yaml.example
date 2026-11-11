@@ -1,0 +1,51 @@
+# =============================================================================
+# Node-Proxy (Go) 服务端配置示例
+# 部署用法：复制为 config.yaml（或 config.local.yaml 覆盖层），按需修改。
+# 每一项都可用对应环境变量覆盖（环境变量优先级高于本文件）。
+# =============================================================================
+
+server:
+  host: 0.0.0.0
+  web_port: 3000
+  http_proxy_port: 8080
+  socks5_port: 1080
+  # 信任的反代层数（nginx 透传 X-Forwarded-For 时设 1，两层设 2；0 = 直连）
+  trusted_proxy_hops: 0
+
+auth:
+  # 必改：使用非默认的认证凭据
+  token: change-me-to-a-random-token
+  web:
+    enabled: true
+    username: admin
+    password: change-me-too
+  proxy:
+    # 代理端口认证（HTTP Proxy-Authorization / SOCKS5 user-pass）
+    enabled: false
+    username: proxy
+    password: proxy-pass
+
+client:
+  request_timeout: 30000    # 毫秒
+  tunnel_timeout: 35000     # 毫秒（须大于节点的 12s 建连超时）
+  max_concurrent_requests: 100
+
+compress:
+  # 服务端与 Go 节点之间的 zstd 逐帧压缩（TS 节点自动不启用）
+  enabled: true
+
+acme:
+  # 面板自动 HTTPS（Let's Encrypt）；启用后 HTTP-01 挑战挂 :80
+  enabled: false
+  # email: ops@example.com
+  # staging: false
+  # domains:
+  #   - proxy.example.com
+
+update:
+  # GitHub API / release 下载镜像加速（国内环境推荐配置）
+  # api_bases 会依次尝试直到成功；download_prefixes 前置于 github.com 下载 URL
+  # api_bases:
+  #   - https://api.github.com
+  # download_prefixes:
+  #   - https://ghfast.top

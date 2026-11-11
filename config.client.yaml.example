@@ -1,0 +1,30 @@
+# =============================================================================
+# Node-Proxy (Go) 客户端配置示例
+# 部署用法：复制为 config.yaml 放在二进制旁边或工作目录，按需修改。
+# 每一项都可用对应环境变量覆盖（环境变量优先级高于本文件）。
+# 节点 UUID 走 CLIENT_ID 或 CLIENT_ID_FILE（缺省自动生成并持久化）。
+# =============================================================================
+
+# 代理服务器 WebSocket 地址（必填）
+# 环境变量: SERVER_URL
+server_url: ws://1.2.3.4:3000/ws
+
+# 鉴权凭据（须与服务端一致，默认值不安全，生产必改）
+# 环境变量: AUTH_TOKEN
+auth_token: my-secret-token
+
+# 节点区域（可选，面板未设置时显示该值）
+# 环境变量: REGION / NODE_REGION
+region: cn-guangzhou
+
+# 节点标签，逗号分隔（可选，用于按标签路由）
+# 环境变量: TAGS
+tags: cn,unicom
+
+# 是否校验服务端 TLS 证书（自签证书场景需设为 false）
+# 环境变量: TLS_REJECT_UNAUTHORIZED
+tls_reject_unauthorized: true
+
+# 中转流量压缩（服务端与 Go 节点自动协商 zstd；TS 节点自动不启用）
+# 环境变量: COMPRESS_ENABLED / NP_COMPRESS_ENABLED
+compress_enabled: true

@@ -50,7 +50,7 @@ export NP_AUTH_WEB_PASSWORD='你的强密码'      # 面板登录密码
 docker compose -p node-proxy up -d
 ```
 
-默认端口（如需改端口映射，编辑 `docker-compose.yml`）：
+不用环境变量时，复制 `config.server.yaml.example` 为 `config.yaml` 按需修改（字段注释见文件；`config.local.yaml` 可作为覆盖层）。默认端口：
 
 | 用途 | 端口 |
 |------|------|
@@ -99,11 +99,20 @@ export TAGS='cn,unicom'                              # 可选：节点标签，�
 
 启动后日志出现认证成功即接入，服务端面板节点列表可见该节点。
 
-也支持 `config.yaml` 文件方式（`server_url` / `auth_token` / `tags` / `region` 等字段，优先级 env > yaml > 默认）：
+也支持 `config.yaml` 文件方式（优先级 env > yaml > 默认，模板见仓库 `config.client.yaml.example`）：
 
 ```bash
 cp config.yaml.example config.yaml   # 按需填写
 ./node-proxy-client
+```
+
+**Docker 方式**：
+
+```bash
+export SERVER_URL='ws://服务器:3000/ws'
+export AUTH_TOKEN='你的令牌'
+
+docker compose -f docker-compose.client.yml up -d
 ```
 
 不使用 Docker 时，同目录放一个 `config.yaml` 或直接环境变量启动即可（两者与上面等价）。
