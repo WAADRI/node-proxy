@@ -91,6 +91,8 @@ func (s *Server) HandleClientWS(w http.ResponseWriter, r *http.Request) {
 	if s.ClientWSOptions != nil {
 		s.ClientWSOptions(&opts)
 	}
+	kaCancel := wstransport.StartKeepalive(ws, 25*time.Second, 60*time.Second)
+	defer kaCancel()
 	sess.mux.Store(streammux.NewConn(wstransport.Wrap(ws), opts))
 
 	// Server-side liveness: mux ping every 30s updates the node RTT (TS
