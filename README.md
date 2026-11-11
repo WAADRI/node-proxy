@@ -36,6 +36,8 @@
 
 ### 1. 服务端（公网服务器，Docker 推荐）
 
+#### 方式一：Docker Compose + 环境变量
+
 前置：Docker 与 Docker Compose。
 
 ```bash
@@ -50,7 +52,7 @@ export NP_AUTH_WEB_PASSWORD='你的强密码'      # 面板登录密码
 docker compose -p node-proxy up -d
 ```
 
-不用环境变量时，复制 `config.server.yaml.example` 为 `config.yaml` 按需修改（字段注释见文件；`config.local.yaml` 可作为覆盖层）。默认端口：
+默认端口（如需改端口映射，编辑 `docker-compose.yml`）：
 
 | 用途 | 端口 |
 |------|------|
@@ -58,14 +60,37 @@ docker compose -p node-proxy up -d
 | HTTP / HTTPS 代理 | 8080 |
 | SOCKS5 代理 | 1080 |
 
-验证：浏览器打开 `http://服务器IP:3000`，用上面设置的账号登录。
+#### 方式二：Docker Compose + config.yaml 挂载
 
-不使用 Docker 时：
+不用环境变量，改用配置文件：
+
+```bash
+# 1. 复制模板并填写
+cp config.server.yaml.example config.yaml
+
+# 2. 编辑 config.yaml（auth.token、auth.web.password 等必改字段见文件内注释）
+
+# 3. docker-compose.yml 里取消 volumes 中这行的注释：
+#    - ./config.yaml:/app/config.yaml:ro
+#    并注释掉 environment 中的 NP_AUTH_* 变量（yaml 里的值会被读取）
+
+# 4. 启动
+docker compose -p node-proxy up -d
+```
+
+> `config.local.yaml` 覆盖层同理——放同一目录、挂同一路径即可，服务端自动检测并叠加。
+> 运行时文件（`runtime-overrides.json` 面板设置、`runtime-audit.jsonl` 审计日志）持久化在 `runtime` 卷中，容器重建不丢失。
+
+#### 方式三：裸二进制（不使用 Docker）
 
 ```bash
 # 从 Releases 下载或自行构建
 go build -o node-proxy-server ./cmd/node-proxy-server
 
+# 同目录放一个 config.yaml（见 config.server.yaml.example）
+cp config.server.yaml.example config.yaml
+
+# 或纯环境变量
 NP_AUTH_TOKEN='你的随机令牌' \
 NP_AUTH_WEB_USERNAME='admin' \
 NP_AUTH_WEB_PASSWORD='你的强密码' \
@@ -73,6 +98,38 @@ NP_AUTH_WEB_PASSWORD='你的强密码' \
 ```
 
 ### 2. 客户端节点（内网 / 各地出口设备）
+
+#### 方式一：Docker
+
+```bash
+export SERVER_URL='ws://你的服务器域名或IP:3000/ws'
+export AUTH_TOKEN='你的令牌'
+export CLIENT_ID='my-node-1'      # 可选，固定节点 ID
+
+docker compose -f docker-compose.client.yml up -d
+```
+
+或直接拉 GHCR 镜像：
+
+```bash
+docker run -d --name node-proxy-client --restart unless-stopped \
+  -e SERVER_URL='ws://服务器:3000/ws' \
+  -e AUTH_TOKEN='你的令牌' \
+  -e CLIENT_ID='my-node-1' \
+  ghcr.io/waadri/node-proxy-client:latest
+```
+
+#### 方式二：config.yaml 文件
+
+```bash
+cp config.client.yaml.example config.yaml   # 按需填写
+docker run -d --name node-proxy-client --restart unless-stopped \
+  -v $(pwd)/config.yaml:/app/config.yaml:ro \
+  -v node-proxy-client-id:/home/nodeproxy/.node-proxy-client-id \
+  ghcr.io/waadri/node-proxy-client:latest
+```
+
+#### 方式三：裸二进制（不使用 Docker）
 
 在每台要作为代理出口的机器上下载对应平台的二进制（**免安装，无需 Node.js**）：
 
@@ -97,40 +154,11 @@ export TAGS='cn,unicom'                              # 可选：节点标签，�
 ./node-proxy-client
 ```
 
-启动后日志出现认证成功即接入，服务端面板节点列表可见该节点。
-
 也支持 `config.yaml` 文件方式（优先级 env > yaml > 默认，模板见仓库 `config.client.yaml.example`）：
 
 ```bash
-cp config.yaml.example config.yaml   # 按需填写
+cp config.client.yaml.example config.yaml   # 按需填写
 ./node-proxy-client
-```
-
-**Docker 方式**：
-
-```bash
-export SERVER_URL='ws://服务器:3000/ws'
-export AUTH_TOKEN='你的令牌'
-
-docker compose -f docker-compose.client.yml up -d
-```
-
-不使用 Docker 时，同目录放一个 `config.yaml` 或直接环境变量启动即可（两者与上面等价）。
-
-**Docker 方式**：
-
-```bash
-export SERVER_URL='ws://服务器:3000/ws'
-export AUTH_TOKEN='你的令牌'
-export CLIENT_ID='my-node-1'      # 可选，固定节点 ID
-
-docker compose -f docker-compose.client.yml up -d
-```
-
-或直接拉 GHCR 镜像：
-
-```bash
-docker run -d --name node-proxy-client --restart unless-stopped   -e SERVER_URL='ws://服务器:3000/ws'   -e AUTH_TOKEN='你的令牌'   -e CLIENT_ID='my-node-1'   ghcr.io/waadri/node-proxy-client:latest
 ```
 
 ### 3. 使用与验证
@@ -152,6 +180,8 @@ docker run -d --name node-proxy-client --restart unless-stopped   -e SERVER_URL=
 
 ### 服务端
 
+环境变量（`NP_` 前缀）：
+
 | 环境变量 | 说明 | 默认值 |
 |----------|------|--------|
 | `NP_AUTH_TOKEN` | 客户端接入令牌（必改） | — |
@@ -163,7 +193,52 @@ docker run -d --name node-proxy-client --restart unless-stopped   -e SERVER_URL=
 | `NP_ACME_DOMAINS` / `NP_ACME_EMAIL` | 面板 HTTPS（ACME 自动证书） | 关 |
 | `NP_UPDATE_API_BASES` / `NP_UPDATE_DOWNLOAD_PREFIXES` | 自更新镜像加速（逗号分隔） | 官方源 |
 
+`config.yaml` / `config.local.yaml` 字段（完整模板见 `config.server.yaml.example`）：
+
+```yaml
+server:
+  host: 0.0.0.0
+  web_port: 3000
+  http_proxy_port: 8080
+  socks5_port: 1080
+  trusted_proxy_hops: 0    # nginx 反代时设 1
+
+auth:
+  token: change-me
+  web:
+    enabled: true
+    username: admin
+    password: change-me-too
+  proxy:
+    enabled: false
+    username: proxy
+    password: proxy-pass
+
+client:
+  request_timeout: 30000
+  tunnel_timeout: 35000
+  max_concurrent_requests: 100
+
+compress:
+  enabled: true
+
+acme:
+  enabled: false
+  email: ops@example.com
+  staging: false
+  domains:
+    - proxy.example.com
+
+update:
+  api_bases:
+    - https://api.github.com
+  download_prefixes:
+    - https://ghfast.top
+```
+
 ### 客户端
+
+环境变量：
 
 | 环境变量 | 说明 | 默认值 |
 |----------|------|--------|
@@ -174,7 +249,25 @@ docker run -d --name node-proxy-client --restart unless-stopped   -e SERVER_URL=
 | `TLS_REJECT_UNAUTHORIZED` | 是否校验服务端证书 | true |
 | `COMPRESS_ENABLED` | 中转流量压缩 | true |
 
-> 心跳间隔、超时、并发上限等行为参数为固定内置值，不可配置——这是刻意设计，避免配置漂移导致节点行为不一致。
+`config.yaml` 字段（完整模板见 `config.client.yaml.example`）：
+
+```yaml
+server_url: ws://1.2.3.4:3000/ws
+auth_token: my-secret-token
+region: cn-guangzhou
+tags: cn,unicom
+tls_reject_unauthorized: true
+compress_enabled: true
+```
+
+> 心跳间隔、超时、并发上限等行为参数为固定内置值，不可配置——这是刻意设计，避免配置漂移导致节点行为不一致。config.yaml 中写了这些固定值的 key 会被显式忽略并在 stderr 告警。
+
+## nginx 反向代理（可选）
+
+用域名 + HTTPS 反代 Web 面板（如 `https://proxy.example.com` → 本机 `:3000`）。要让面板与节点列表显示真实来源 IP：
+
+1. nginx 透传来源头：`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`
+2. 服务端 `config.yaml` 设 `server.trusted_proxy_hops: 1`（单层 nginx = 1）
 
 ## 许可证
 
